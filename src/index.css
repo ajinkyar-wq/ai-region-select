@@ -103,3 +103,42 @@ All colors MUST be HSL.
     @apply bg-background text-foreground;
   }
 }
+
+.scan-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+
+  background: linear-gradient(90deg,
+      transparent,
+      hsl(var(--primary)),
+      transparent);
+
+  box-shadow: 0 0 24px hsl(var(--primary) / 0.6);
+  animation: scan-move 1.6s linear infinite;
+}
+
+.scan-glow {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 140px;
+
+  background: linear-gradient(180deg,
+      transparent,
+      hsl(var(--primary) / 0.14),
+      transparent);
+
+  animation: scan-move 1.6s linear infinite;
+}
+
+@keyframes scan-move {
+  from {
+    top: -20%;
+  }
+
+  to {
+    top: 120%;
+  }
+}
