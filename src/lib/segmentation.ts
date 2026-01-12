@@ -1,10 +1,10 @@
 /**
- * MediaPipe Image Segmentation - Simplified
- * Directly overlays colored masks on canvas
+ * MediaPipe Image Segmentation with Vector Path Conversion
  */
 
 import { ImageSegmenter, FilesetResolver } from '@mediapipe/tasks-vision';
 import type { Region, RegionType } from '@/types/workspace';
+import { maskToPath } from './mask-to-shape';
 
 let segmenter: ImageSegmenter | null = null;
 let initPromise: Promise<ImageSegmenter> | null = null;
@@ -35,11 +35,24 @@ async function initializeSegmenter(): Promise<ImageSegmenter> {
   return initPromise;
 }
 
-const MASK_COLORS = {
-  people: [232, 28, 79, 60],      // Pink with alpha
-  foreground: [16, 185, 129, 60], // Green with alpha
-  background: [59, 130, 246, 60], // Blue with alpha
-};
+/**
+ * Extract a binary mask for a specific category
+ */
+function extractCategoryMask(
+  maskData: Uint8Array,
+  width: number,
+  height: number,
+  categories: number[]
+): Uint8Array {
+  const binaryMask = new Uint8Array(width * height);
+
+  for (let i = 0; i < maskData.length; i++) {
+    const category = maskData[i];
+    binaryMask[i] = categories.includes(category) ? 255 : 0;
+  }
+
+  return binaryMask;
+}
 
 export async function segmentImage(
   imageElement: HTMLImageElement,
@@ -55,14 +68,11 @@ export async function segmentImage(
       return [];
     }
 
-    const ctx = overlayCanvas.getContext('2d');
-    if (!ctx) return [];
-
     const maskWidth = result.categoryMask.width;
     const maskHeight = result.categoryMask.height;
     const maskData = result.categoryMask.getAsUint8Array();
 
-    // Calculate where the image actually is on canvas
+    // Calculate scaling from mask space to canvas space
     const imgWidth = imageElement.width;
     const imgHeight = imageElement.height;
     const canvasWidth = canvas.width;
@@ -74,87 +84,62 @@ export async function segmentImage(
     const offsetX = (canvasWidth - scaledWidth) / 2;
     const offsetY = (canvasHeight - scaledHeight) / 2;
 
-    // Create colored mask at mask resolution
-    const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = maskWidth;
-    tempCanvas.height = maskHeight;
-    const tempCtx = tempCanvas.getContext('2d');
-    if (!tempCtx) return [];
-
-    const imageData = tempCtx.createImageData(maskWidth, maskHeight);
-    const pixels = imageData.data;
+    // Scale factors from mask coordinates to canvas coordinates
+    const scaleX = scaledWidth / maskWidth;
+    const scaleY = scaledHeight / maskHeight;
 
     const regions: Region[] = [];
-    let hasPeople = false;
-    let hasForeground = false;
-    let hasBackground = false;
 
-    for (let i = 0; i < maskData.length; i++) {
-      const category = maskData[i];
-      const pixelIndex = i * 4;
+    // Process each region type
+    const regionConfigs: Array<{
+      type: RegionType;
+      categories: number[];
+      id: string;
+    }> = [
+        { type: 'people', categories: [1, 2, 3, 4], id: 'people-' + Date.now() },
+        { type: 'foreground', categories: [5], id: 'foreground-' + Date.now() },
+        { type: 'background', categories: [0], id: 'background-' + Date.now() },
+      ];
 
-      if (category >= 1 && category <= 4) {
-        pixels[pixelIndex] = MASK_COLORS.people[0];
-        pixels[pixelIndex + 1] = MASK_COLORS.people[1];
-        pixels[pixelIndex + 2] = MASK_COLORS.people[2];
-        pixels[pixelIndex + 3] = MASK_COLORS.people[3];
-        hasPeople = true;
-      } else if (category === 5) {
-        pixels[pixelIndex] = MASK_COLORS.foreground[0];
-        pixels[pixelIndex + 1] = MASK_COLORS.foreground[1];
-        pixels[pixelIndex + 2] = MASK_COLORS.foreground[2];
-        pixels[pixelIndex + 3] = MASK_COLORS.foreground[3];
-        hasForeground = true;
-      } else if (category === 0) {
-        pixels[pixelIndex] = MASK_COLORS.background[0];
-        pixels[pixelIndex + 1] = MASK_COLORS.background[1];
-        pixels[pixelIndex + 2] = MASK_COLORS.background[2];
-        pixels[pixelIndex + 3] = MASK_COLORS.background[3];
-        hasBackground = true;
+    for (const config of regionConfigs) {
+      // Extract binary mask for this region
+      const binaryMask = extractCategoryMask(
+        maskData,
+        maskWidth,
+        maskHeight,
+        config.categories
+      );
+
+      // Check if region has any pixels
+      const hasPixels = binaryMask.some(v => v > 0);
+      if (!hasPixels) continue;
+
+      // Convert mask to SVG path
+      const pathData = maskToPath(
+        binaryMask,
+        maskWidth,
+        maskHeight,
+        scaleX,
+        scaleY,
+        2 // epsilon for simplification
+      );
+
+      if (pathData) {
+        // Translate path to account for image offset
+        const translatedPath = translatePath(pathData, offsetX, offsetY);
+
+        regions.push({
+          id: config.id,
+          type: config.type,
+          pathData: translatedPath,
+          visible: true,
+          selected: false,
+        });
       }
     }
 
-    tempCtx.putImageData(imageData, 0, 0);
-
-    // Clear overlay and draw mask at the SAME position as the image
-    overlayCanvas.width = canvasWidth;
-    overlayCanvas.height = canvasHeight;
-    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-    ctx.drawImage(tempCanvas, offsetX, offsetY, scaledWidth, scaledHeight);
-
-    // Create region metadata
-    if (hasPeople) {
-      regions.push({
-        id: 'people-' + Date.now(),
-        type: 'people',
-        pathData: '',
-        visible: true,
-        selected: false,
-      });
-    }
-
-    if (hasForeground) {
-      regions.push({
-        id: 'foreground-' + Date.now(),
-        type: 'foreground',
-        pathData: '',
-        visible: true,
-        selected: false,
-      });
-    }
-
-    if (hasBackground) {
-      regions.push({
-        id: 'background-' + Date.now(),
-        type: 'background',
-        pathData: '',
-        visible: true,
-        selected: false,
-      });
-    }
-
     result.categoryMask.close();
-    console.log('Regions detected:', regions.length);
+    console.log('Vector regions created:', regions.length);
 
     return regions;
   } catch (error) {
@@ -162,6 +147,27 @@ export async function segmentImage(
     return [];
   }
 }
+
+/**
+ * Translate SVG path by offset
+ */
+function translatePath(pathData: string, offsetX: number, offsetY: number): string {
+  if (offsetX === 0 && offsetY === 0) return pathData;
+
+  return pathData.replace(/([ML])\s*([\d.-]+)\s+([\d.-]+)|([C])\s*([\d.-]+)\s+([\d.-]+),\s*([\d.-]+)\s+([\d.-]+),\s*([\d.-]+)\s+([\d.-]+)/g,
+    (match, cmd1, x1, y1, cmd2, cx1, cy1, cx2, cy2, x2, y2) => {
+      if (cmd1) {
+        // M or L command
+        return `${cmd1} ${parseFloat(x1) + offsetX} ${parseFloat(y1) + offsetY}`;
+      } else if (cmd2) {
+        // C command
+        return `${cmd2} ${parseFloat(cx1) + offsetX} ${parseFloat(cy1) + offsetY}, ${parseFloat(cx2) + offsetX} ${parseFloat(cy2) + offsetY}, ${parseFloat(x2) + offsetX} ${parseFloat(y2) + offsetY}`;
+      }
+      return match;
+    }
+  );
+}
+
 export function isSegmenterReady(): boolean {
   return segmenter !== null;
 }
