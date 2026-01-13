@@ -13,7 +13,15 @@ export function ImageTile({ tile, onUpdateTile }: ImageViewProps) {
   const mainCanvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
   const [showScan, setShowScan] = useState(true);
+  const [imageTransform, setImageTransform] = useState<{
+    scale: number;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null>(null);
 
   useEffect(() => {
     if (!mainCanvasRef.current || !overlayCanvasRef.current || !containerRef.current) return;
@@ -47,6 +55,15 @@ export function ImageTile({ tile, onUpdateTile }: ImageViewProps) {
       ctx.clearRect(0, 0, width, height);
       ctx.drawImage(img, x, y, scaledWidth, scaledHeight);
 
+      // 🔑 Store ACTUAL IMAGE RECT
+      setImageTransform({
+        scale,
+        x,
+        y,
+        width: scaledWidth,
+        height: scaledHeight,
+      });
+
       setShowScan(true);
       const start = Date.now();
 
@@ -64,31 +81,78 @@ export function ImageTile({ tile, onUpdateTile }: ImageViewProps) {
 
   return (
     <div ref={containerRef} className="relative h-full w-full overflow-hidden bg-black">
-      <canvas ref={mainCanvasRef} className="absolute inset-0" />
-      <canvas ref={overlayCanvasRef} className="absolute inset-0 pointer-events-none opacity-0" />
+      {/* Image */}
+      <canvas ref={mainCanvasRef} className="absolute inset-0 z-0" />
+
+      {/* Hidden mask canvas */}
+      <canvas
+        ref={overlayCanvasRef}
+        className="absolute inset-0 pointer-events-none opacity-0"
+      />
 
       {/* SVG vector overlay */}
-      <svg
-        className="absolute inset-0 pointer-events-none"
-        style={{ width: '100%', height: '100%' }}
-      >
-        {tile.regions
-          .filter(region => region.visible)
-          .map(region => (
-            <path
-              key={region.id}
-              d={region.pathData}
-              fill={
-                region.selected
-                  ? REGION_COLORS[region.type].selected
-                  : REGION_COLORS[region.type].fill
-              }
-              stroke={region.selected ? REGION_COLORS[region.type].selected.replace('0.25', '0.8') : 'none'}
-              strokeWidth={region.selected ? 2 : 0}
-              className="transition-all duration-200"
-            />
-          ))}
-      </svg>
+      {imageTransform && (
+        <svg
+          className="absolute inset-0 z-10"
+          viewBox={`0 0 ${mainCanvasRef.current!.width} ${mainCanvasRef.current!.height}`}
+          pointerEvents="auto"
+        >
+          <defs>
+            {/* ✅ CLIP TO IMAGE ONLY */}
+            <clipPath id={`image-clip-${tile.id}`}>
+              <rect
+                x={imageTransform.x}
+                y={imageTransform.y}
+                width={imageTransform.width}
+                height={imageTransform.height}
+              />
+            </clipPath>
+          </defs>
+
+          <g clipPath={`url(#image-clip-${tile.id})`}>
+            {(() => {
+              const people = tile.regions.find(
+                r => r.type === 'people' && r.visible
+              );
+
+              return (
+                <>
+                  {/* BACKGROUND */}
+                  {people && (
+                    <path
+                      d={`
+                        M ${imageTransform.x} ${imageTransform.y}
+                        H ${imageTransform.x + imageTransform.width}
+                        V ${imageTransform.y + imageTransform.height}
+                        H ${imageTransform.x}
+                        Z
+                        ${people.pathData}
+                      `}
+                      fill="rgba(0, 55, 255, 0.3)"
+                      fillRule="evenodd"
+                      onClick={() => console.log('background selected')}
+                    />
+                  )}
+
+                  {/* PEOPLE */}
+                  {people && (
+                    <path
+                      d={people.pathData}
+                      fill="rgba(0, 255, 0, 0.3)"
+                      stroke="white"
+                      strokeWidth={2}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        console.log('people selected');
+                      }}
+                    />
+                  )}
+                </>
+              );
+            })()}
+          </g>
+        </svg>
+      )}
 
       <ScanAnimation isActive={showScan} />
     </div>

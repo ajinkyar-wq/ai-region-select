@@ -1,9 +1,7 @@
 /**
- * Mask-to-Shape Pipeline
- * Converts AI pixel masks to interactive vector paths using:
- * 1. Marching Squares for contour extraction
- * 2. Ramer-Douglas-Peucker for point reduction
- * 3. Catmull-Rom to Bézier for curve smoothing
+ * Dead Simple Mask to Vector
+ * Takes MediaPipe binary mask, finds the outline, makes SVG path
+ * NO EXTERNAL LIBRARIES
  */
 
 interface Point {
@@ -12,137 +10,91 @@ interface Point {
 }
 
 /**
- * Marching Squares algorithm for contour extraction
+ * Find outline pixels by checking if pixel has empty neighbor
  */
-function marchingSquares(mask: Uint8Array, width: number, height: number, threshold: number = 128): Point[][] {
-  const contours: Point[][] = [];
-  const visited = new Set<string>();
+function findOutlinePixels(mask: Uint8Array, width: number, height: number): Point[] {
+  const outline: Point[] = [];
 
-  const getPixel = (x: number, y: number): number => {
-    if (x < 0 || x >= width || y < 0 || y >= height) return 0;
-    return mask[y * width + x];
-  };
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const idx = y * width + x;
 
-  const getSquareIndex = (x: number, y: number): number => {
-    let index = 0;
-    if (getPixel(x, y) >= threshold) index |= 1;
-    if (getPixel(x + 1, y) >= threshold) index |= 2;
-    if (getPixel(x + 1, y + 1) >= threshold) index |= 4;
-    if (getPixel(x, y + 1) >= threshold) index |= 8;
-    return index;
-  };
+      // If this pixel is white (part of mask)
+      if (mask[idx] > 128) {
+        // Check if any neighbor is black (edge detection)
+        const hasEmptyNeighbor =
+          mask[idx - 1] < 128 ||           // left
+          mask[idx + 1] < 128 ||           // right
+          mask[idx - width] < 128 ||       // top
+          mask[idx + width] < 128;         // bottom
 
-  // Direction lookup for marching squares
-  const directions: Record<number, [number, number]> = {
-    1: [0, -1], 2: [1, 0], 3: [1, 0], 4: [1, 0],
-    5: [0, -1], 6: [1, 0], 7: [1, 0], 8: [0, 1],
-    9: [0, -1], 10: [0, 1], 11: [0, -1], 12: [0, 1],
-    13: [0, -1], 14: [0, 1],
-  };
-
-  for (let startY = 0; startY < height - 1; startY++) {
-    for (let startX = 0; startX < width - 1; startX++) {
-      const key = `${startX},${startY}`;
-      if (visited.has(key)) continue;
-
-      const index = getSquareIndex(startX, startY);
-      if (index === 0 || index === 15) continue;
-
-      const contour: Point[] = [];
-      let x = startX;
-      let y = startY;
-      let prevDir: [number, number] = [0, 0];
-
-      for (let i = 0; i < width * height; i++) {
-        const cellKey = `${x},${y}`;
-        visited.add(cellKey);
-
-        const cellIndex = getSquareIndex(x, y);
-        if (cellIndex === 0 || cellIndex === 15) break;
-
-        // Get interpolated edge point
-        contour.push({ x: x + 0.5, y: y + 0.5 });
-
-        const dir = directions[cellIndex] || [0, 0];
-        x += dir[0];
-        y += dir[1];
-        prevDir = dir;
-
-        if (x === startX && y === startY) break;
-        if (x < 0 || x >= width - 1 || y < 0 || y >= height - 1) break;
-      }
-
-      if (contour.length > 10) {
-        contours.push(contour);
+        if (hasEmptyNeighbor) {
+          outline.push({ x, y });
+        }
       }
     }
   }
 
-  return contours;
+  return outline;
 }
 
 /**
- * Ramer-Douglas-Peucker algorithm for point reduction
+ * Sort outline points into a path by angle from center
  */
-function rdpSimplify(points: Point[], epsilon: number): Point[] {
-  if (points.length < 3) return points;
+function sortByAngle(points: Point[]): Point[] {
+  if (points.length === 0) return [];
 
-  const perpendicularDistance = (point: Point, lineStart: Point, lineEnd: Point): number => {
-    const dx = lineEnd.x - lineStart.x;
-    const dy = lineEnd.y - lineStart.y;
-    const mag = Math.sqrt(dx * dx + dy * dy);
-    if (mag === 0) return Math.sqrt((point.x - lineStart.x) ** 2 + (point.y - lineStart.y) ** 2);
-    
-    const u = ((point.x - lineStart.x) * dx + (point.y - lineStart.y) * dy) / (mag * mag);
-    const closestX = lineStart.x + u * dx;
-    const closestY = lineStart.y + u * dy;
-    return Math.sqrt((point.x - closestX) ** 2 + (point.y - closestY) ** 2);
-  };
-
-  let maxDistance = 0;
-  let maxIndex = 0;
-
-  for (let i = 1; i < points.length - 1; i++) {
-    const d = perpendicularDistance(points[i], points[0], points[points.length - 1]);
-    if (d > maxDistance) {
-      maxDistance = d;
-      maxIndex = i;
-    }
+  // Find center
+  let sumX = 0, sumY = 0;
+  for (const p of points) {
+    sumX += p.x;
+    sumY += p.y;
   }
+  const centerX = sumX / points.length;
+  const centerY = sumY / points.length;
 
-  if (maxDistance > epsilon) {
-    const left = rdpSimplify(points.slice(0, maxIndex + 1), epsilon);
-    const right = rdpSimplify(points.slice(maxIndex), epsilon);
-    return [...left.slice(0, -1), ...right];
-  }
-
-  return [points[0], points[points.length - 1]];
+  // Sort by angle
+  return points.sort((a, b) => {
+    const angleA = Math.atan2(a.y - centerY, a.x - centerX);
+    const angleB = Math.atan2(b.y - centerY, b.x - centerX);
+    return angleA - angleB;
+  });
 }
 
 /**
- * Catmull-Rom to Bézier conversion for smooth curves
+ * Reduce number of points - keep every Nth point
  */
-function catmullRomToBezier(points: Point[]): string {
-  if (points.length < 2) return '';
-  if (points.length === 2) {
-    return `M ${points[0].x} ${points[0].y} L ${points[1].x} ${points[1].y}`;
+function reducePoints(points: Point[], keepEvery: number = 5): Point[] {
+  if (points.length === 0) return [];
+
+  const reduced: Point[] = [];
+  for (let i = 0; i < points.length; i += keepEvery) {
+    reduced.push(points[i]);
   }
 
-  const tension = 0.5;
-  let path = `M ${points[0].x} ${points[0].y}`;
+  // Always include last point
+  if (reduced[reduced.length - 1] !== points[points.length - 1]) {
+    reduced.push(points[points.length - 1]);
+  }
 
-  for (let i = 0; i < points.length - 1; i++) {
-    const p0 = points[Math.max(0, i - 1)];
-    const p1 = points[i];
-    const p2 = points[i + 1];
-    const p3 = points[Math.min(points.length - 1, i + 2)];
+  return reduced;
+}
 
-    const cp1x = p1.x + (p2.x - p0.x) / 6 * tension;
-    const cp1y = p1.y + (p2.y - p0.y) / 6 * tension;
-    const cp2x = p2.x - (p3.x - p1.x) / 6 * tension;
-    const cp2y = p2.y - (p3.y - p1.y) / 6 * tension;
+/**
+ * Convert points to SVG path with scaling
+ */
+function pointsToPath(points: Point[], scaleX: number, scaleY: number): string {
+  if (points.length === 0) return '';
 
-    path += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2.x} ${p2.y}`;
+  const scaled = points.map(p => ({
+    x: Math.round(p.x * scaleX * 10) / 10,
+    y: Math.round(p.y * scaleY * 10) / 10
+  }));
+
+  let path = `M ${scaled[0].x} ${scaled[0].y}`;
+
+  for (let i = 1; i < scaled.length; i++) {
+    path += ` L ${scaled[i].x} ${scaled[i].y}`;
   }
 
   path += ' Z';
@@ -150,51 +102,57 @@ function catmullRomToBezier(points: Point[]): string {
 }
 
 /**
- * Main pipeline: Convert mask to SVG path
+ * MAIN FUNCTION: Mask → Vector Path
  */
-export function maskToPath(
+export async function maskToPath(
   mask: Uint8Array,
   width: number,
   height: number,
   scaleX: number = 1,
   scaleY: number = 1,
   epsilon: number = 2
-): string {
-  // Extract contours using marching squares
-  const contours = marchingSquares(mask, width, height);
-  
-  if (contours.length === 0) return '';
+): Promise<string> {
 
-  // Find the largest contour
-  const largestContour = contours.reduce((a, b) => a.length > b.length ? a : b);
+  console.log(`maskToPath called: ${width}x${height}, scale: ${scaleX.toFixed(2)}x${scaleY.toFixed(2)}`);
 
-  // Simplify with RDP
-  const simplified = rdpSimplify(largestContour, epsilon);
+  // Step 1: Find all outline pixels
+  const outlinePixels = findOutlinePixels(mask, width, height);
+  console.log(`Found ${outlinePixels.length} outline pixels`);
 
-  // Scale points
-  const scaled = simplified.map(p => ({
-    x: p.x * scaleX,
-    y: p.y * scaleY,
-  }));
+  if (outlinePixels.length === 0) {
+    console.warn('No outline pixels found');
+    return '';
+  }
 
-  // Convert to smooth Bézier path
-  return catmullRomToBezier(scaled);
+  // Step 2: Sort them into a path
+  const sortedPoints = sortByAngle(outlinePixels);
+  console.log(`Sorted ${sortedPoints.length} points`);
+
+  // Step 3: Reduce point count
+  const reducedPoints = reducePoints(sortedPoints, 8);
+  console.log(`Reduced to ${reducedPoints.length} points`);
+
+  // Step 4: Convert to SVG path
+  const path = pointsToPath(reducedPoints, scaleX, scaleY);
+  console.log(`Generated path: ${path.substring(0, 100)}...`);
+
+  return path;
 }
 
 /**
- * Generate a simple rectangular path as fallback
+ * Fallback rectangle
  */
 export function createRectPath(x: number, y: number, width: number, height: number, inset: number = 10): string {
   const left = x + inset;
   const top = y + inset;
   const right = x + width - inset;
   const bottom = y + height - inset;
-  
+
   return `M ${left} ${top} L ${right} ${top} L ${right} ${bottom} L ${left} ${bottom} Z`;
 }
 
 /**
- * Create an organic blob shape for demo/fallback purposes
+ * Organic blob
  */
 export function createOrganicShape(
   centerX: number,
@@ -205,20 +163,23 @@ export function createOrganicShape(
   variance: number = 0.2
 ): string {
   const points: Point[] = [];
-  
+
   for (let i = 0; i < segments; i++) {
     const angle = (i / segments) * Math.PI * 2;
     const rx = radiusX * (1 + (Math.random() - 0.5) * variance);
     const ry = radiusY * (1 + (Math.random() - 0.5) * variance);
-    
+
     points.push({
       x: centerX + Math.cos(angle) * rx,
       y: centerY + Math.sin(angle) * ry,
     });
   }
-  
-  // Close the loop
-  points.push(points[0]);
-  
-  return catmullRomToBezier(points);
+
+  let path = `M ${points[0].x} ${points[0].y}`;
+  for (let i = 1; i < points.length; i++) {
+    path += ` L ${points[i].x} ${points[i].y}`;
+  }
+  path += ' Z';
+
+  return path;
 }

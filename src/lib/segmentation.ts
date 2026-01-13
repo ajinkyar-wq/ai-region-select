@@ -36,7 +36,7 @@ async function initializeSegmenter(): Promise<ImageSegmenter> {
 }
 
 /**
- * Extract a binary mask for a specific category
+ * Extract a binary mask for specific categories
  */
 function extractCategoryMask(
   maskData: Uint8Array,
@@ -52,6 +52,20 @@ function extractCategoryMask(
   }
 
   return binaryMask;
+}
+
+/**
+ * Translate SVG path by offset
+ */
+function translatePath(pathData: string, offsetX: number, offsetY: number): string {
+  if (offsetX === 0 && offsetY === 0) return pathData;
+
+  // Simple regex to match M, L, and Z commands with coordinates
+  return pathData.replace(/([ML])\s*([\d.-]+)\s+([\d.-]+)/g,
+    (match, cmd, x, y) => {
+      return `${cmd} ${parseFloat(x) + offsetX} ${parseFloat(y) + offsetY}`;
+    }
+  );
 }
 
 export async function segmentImage(
@@ -97,8 +111,8 @@ export async function segmentImage(
       id: string;
     }> = [
         { type: 'people', categories: [1, 2, 3, 4], id: 'people-' + Date.now() },
-        { type: 'foreground', categories: [5], id: 'foreground-' + Date.now() },
-        { type: 'background', categories: [0], id: 'background-' + Date.now() },
+        { type: 'foreground', categories: [5], id: 'foreground-' + Date.now() + 1 },
+        { type: 'background', categories: [0], id: 'background-' + Date.now() + 2 },
       ];
 
     for (const config of regionConfigs) {
@@ -114,8 +128,10 @@ export async function segmentImage(
       const hasPixels = binaryMask.some(v => v > 0);
       if (!hasPixels) continue;
 
-      // Convert mask to SVG path
-      const pathData = maskToPath(
+      console.log(`Converting ${config.type} to vector...`);
+
+      // Convert mask to SVG path (now async!)
+      const pathData = await maskToPath(
         binaryMask,
         maskWidth,
         maskHeight,
@@ -123,6 +139,8 @@ export async function segmentImage(
         scaleY,
         2 // epsilon for simplification
       );
+
+      console.log(`${config.type} path length:`, pathData.length);
 
       if (pathData) {
         // Translate path to account for image offset
@@ -139,33 +157,13 @@ export async function segmentImage(
     }
 
     result.categoryMask.close();
-    console.log('Vector regions created:', regions.length);
+    console.log('Vector regions created:', regions);
 
     return regions;
   } catch (error) {
     console.error('Segmentation failed:', error);
     return [];
   }
-}
-
-/**
- * Translate SVG path by offset
- */
-function translatePath(pathData: string, offsetX: number, offsetY: number): string {
-  if (offsetX === 0 && offsetY === 0) return pathData;
-
-  return pathData.replace(/([ML])\s*([\d.-]+)\s+([\d.-]+)|([C])\s*([\d.-]+)\s+([\d.-]+),\s*([\d.-]+)\s+([\d.-]+),\s*([\d.-]+)\s+([\d.-]+)/g,
-    (match, cmd1, x1, y1, cmd2, cx1, cy1, cx2, cy2, x2, y2) => {
-      if (cmd1) {
-        // M or L command
-        return `${cmd1} ${parseFloat(x1) + offsetX} ${parseFloat(y1) + offsetY}`;
-      } else if (cmd2) {
-        // C command
-        return `${cmd2} ${parseFloat(cx1) + offsetX} ${parseFloat(cy1) + offsetY}, ${parseFloat(cx2) + offsetX} ${parseFloat(cy2) + offsetY}, ${parseFloat(x2) + offsetX} ${parseFloat(y2) + offsetY}`;
-      }
-      return match;
-    }
-  );
 }
 
 export function isSegmenterReady(): boolean {
