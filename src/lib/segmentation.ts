@@ -1,5 +1,5 @@
 /**
- * MediaPipe Image Segmentation with Vector Path Conversion
+ * MediaPipe Image Segmentation
  */
 
 import { ImageSegmenter, FilesetResolver } from '@mediapipe/tasks-vision';
@@ -35,9 +35,6 @@ async function initializeSegmenter(): Promise<ImageSegmenter> {
   return initPromise;
 }
 
-/**
- * Extract a binary mask for specific categories
- */
 function extractCategoryMask(
   maskData: Uint8Array,
   width: number,
@@ -45,27 +42,10 @@ function extractCategoryMask(
   categories: number[]
 ): Uint8Array {
   const binaryMask = new Uint8Array(width * height);
-
   for (let i = 0; i < maskData.length; i++) {
-    const category = maskData[i];
-    binaryMask[i] = categories.includes(category) ? 255 : 0;
+    binaryMask[i] = categories.includes(maskData[i]) ? 255 : 0;
   }
-
   return binaryMask;
-}
-
-/**
- * Translate SVG path by offset
- */
-function translatePath(pathData: string, offsetX: number, offsetY: number): string {
-  if (offsetX === 0 && offsetY === 0) return pathData;
-
-  // Simple regex to match M, L, and Z commands with coordinates
-  return pathData.replace(/([ML])\s*([\d.-]+)\s+([\d.-]+)/g,
-    (match, cmd, x, y) => {
-      return `${cmd} ${parseFloat(x) + offsetX} ${parseFloat(y) + offsetY}`;
-    }
-  );
 }
 
 export async function segmentImage(
@@ -86,7 +66,6 @@ export async function segmentImage(
     const maskHeight = result.categoryMask.height;
     const maskData = result.categoryMask.getAsUint8Array();
 
-    // Calculate scaling from mask space to canvas space
     const imgWidth = imageElement.width;
     const imgHeight = imageElement.height;
     const canvasWidth = canvas.width;
@@ -98,58 +77,41 @@ export async function segmentImage(
     const offsetX = (canvasWidth - scaledWidth) / 2;
     const offsetY = (canvasHeight - scaledHeight) / 2;
 
-    // Scale factors from mask coordinates to canvas coordinates
     const scaleX = scaledWidth / maskWidth;
     const scaleY = scaledHeight / maskHeight;
 
     const regions: Region[] = [];
 
-    // Process each region type
     const regionConfigs: Array<{
       type: RegionType;
       categories: number[];
       id: string;
     }> = [
-        { type: 'people', categories: [1, 2, 3, 4], id: 'people-' + Date.now() },
+        { type: 'people', categories: [0], id: 'people-' + Date.now() },
         { type: 'foreground', categories: [5], id: 'foreground-' + Date.now() + 1 },
-        { type: 'background', categories: [0], id: 'background-' + Date.now() + 2 },
+        { type: 'background', categories: [1, 2, 3, 4], id: 'background-' + Date.now() + 2 },
       ];
 
     for (const config of regionConfigs) {
-      // Extract binary mask for this region
-      const binaryMask = extractCategoryMask(
-        maskData,
-        maskWidth,
-        maskHeight,
-        config.categories
-      );
+      const binaryMask = extractCategoryMask(maskData, maskWidth, maskHeight, config.categories);
 
-      // Check if region has any pixels
-      const hasPixels = binaryMask.some(v => v > 0);
-      if (!hasPixels) continue;
+      if (!binaryMask.some(v => v > 0)) continue;
 
-      console.log(`Converting ${config.type} to vector...`);
-
-      // Convert mask to SVG path (now async!)
+      // PASS OFFSET DIRECTLY TO maskToPath
       const pathData = await maskToPath(
         binaryMask,
         maskWidth,
         maskHeight,
         scaleX,
         scaleY,
-        2 // epsilon for simplification
+        2,
       );
 
-      console.log(`${config.type} path length:`, pathData.length);
-
       if (pathData) {
-        // Translate path to account for image offset
-        const translatedPath = translatePath(pathData, offsetX, offsetY);
-
         regions.push({
           id: config.id,
           type: config.type,
-          pathData: translatedPath,
+          pathData,
           visible: true,
           selected: false,
         });
@@ -157,8 +119,6 @@ export async function segmentImage(
     }
 
     result.categoryMask.close();
-    console.log('Vector regions created:', regions);
-
     return regions;
   } catch (error) {
     console.error('Segmentation failed:', error);

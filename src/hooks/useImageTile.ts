@@ -1,58 +1,62 @@
-import { useState, useCallback } from 'react';
-import type { ImageTileData, Region } from '@/types/workspace';
-import { segmentImage } from '@/lib/segmentation';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
-export function useImageTile(tile: ImageTileData) {
-  const [isProcessing, setIsProcessing] = useState(tile.isProcessing);
-  const [regions, setRegions] = useState<Region[]>(tile.regions);
-  const [selectedRegionId, setSelectedRegionId] = useState<string | null>(tile.selectedRegionId);
+interface ImageTransform {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  scale: number;
+}
 
-  const processImage = useCallback(async (imageElement: HTMLImageElement, canvasWidth: number, canvasHeight: number) => {
-    setIsProcessing(true);
-    
-    try {
-      const detectedRegions = await segmentImage(imageElement, canvasWidth, canvasHeight);
-      setRegions(detectedRegions);
-    } catch (error) {
-      console.error('Failed to process image:', error);
-    } finally {
-      setIsProcessing(false);
-    }
+export function useImageTile(imageUrl: string | null) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const imageRef = useRef<HTMLImageElement | null>(null);
+
+  const [imageTransform, setImageTransform] = useState<ImageTransform | null>(null);
+
+  const updateTransform = useCallback(() => {
+    if (!containerRef.current || !imageRef.current) return;
+
+    const container = containerRef.current;
+    const image = imageRef.current;
+
+    const containerWidth = container.clientWidth;
+    const containerHeight = container.clientHeight;
+
+    const imageWidth = image.naturalWidth;
+    const imageHeight = image.naturalHeight;
+
+    // ✅ CORRECT scale calculation
+    const scale = Math.min(
+      containerWidth / imageWidth,
+      containerHeight / imageHeight
+    );
+
+    const scaledWidth = imageWidth * scale;
+    const scaledHeight = imageHeight * scale;
+
+    // ✅ CENTERING OFFSET (THIS WAS MISSING)
+    const offsetX = (containerWidth - scaledWidth) / 2;
+    const offsetY = (containerHeight - scaledHeight) / 2;
+
+    setImageTransform({
+      x: offsetX,
+      y: offsetY,
+      width: scaledWidth,
+      height: scaledHeight,
+      scale,
+    });
   }, []);
 
-  const selectRegion = useCallback((regionId: string | null) => {
-    setSelectedRegionId(regionId);
-    setRegions(prev => prev.map(r => ({
-      ...r,
-      selected: r.id === regionId,
-    })));
-  }, []);
-
-  const hideRegion = useCallback((regionId: string) => {
-    setRegions(prev => prev.map(r => 
-      r.id === regionId ? { ...r, visible: false, selected: false } : r
-    ));
-    setSelectedRegionId(null);
-  }, []);
-
-  const showRegion = useCallback((regionId: string) => {
-    setRegions(prev => prev.map(r => 
-      r.id === regionId ? { ...r, visible: true } : r
-    ));
-  }, []);
-
-  const getSelectedRegion = useCallback((): Region | null => {
-    return regions.find(r => r.id === selectedRegionId) || null;
-  }, [regions, selectedRegionId]);
+  useEffect(() => {
+    updateTransform();
+    window.addEventListener('resize', updateTransform);
+    return () => window.removeEventListener('resize', updateTransform);
+  }, [updateTransform]);
 
   return {
-    isProcessing,
-    regions,
-    selectedRegionId,
-    processImage,
-    selectRegion,
-    hideRegion,
-    showRegion,
-    getSelectedRegion,
+    containerRef,
+    imageRef,
+    imageTransform,
   };
 }
