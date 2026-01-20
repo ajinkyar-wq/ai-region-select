@@ -17,6 +17,8 @@ export function Workspace() {
   const [backgroundEnabled, setBackgroundEnabled] = useState(false);
   const [activeMask, setActiveMask] = useState<Region | null>(null);
  const [brushActive, setBrushActive] = useState(false);
+ const showMaskImage = !!image?.regions.some(r => r.selected);
+
 
   
 const handleCreateManualMask = () => {
@@ -160,6 +162,7 @@ const selectRegionByType = (
               onToggle={() => setIsPanelOpen(!isPanelOpen)} 
               onSelectRegion={selectRegionByType}
               peopleEnabled={peopleEnabled}
+              showMaskImage={showMaskImage}
               setPeopleEnabled={setPeopleEnabled}
               backgroundEnabled={backgroundEnabled}
               onCreateManualMask={handleCreateManualMask} 

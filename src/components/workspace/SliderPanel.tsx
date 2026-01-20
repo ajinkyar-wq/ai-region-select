@@ -17,9 +17,14 @@ interface SliderPanelProps {
   setPeopleEnabled: (v: boolean) => void;
   backgroundEnabled: boolean;
   setBackgroundEnabled: (v: boolean) => void;
+  showMaskImage: boolean;
 }
 
-export function SliderPanel({ isOpen = true, onToggle,onSelectRegion,
+export function SliderPanel({ 
+  isOpen = true, 
+  onToggle,
+  onSelectRegion,
+  showMaskImage,
   peopleEnabled,
   setPeopleEnabled,
   backgroundEnabled,
@@ -347,9 +352,21 @@ export function SliderPanel({ isOpen = true, onToggle,onSelectRegion,
           )}
         </div>
 
+                {showMaskImage && (
+          <div className="mt-4 -mx-4">
+            <img
+              src="/Slider Panel.png"
+              alt="Mask adjustment preview"
+              className="w-full rounded-md border border-[#2A2A2A]"
+            />
+          </div>
+        )}
+
+
         {/* Line 238 - Divider */}
         <div className="h-[1px] w-[344px] bg-[#111111]" />
       </div>
     </>
+    
   );
 }
