@@ -68,12 +68,12 @@ export function DropZone({ onFileDrop }: DropZoneProps) {
         )}
       >
         <Upload className="h-10 w-10 text-muted-foreground" />
-        <p className="text-lg font-medium">
-          Drop an image to test the edit protoype
-        </p>
-        <p className="text-sm text-muted-foreground">
-          or click to browse
-        </p>
+<p className="text-lg font-medium text-white">
+  Drop an image to test the edit protoype
+</p>
+<p className="text-sm text-muted-foreground">
+  or click to browse
+</p>
       </label>
     </div>
   );
