@@ -1,12 +1,12 @@
 import { useCallback, useState } from 'react';
 import { DropZone } from './DropZone';
-import { ImageTile } from './ImageTile';
+import { ImageTile, } from './ImageTile';
 import { TitleBar } from './TitleBar';
 import { TopBar } from './TopBar';
 import { Filmstrip } from './Filmstrip';
 import { BottomBar } from './BottomBar';
 import { SliderPanel } from './SliderPanel';
-import type { ImageTileData } from '@/types/workspace';
+import type { ImageTileData, Region } from '@/types/workspace';
 
 export function Workspace() {
   const [image, setImage] = useState<ImageTileData | null>(null);
@@ -15,9 +15,34 @@ export function Workspace() {
   const [isPanelOpen, setIsPanelOpen] = useState(true);
   const [peopleEnabled, setPeopleEnabled] = useState(false);
   const [backgroundEnabled, setBackgroundEnabled] = useState(false);
-  
+  const [activeMask, setActiveMask] = useState<Region | null>(null);
+ const [brushActive, setBrushActive] = useState(false);
 
-  const handleFileDrop = useCallback((file: File) => {
+  
+const handleCreateManualMask = () => {
+  if (!image) return;
+
+  const newMask: Region = {
+    id: crypto.randomUUID(),
+    type: 'manual',
+    pathData: '',
+    visible: true,
+    selected: true,
+  };
+
+  setImage(prev =>
+    prev
+      ? { ...prev, regions: [...prev.regions, newMask] }
+      : prev
+  );
+
+  setActiveMask(newMask);
+  setBrushActive(true);
+};
+
+  
+ 
+ const handleFileDrop = useCallback((file: File) => {
     const imageUrl = URL.createObjectURL(file);
 
     setImage({
@@ -33,40 +58,44 @@ export function Workspace() {
   const [hoveredRegion, setHoveredRegion] =
   useState<'people' | 'background' | null>(null);
 
-const [editRegionType, setEditRegionType] =
-  useState<'people' | 'background' | null>(null);
 
 
 const selectRegionByType = (
   type: 'people' | 'background' | null,
   edit = false
 ) => {
-  setHoveredRegion(type);
-
   if (!type || !image) return;
 
-  // SINGLE CLICK = TOGGLE SELECTION (same as canvas)
-  if (!edit) {
-    const isAlreadySelected = image.regions.some(
-      r => r.type === type && r.selected
-    );
+  // =========================
+  // DOUBLE CLICK → EDIT MASK
+  // =========================
+  if (edit) {
+    const region = image.regions.find(r => r.type === type);
+    if (!region) return;
 
-    setImage(prev =>
-      prev
-        ? {
-            ...prev,
-            regions: prev.regions.map(r => ({
-              ...r,
-              selected: isAlreadySelected ? false : r.type === type,
-            })),
-          }
-        : prev
-    );
+    setActiveMask(region);
+    setBrushActive(true);
     return;
   }
 
-  // DOUBLE CLICK = EDIT
-  setEditRegionType(type);
+  // =========================
+  // SINGLE CLICK → TOGGLE SELECTION
+  // =========================
+  const isAlreadySelected = image.regions.some(
+    r => r.type === type && r.selected
+  );
+
+  setImage(prev =>
+    prev
+      ? {
+          ...prev,
+          regions: prev.regions.map(r => ({
+            ...r,
+            selected: isAlreadySelected ? false : r.type === type,
+          })),
+        }
+      : prev
+  );
 };
 
 
@@ -104,12 +133,12 @@ const selectRegionByType = (
   tile={image}
   selectionMode={selectionMode}
   hoveredRegionOverride={hoveredRegion}
-  editRegionType={editRegionType}
+  activeMask={activeMask}
+  brushActive={brushActive}
   peopleEnabled={peopleEnabled}
   backgroundEnabled={backgroundEnabled}
   onUpdateTile={(updates) => {
-    setEditRegionType(null);
-    setImage((prev) => (prev ? { ...prev, ...updates } : prev));
+    setImage(prev => (prev ? { ...prev, ...updates } : prev));
   }}
 />
               </div>
@@ -133,6 +162,7 @@ const selectRegionByType = (
               peopleEnabled={peopleEnabled}
               setPeopleEnabled={setPeopleEnabled}
               backgroundEnabled={backgroundEnabled}
+              onCreateManualMask={handleCreateManualMask} 
               setBackgroundEnabled={setBackgroundEnabled}
             />
           </div>

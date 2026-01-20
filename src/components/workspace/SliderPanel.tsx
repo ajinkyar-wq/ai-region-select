@@ -12,6 +12,7 @@ interface SliderPanelProps {
   isOpen?: boolean;
   onToggle?: () => void;
   onSelectRegion: (type: 'people' | 'background' | null, edit?: boolean) => void;
+  onCreateManualMask: () => void; 
   peopleEnabled: boolean;
   setPeopleEnabled: (v: boolean) => void;
   backgroundEnabled: boolean;
@@ -23,6 +24,7 @@ export function SliderPanel({ isOpen = true, onToggle,onSelectRegion,
   setPeopleEnabled,
   backgroundEnabled,
   setBackgroundEnabled,
+  onCreateManualMask,
  }: SliderPanelProps) {
   const [activeTab, setActiveTab] = useState<'sliders' | 'crop' | 'masking'>('masking');
   const [showAddMaskMenu, setShowAddMaskMenu] = useState(false);
@@ -115,13 +117,18 @@ export function SliderPanel({ isOpen = true, onToggle,onSelectRegion,
           {showAddMaskMenu && (
             <div className="absolute right-0 top-9 z-50 w-[132px] rounded-lg bg-[#242424] p-1 shadow-xl border border-[#5E5E5E]">
               {/* Brush */}
-              <button
-                onClick={() => setShowAddMaskMenu(false)}
-                className="flex w-full items-center gap-[6px] px-2 py-2 text-left hover:bg-white/10 rounded"
-              >
-                <Brush className="h-3 w-3 text-white" />
-                <span className="text-[12px] font-normal leading-[1.33] text-[#ABABAB]">Brush</span>
-              </button>
+<button
+  onClick={() => {
+    onCreateManualMask();   // ✅ CREATE MASK
+    setShowAddMaskMenu(false);
+  }}
+  className="flex w-full items-center gap-[6px] px-2 py-2 text-left hover:bg-white/10 rounded"
+>
+  <Brush className="h-3 w-3 text-white" />
+  <span className="text-[12px] font-normal leading-[1.33] text-[#ABABAB]">
+    Brush
+  </span>
+</button>
 
               {/* Object */}
               <button

@@ -3,12 +3,13 @@ import { useEffect, useRef, useState } from 'react';
 import * as fabric from 'fabric';
 import * as ClipperLib from 'clipper-lib';
 import { HideButton } from './HideButton';
+import type { RegionType } from '@/types/workspace';
 
 
 interface BrushToolProps {
     regionId: string;
     regionPathData: string;
-    regionType: 'people' | 'background';
+    regionType: RegionType;
     imageTransform: {
         scale: number;
         x: number;
@@ -231,16 +232,19 @@ const updatedRefPath = new fabric.Path(newPathData, {
     return (
         <>
             {/* Brush Canvas Overlay - clipped to image bounds */}
-            <div
-                className="absolute z-20"
-                style={{
-                    left: imageTransform.x,
-                    top: imageTransform.y,
-                    width: imageTransform.width,
-                    height: imageTransform.height,
-                    overflow: 'hidden',
-                }}
-            >
+<div
+  className="absolute z-20"
+  onPointerDown={e => e.stopPropagation()}
+  onPointerUp={e => e.stopPropagation()}
+  onClick={e => e.stopPropagation()}
+  style={{
+    left: imageTransform.x,
+    top: imageTransform.y,
+    width: imageTransform.width,
+    height: imageTransform.height,
+    overflow: 'hidden',
+  }}
+>
                 <canvas
                     ref={canvasRef}
                     className="absolute inset-0 pointer-events-auto"

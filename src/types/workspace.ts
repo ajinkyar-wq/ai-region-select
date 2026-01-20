@@ -1,4 +1,4 @@
-export type RegionType = 'people' | 'background' | 'hair' | 'body-skin' | 'face-skin' | 'clothes' | 'foreground';
+export type RegionType = 'people' | 'background' | 'hair' | 'body-skin' | 'face-skin' | 'clothes' | 'foreground' | 'manual';
 export interface Region {
   id: string;
   type: RegionType;
@@ -47,6 +47,11 @@ export const REGION_COLORS: Record<RegionType, { fill: string; selected: string 
     fill: 'rgba(6, 182, 212, 0.3)',
     selected: 'rgba(6, 182, 212, 0.5)',
   },
+  manual: {
+  fill: '#00ff6440',
+  selected: '#00ff6480',
+},
+
 };
 export const REGION_LABELS: Record<RegionType, string> = {
   people: 'People',
@@ -56,4 +61,6 @@ export const REGION_LABELS: Record<RegionType, string> = {
   'body-skin': 'Body Skin',
   'face-skin': 'Face Skin',
   clothes: 'Clothes',
+  manual: 'My Mask',
+
 };

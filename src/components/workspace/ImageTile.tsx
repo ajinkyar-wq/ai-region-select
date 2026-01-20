@@ -12,13 +12,16 @@ interface ImageViewProps {
   selectionMode?: 'single' | 'multi';
 
   hoveredRegionOverride?: 'people' | 'background' | null;
-  editRegionType?: 'people' | 'background' | null;
   peopleEnabled?: boolean;
   backgroundEnabled?: boolean;
+  activeMask?: Region | null;
+brushActive?: boolean;
+
 }
 
 export function ImageTile({ tile, onUpdateTile, selectionMode,   hoveredRegionOverride,
-  editRegionType,
+  activeMask,
+  brushActive,
   peopleEnabled = true,
   backgroundEnabled = true,
  }: ImageViewProps) {
@@ -144,14 +147,11 @@ const hoveredRegion =
     };
   }, [tile.imageUrl]);
 
-  useEffect(() => {
-  if (!editRegionType) return;
-
-  const region = tile.regions.find(r => r.type === editRegionType);
-  if (region) {
-    setEditingRegion(region);
+useEffect(() => {
+  if (brushActive && activeMask) {
+    setEditingRegion(activeMask);
   }
-}, [editRegionType, tile.regions]);
+}, [brushActive, activeMask]);
 
 
   const effectiveSelectionMode = selectionMode ?? localSelectionMode;
@@ -281,6 +281,7 @@ onClick={() => {
   });
 }}
   >
+
     <style>{`
       @keyframes pulseOpacity {
         0%, 100% { opacity: 0.3; }
@@ -435,7 +436,7 @@ onClick={() => {
   <BrushTool
     regionId={editingRegion.id}
     regionPathData={editPathData}
-    regionType={editingRegion.type as 'people' | 'background'}
+    regionType={editingRegion.type}
     imageTransform={imageTransform}
     canvasWidth={mainCanvasRef.current.width}
     canvasHeight={mainCanvasRef.current.height}
