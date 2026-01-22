@@ -44,6 +44,24 @@ const [offset, setOffset] = useState({ x: 0, y: 0 });
 const MIN_SCALE = 0.3;
 const MAX_SCALE = 4;
 
+useEffect(() => {
+  const el = containerRef.current;
+  if (!el) return;
+
+  const wheelListener = (e: WheelEvent) => {
+    if (e.ctrlKey) {
+      e.preventDefault();
+    }
+  };
+
+  el.addEventListener('wheel', wheelListener, { passive: false });
+
+  return () => {
+    el.removeEventListener('wheel', wheelListener);
+  };
+}, []);
+
+
 const handleWheel = (e: React.WheelEvent) => {
   // Pinch gesture → zoom
   if (e.ctrlKey) {
@@ -61,26 +79,7 @@ const handleWheel = (e: React.WheelEvent) => {
     x: prev.x - e.deltaX,
     y: prev.y - e.deltaY,
   }));
-};
-
-useEffect(() => {
-  const el = containerRef.current;
-  if (!el) return;
-
-  const wheelListener = (e: WheelEvent) => {
-    if (e.ctrlKey) {
-      e.preventDefault(); // ⛔ STOP browser zoom
-    }
-  };
-
-  el.addEventListener('wheel', wheelListener, { passive: false });
-
-  return () => {
-    el.removeEventListener('wheel', wheelListener);
-  };
-}, []);
-
-  
+};  
 
 const [localHoveredRegion, setLocalHoveredRegion] =
   useState<'people' | 'background' | null>(null);
@@ -440,6 +439,7 @@ onClick={() => {
     imageTransform={imageTransform}
     canvasWidth={mainCanvasRef.current.width}
     canvasHeight={mainCanvasRef.current.height}
+    viewportScale={scale}  
     onPathUpdate={handlePathUpdate}
     onExit={handleExitEditMode}
   />

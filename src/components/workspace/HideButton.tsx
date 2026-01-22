@@ -19,12 +19,13 @@ export function HideButton({
   onSizeChange,
   hoverRef,
 }: HideButtonProps) {
-  const dragRef = useRef({
-    active: false,
-    startX: 0,
-    startY: 0,
-    startSize: brushSize,
-  });
+const dragRef = useRef({
+  active: false,
+  hasMoved: false,
+  startX: 0,
+  startY: 0,
+  startSize: brushSize,
+});
 
   return (
     <div
@@ -45,19 +46,20 @@ export function HideButton({
         size="icon"
         variant="secondary"
         className="h-10 w-10 rounded-full shadow-lg select-none"
-        onPointerDown={(e) => {
-          e.stopPropagation();
+onPointerDown={(e) => {
+  e.stopPropagation();
 
-          dragRef.current = {
-            active: true,
-            startX: e.clientX,
-            startY: e.clientY,
-            startSize: brushSize,
-          };
+  dragRef.current = {
+    active: true,
+    hasMoved: false,
+    startX: e.clientX,
+    startY: e.clientY,
+    startSize: brushSize,
+  };
 
-          (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-        }}
-        onPointerMove={(e) => {
+  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+}}        onPointerMove={(e) => {
+          dragRef.current.hasMoved = true;
           if (!dragRef.current.active) return;
 
           const dx = e.clientX - dragRef.current.startX;
@@ -74,21 +76,22 @@ export function HideButton({
 
           onSizeChange(Math.round(nextSize));
         }}
-        onPointerUp={(e) => {
-          e.stopPropagation();
+onPointerUp={(e) => {
+  e.stopPropagation();
 
-          const wasDragging = dragRef.current.active;
-          dragRef.current.active = false;
+  const wasDragging = dragRef.current.hasMoved;
+  dragRef.current.active = false;
+  dragRef.current.hasMoved = false;
 
-          try {
-            (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-          } catch { }
+  try {
+    (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+  } catch { }
 
-          // Click without drag → toggle mode
-          if (!wasDragging) {
-            onToggle();
-          }
-        }}
+  // Click without drag → toggle mode
+  if (!wasDragging) {
+    onToggle();
+  }
+}}        onClick={(e) => e.stopPropagation()}
       >
         {mode === 'add' ? (
           <Eraser className="h-4 w-4" />

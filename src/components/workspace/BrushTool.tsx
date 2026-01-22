@@ -17,6 +17,7 @@ interface BrushToolProps {
   };
   canvasWidth: number;
   canvasHeight: number;
+  viewportScale: number;
   onPathUpdate: (newPathData: string) => void;
   onExit: () => void;
 }
@@ -28,6 +29,7 @@ export function BrushTool({
   imageTransform,
   canvasWidth,
   canvasHeight,
+  viewportScale,
   onPathUpdate,
   onExit
 }: BrushToolProps) {
@@ -35,14 +37,16 @@ export function BrushTool({
   const fabricCanvasRef = useRef<fabric.Canvas | null>(null);
   const currentPathRef = useRef<string>(regionPathData);
   
-  const [mode, setMode] = useState<'add' | 'erase'>('add');
+  const [mode, setMode] = useState<'add' | 'erase'>('erase');
   const [brushSize, setBrushSize] = useState(20);
   const [buttonPos, setButtonPos] = useState({ x: 0, y: 0 });
+  const [cursorPos, setCursorPos] = useState({ x: 0, y: 0 });
   
   const cursorRef = useRef({ x: 0, y: 0 });
   const buttonRef = useRef({ x: 0, y: 0 });
   const isHoveringButtonRef = useRef(false);
   const isDrawingRef = useRef(false);
+  const modeRef = useRef<'add' | 'erase'>(mode);
 
   // Initialize canvas
   useEffect(() => {
@@ -56,13 +60,16 @@ export function BrushTool({
 
     canvas.defaultCursor = 'none';
     canvas.hoverCursor = 'none';
+    canvas.moveCursor = 'none';
     fabricCanvasRef.current = canvas;
 
-    // Configure brush
+    // Configure brush with color coding
     const brush = new fabric.PencilBrush(canvas);
     brush.width = brushSize;
-    brush.color = mode === 'add' ? 'rgba(255, 80, 80, 0.5)' : 'rgba(255, 80, 80, 0.8)';
+    brush.color = mode === 'erase' ? 'rgba(255, 80, 80, 0.7)' : 'rgba(34, 197, 94, 0.7)';
     canvas.freeDrawingBrush = brush;
+    canvas.freeDrawingCursor = 'none';
+
 
     // Show existing region as reference
     if (regionPathData) {
@@ -101,7 +108,7 @@ export function BrushTool({
       const newPathData = await performBooleanOperation(
         currentPathRef.current,
         drawnPathData,
-        mode
+        modeRef.current
       );
       
       // Update reference
@@ -140,12 +147,13 @@ export function BrushTool({
 
   // Update brush when mode/size changes
   useEffect(() => {
+    modeRef.current = mode;
     const canvas = fabricCanvasRef.current;
     if (canvas?.freeDrawingBrush) {
       canvas.freeDrawingBrush.width = brushSize;
-      canvas.freeDrawingBrush.color = mode === 'add' 
-        ? 'rgba(255, 80, 80, 0.5)' 
-        : 'rgba(255, 80, 80, 0.8)';
+      canvas.freeDrawingBrush.color = mode === 'erase' 
+        ? 'rgba(255, 80, 80, 0.7)' 
+        : 'rgba(34, 197, 94, 0.7)';
     }
   }, [mode, brushSize]);
 
@@ -186,19 +194,7 @@ export function BrushTool({
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  // Track cursor position
-  useEffect(() => {
-    const onMove = (e: PointerEvent) => {
-      cursorRef.current = {
-        x: e.clientX + 40,
-        y: e.clientY - 40,
-      };
-    };
-
-    window.addEventListener('pointermove', onMove);
-    return () => window.removeEventListener('pointermove', onMove);
-  }, []);
-
+  // Track cursor position for custom cursor
   const toggleMode = () => {
     setMode(prev => prev === 'add' ? 'erase' : 'add');
   };
@@ -206,23 +202,65 @@ export function BrushTool({
   return (
     <>
       {/* Brush Canvas Overlay */}
-      <div
-        className="absolute z-20"
-        onPointerDown={e => e.stopPropagation()}
-        onPointerUp={e => e.stopPropagation()}
-        onClick={e => e.stopPropagation()}
-        style={{
-          left: imageTransform.x,
-          top: imageTransform.y,
-          width: imageTransform.width,
-          height: imageTransform.height,
-          overflow: 'hidden',
-        }}
-      >
+<div
+  className="absolute z-20"
+  onPointerMove={(e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    // 1️⃣ Reticle position (EXACTLY where Fabric draws)
+    setCursorPos({ x, y });
+
+    // 2️⃣ Button target position (offset ON PURPOSE)
+    cursorRef.current = {
+      x: x + 40,
+      y: y - 40,
+    };
+  }}
+  onPointerDown={e => e.stopPropagation()}
+  onPointerUp={e => e.stopPropagation()}
+  onClick={e => e.stopPropagation()}
+  style={{
+    left: imageTransform.x,
+    top: imageTransform.y,
+    width: imageTransform.width,
+    height: imageTransform.height,
+    overflow: 'hidden',
+  }}
+>
         <canvas
           ref={canvasRef}
           className="absolute inset-0 pointer-events-auto"
-          style={{ cursor: 'crosshair' }}
+          style={{ cursor: 'none' }}
+        />
+      </div>
+
+<div
+  className="absolute pointer-events-none z-30"
+  style={{
+    left: imageTransform.x + cursorPos.x,
+    top: imageTransform.y + cursorPos.y,
+    transform: 'translate(-50%, -50%)',
+    display: isHoveringButtonRef.current ? 'none' : 'block',
+  }}
+>
+        <div
+          className="rounded-full border-2 transition-colors"
+          style={{
+width: brushSize,
+height: brushSize,
+            borderColor: mode === 'erase' ? 'rgba(255, 80, 80, 0.9)' : 'rgba(34, 197, 94, 0.9)',
+            backgroundColor: mode === 'erase' ? 'rgba(255, 80, 80, 0.1)' : 'rgba(34, 197, 94, 0.1)',
+          }}
+        />
+        {/* Center dot */}
+        <div
+          className="absolute top-1/2 left-1/2 w-1 h-1 rounded-full -translate-x-1/2 -translate-y-1/2"
+          style={{
+            backgroundColor: mode === 'erase' ? 'rgb(255, 80, 80)' : 'rgb(34, 197, 94)',
+          }}
         />
       </div>
 
