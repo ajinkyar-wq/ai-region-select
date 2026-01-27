@@ -1,30 +1,30 @@
-// ImageTile.tsx - Updated with Brush Tool Integration
 import { useEffect, useRef, useState } from 'react';
 import { ScanAnimation } from './ScanAnimation';
 import { BrushTool } from './BrushTool';
 import { segmentImage } from '@/lib/segmentation';
-import { REGION_COLORS } from '@/types/workspace';
 import type { ImageTileData, Region } from '@/types/workspace';
 
 interface ImageViewProps {
   tile: ImageTileData;
   onUpdateTile: (updates: Partial<ImageTileData>) => void;
   selectionMode?: 'single' | 'multi';
-
-  hoveredRegionOverride?: 'people' | 'background' | null;
+  hoveredRegionOverride?: 'person' | 'background' | null;
   peopleEnabled?: boolean;
   backgroundEnabled?: boolean;
   activeMask?: Region | null;
-brushActive?: boolean;
-
+  brushActive?: boolean;
 }
 
-export function ImageTile({ tile, onUpdateTile, selectionMode,   hoveredRegionOverride,
+export function ImageTile({
+  tile,
+  onUpdateTile,
+  selectionMode,
+  hoveredRegionOverride,
   activeMask,
   brushActive,
   peopleEnabled = true,
   backgroundEnabled = true,
- }: ImageViewProps) {
+}: ImageViewProps) {
   const mainCanvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -38,59 +38,46 @@ export function ImageTile({ tile, onUpdateTile, selectionMode,   hoveredRegionOv
     height: number;
   } | null>(null);
 
-const [scale, setScale] = useState(1);
-const [offset, setOffset] = useState({ x: 0, y: 0 });
-
-const MIN_SCALE = 0.3;
-const MAX_SCALE = 4;
-
-useEffect(() => {
-  const el = containerRef.current;
-  if (!el) return;
-
-  const wheelListener = (e: WheelEvent) => {
-    if (e.ctrlKey) {
-      e.preventDefault();
-    }
-  };
-
-  el.addEventListener('wheel', wheelListener, { passive: false });
-
-  return () => {
-    el.removeEventListener('wheel', wheelListener);
-  };
-}, []);
-
-
-const handleWheel = (e: React.WheelEvent) => {
-  // Pinch gesture → zoom
-  if (e.ctrlKey) {
-    e.preventDefault();
-
-    const zoomDelta = -e.deltaY * 0.002;
-    setScale(prev =>
-      Math.min(MAX_SCALE, Math.max(MIN_SCALE, prev + zoomDelta))
-    );
-    return;
-  }
-
-  // Two-finger scroll → pan
-  setOffset(prev => ({
-    x: prev.x - e.deltaX,
-    y: prev.y - e.deltaY,
-  }));
-};  
-
-const [localHoveredRegion, setLocalHoveredRegion] =
-  useState<'people' | 'background' | null>(null);
-
-const hoveredRegion =
-  hoveredRegionOverride ?? localHoveredRegion;
-  const [localSelectionMode, setLocalSelectionMode] = useState<'single' | 'multi'>('single');
-
-  // NEW: Edit mode state
+  const [scale, setScale] = useState(1);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [localHoveredRegion, setLocalHoveredRegion] = useState<string | null>(null);
   const [editingRegion, setEditingRegion] = useState<Region | null>(null);
 
+  const MIN_SCALE = 0.3;
+  const MAX_SCALE = 4;
+
+  const hoveredRegionId = hoveredRegionOverride ?? localHoveredRegion;
+
+  // Prevent default wheel behavior
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const wheelListener = (e: WheelEvent) => {
+      if (e.ctrlKey) {
+        e.preventDefault();
+      }
+    };
+
+    el.addEventListener('wheel', wheelListener, { passive: false });
+    return () => el.removeEventListener('wheel', wheelListener);
+  }, []);
+
+  const handleWheel = (e: React.WheelEvent) => {
+    if (e.ctrlKey) {
+      e.preventDefault();
+      const zoomDelta = -e.deltaY * 0.002;
+      setScale(prev => Math.min(MAX_SCALE, Math.max(MIN_SCALE, prev + zoomDelta)));
+      return;
+    }
+
+    setOffset(prev => ({
+      x: prev.x - e.deltaX,
+      y: prev.y - e.deltaY,
+    }));
+  };
+
+  // Load image and run segmentation
   useEffect(() => {
     if (!mainCanvasRef.current || !overlayCanvasRef.current || !containerRef.current) return;
 
@@ -134,7 +121,7 @@ const hoveredRegion =
       setShowScan(true);
       const start = Date.now();
 
-      const regions = await segmentImage(img, mainCanvas, overlayCanvas);
+      const regions = await segmentImage(img, mainCanvas);
       onUpdateTile({ regions, isProcessing: false });
 
       const elapsed = Date.now() - start;
@@ -146,308 +133,248 @@ const hoveredRegion =
     };
   }, [tile.imageUrl]);
 
-useEffect(() => {
-  if (brushActive && activeMask) {
-    setEditingRegion(activeMask);
+  // Render masks to overlay canvas
+  useEffect(() => {
+    if (!overlayCanvasRef.current || !imageTransform || editingRegion) return;
+
+    const canvas = overlayCanvasRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Filter enabled regions
+    const visibleRegions = tile.regions.filter(r => {
+      if (r.type === 'person' && !peopleEnabled) return false;
+      if (r.type === 'background' && !backgroundEnabled) return false;
+      return r.visible;
+    });
+
+    visibleRegions.forEach(region => {
+      const isHovered = region.id === hoveredRegionId;
+      const isSelected = region.selected;
+      const isActive = isHovered || isSelected;
+
+      // Create ImageData from mask
+      const imageData = new ImageData(region.maskWidth, region.maskHeight);
+      const { maskData } = region;
+
+      // Parse color
+      const colorMatch = region.color.match(/#([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})/i);
+      const r = colorMatch ? parseInt(colorMatch[1], 16) : 255;
+      const g = colorMatch ? parseInt(colorMatch[2], 16) : 80;
+      const b = colorMatch ? parseInt(colorMatch[3], 16) : 80;
+
+      const fillAlpha = isActive ? 64 : 0;
+      const strokeAlpha = isActive ? 230 : 200;
+
+      for (let i = 0; i < maskData.length; i++) {
+  const a = maskData[i] / 255;
+  if (a > 0.01) {
+    imageData.data[i * 4]     = r;
+    imageData.data[i * 4 + 1] = g;
+    imageData.data[i * 4 + 2] = b;
+    imageData.data[i * 4 + 3] = Math.round(a * fillAlpha);
   }
-}, [brushActive, activeMask]);
-
-
-  const effectiveSelectionMode = selectionMode ?? localSelectionMode;
-
-  const handleRegionClick = (regionType: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-
-    // GATE interaction by enable flags
-    if (regionType === 'people' && !peopleEnabled) return;
-    if (regionType === 'background' && !backgroundEnabled) return;
-
-    if (effectiveSelectionMode === 'multi') {
-      const updatedRegions = tile.regions.map(r =>
-        r.type === regionType
-          ? { ...r, selected: !r.selected }
-          : r
-      );
-      onUpdateTile({ regions: updatedRegions });
-} else {
-  const isAlreadySelected = tile.regions.some(
-    r => r.type === regionType && r.selected
-  );
-
-  const updatedRegions = tile.regions.map(r => ({
-    ...r,
-    selected: isAlreadySelected ? false : r.type === regionType,
-  }));
-
-  onUpdateTile({ regions: updatedRegions });
 }
+
+
+      // Create temp canvas for mask
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = region.maskWidth;
+      tempCanvas.height = region.maskHeight;
+      const tempCtx = tempCanvas.getContext('2d')!;
+      tempCtx.putImageData(imageData, 0, 0);
+
+      // Draw scaled mask WITH IMAGE OFFSET
+      ctx.save();
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(tempCanvas, imageTransform.x, imageTransform.y, imageTransform.width, imageTransform.height);
+
+      ctx.restore();
+    });
+  }, [tile.regions, imageTransform, hoveredRegionId, editingRegion, peopleEnabled, backgroundEnabled]);
+
+  // Handle click detection
+  const handleCanvasClick = (e: React.MouseEvent) => {
+    if (editingRegion) {
+      setEditingRegion(null);
+      return;
+    }
+
+    const canvas = overlayCanvasRef.current;
+    if (!canvas || !imageTransform) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const canvasX = Math.floor((e.clientX - rect.left) * (canvas.width / rect.width));
+    const canvasY = Math.floor((e.clientY - rect.top) * (canvas.height / rect.height));
+
+    // Convert to image coordinates (subtract offset)
+    const x = canvasX - imageTransform.x;
+    const y = canvasY - imageTransform.y;
+
+    // Check if click is within image bounds
+    if (x < 0 || y < 0 || x >= imageTransform.width || y >= imageTransform.height) {
+      onUpdateTile({ regions: tile.regions.map(r => ({ ...r, selected: false })) });
+      return;
+    }
+
+    // Check which region was clicked
+    let clickedRegion: Region | null = null;
+
+    for (let i = tile.regions.length - 1; i >= 0; i--) {
+      const region = tile.regions[i];
+      if ((region.type === 'person' && !peopleEnabled) ||
+          (region.type === 'background' && !backgroundEnabled)) {
+        continue;
+      }
+
+      const scaleX = region.maskWidth / imageTransform.width;
+      const scaleY = region.maskHeight / imageTransform.height;
+      const maskX = Math.floor(x * scaleX);
+      const maskY = Math.floor(y * scaleY);
+      const maskIdx = maskY * region.maskWidth + maskX;
+
+      if (region.maskData[maskIdx] > 128) {
+        clickedRegion = region;
+        break;
+      }
+    }
+
+    if (clickedRegion) {
+      const updatedRegions = tile.regions.map(r => ({
+        ...r,
+        selected: r.id === clickedRegion.id ? !r.selected : false,
+      }));
+      onUpdateTile({ regions: updatedRegions });
+    } else {
+      onUpdateTile({ regions: tile.regions.map(r => ({ ...r, selected: false })) });
+    }
   };
 
-  // NEW: Handle double-click to enter edit mode
-  const handleRegionDoubleClick = (region: Region, e: React.MouseEvent) => {
-    e.stopPropagation();
-    
-    // GATE interaction by enable flags
-    if (region.type === 'people' && !peopleEnabled) return;
-    if (region.type === 'background' && !backgroundEnabled) return;
-    
-    setEditingRegion(region);
+  const handleCanvasDoubleClick = (e: React.MouseEvent) => {
+    const canvas = overlayCanvasRef.current;
+    if (!canvas || !imageTransform) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const canvasX = Math.floor((e.clientX - rect.left) * (canvas.width / rect.width));
+    const canvasY = Math.floor((e.clientY - rect.top) * (canvas.height / rect.height));
+
+    const x = canvasX - imageTransform.x;
+    const y = canvasY - imageTransform.y;
+
+    if (x < 0 || y < 0 || x >= imageTransform.width || y >= imageTransform.height) return;
+
+    for (let i = tile.regions.length - 1; i >= 0; i--) {
+      const region = tile.regions[i];
+      if ((region.type === 'person' && !peopleEnabled) ||
+          (region.type === 'background' && !backgroundEnabled)) {
+        continue;
+      }
+
+      const scaleX = region.maskWidth / imageTransform.width;
+      const scaleY = region.maskHeight / imageTransform.height;
+      const maskX = Math.floor(x * scaleX);
+      const maskY = Math.floor(y * scaleY);
+      const maskIdx = maskY * region.maskWidth + maskX;
+
+      if (region.maskData[maskIdx] > 128) {
+        setEditingRegion(region);
+        break;
+      }
+    }
   };
 
-  // NEW: Handle path updates from brush tool
-  const handlePathUpdate = (newPathData: string) => {
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (editingRegion) return;
+
+    const canvas = overlayCanvasRef.current;
+    if (!canvas || !imageTransform) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const canvasX = Math.floor((e.clientX - rect.left) * (canvas.width / rect.width));
+    const canvasY = Math.floor((e.clientY - rect.top) * (canvas.height / rect.height));
+
+    const x = canvasX - imageTransform.x;
+    const y = canvasY - imageTransform.y;
+
+    if (x < 0 || y < 0 || x >= imageTransform.width || y >= imageTransform.height) {
+      setLocalHoveredRegion(null);
+      return;
+    }
+
+    let foundRegion: string | null = null;
+
+    for (let i = tile.regions.length - 1; i >= 0; i--) {
+      const region = tile.regions[i];
+      if ((region.type === 'person' && !peopleEnabled) ||
+          (region.type === 'background' && !backgroundEnabled)) {
+        continue;
+      }
+
+      const scaleX = region.maskWidth / imageTransform.width;
+      const scaleY = region.maskHeight / imageTransform.height;
+      const maskX = Math.floor(x * scaleX);
+      const maskY = Math.floor(y * scaleY);
+      const maskIdx = maskY * region.maskWidth + maskX;
+
+      if (region.maskData[maskIdx] > 128) {
+        foundRegion = region.id;
+        break;
+      }
+    }
+
+    setLocalHoveredRegion(foundRegion);
+  };
+
+  const handleMaskUpdate = (newMaskData: Uint8Array) => {
     if (!editingRegion) return;
 
     const updatedRegions = tile.regions.map(r =>
       r.id === editingRegion.id
-        ? { ...r, pathData: newPathData }
+        ? { ...r, maskData: newMaskData }
         : r
     );
     onUpdateTile({ regions: updatedRegions });
   };
 
-  // NEW: Exit edit mode
-  const handleExitEditMode = () => {
-    setEditingRegion(null);
-    onUpdateTile({});
-  };
-const people = tile.regions.find(r => r.type === 'people');
-const background = tile.regions.find(r => r.type === 'background');
-
-const editPathData =
-  editingRegion?.type === 'background' && people && imageTransform
-    ? `
-        M 0 0
-        H ${imageTransform.width}
-        V ${imageTransform.height}
-        H 0
-        Z
-        ${people.pathData}
-      `
-    : editingRegion?.pathData ?? '';
-
-
-const getRegionStyle = (regionType: string) => {
-  const isHovered = hoveredRegion === regionType;
-  const isEditing = editingRegion?.type === regionType;
-
-  // Check if region is disabled
-  const isDisabled =
-    (regionType === 'people' && !peopleEnabled) ||
-    (regionType === 'background' && !backgroundEnabled);
-
-  const isSelected = tile.regions.some(
-  r => r.type === regionType && r.selected
-);
-
-const active = isHovered || isEditing || isSelected;
-
-
-  return {
-    cursor: isDisabled ? 'default' : 'pointer',
-    transition: 'fill 180ms ease, stroke-width 180ms ease, opacity 180ms ease',
-
-    // 🔴 RED ONLY on hover OR edit
-    fill: active
-      ? 'rgba(255, 80, 80, 0.25)'
-      : 'rgba(255, 80, 80, 0)',
-
-    // ⚪ WHITE outline ALWAYS
-    stroke: 'rgba(255, 255, 255, 0.9)',
-    strokeWidth: active ? 2.75 : 2,
-
-    vectorEffect: 'non-scaling-stroke',
-    opacity: isDisabled ? 0.25 : 1,
-    pointerEvents: isDisabled ? 'none' : 'auto',
-  } as React.CSSProperties;
-};
-
-return (
-  <div
-    ref={containerRef}
-    className="relative h-full w-full overflow-hidden bg-black"
-    onWheel={handleWheel}
-onClick={() => {
-  // Exit edit mode if active
-  if (editingRegion) {
-    setEditingRegion(null);
-    return;
-  }
-
-  // Otherwise just clear selection
-  onUpdateTile({
-    regions: tile.regions.map(r => ({ ...r, selected: false })),
-  });
-}}
-  >
-
-    <style>{`
-      @keyframes pulseOpacity {
-        0%, 100% { opacity: 0.3; }
-        50% { opacity: 0.7; }
-      }
-    `}</style>
-
-    {/* ================= TRANSFORM WRAPPER (ZOOM + PAN) ================= */}
+  return (
     <div
-      className="absolute inset-0 pointer-events-none"
-      style={{
-        transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
-        transformOrigin: 'center center',
-      }}
+      ref={containerRef}
+      className="relative h-full w-full overflow-hidden bg-black"
+      onWheel={handleWheel}
     >
-      {/* Image */}
-      <canvas ref={mainCanvasRef} className="absolute inset-0 z-0" />
+      <div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
+          transformOrigin: 'center center',
+        }}
+      >
+        <canvas ref={mainCanvasRef} className="absolute inset-0 z-0" />
 
-      {/* Hidden mask canvas */}
-      <canvas
-        ref={overlayCanvasRef}
-        className="absolute inset-0 pointer-events-none opacity-0"
-      />
+        <canvas
+          ref={overlayCanvasRef}
+          className="absolute inset-0 z-10 pointer-events-auto cursor-pointer"
+          onClick={handleCanvasClick}
+          onDoubleClick={handleCanvasDoubleClick}
+          onMouseMove={handleMouseMove}
+          onMouseLeave={() => setLocalHoveredRegion(null)}
+        />
 
-      {/* SVG vector overlay */}
-      {imageTransform && !editingRegion && (
-        <svg
-          className="absolute inset-0 z-10"
-          viewBox={`0 0 ${mainCanvasRef.current!.width} ${mainCanvasRef.current!.height}`}
-          pointerEvents="auto"
-        >
-          <defs>
-            <clipPath id={`image-clip-${tile.id}`}>
-              <rect
-                x={imageTransform.x}
-                y={imageTransform.y}
-                width={imageTransform.width}
-                height={imageTransform.height}
-              />
-            </clipPath>
-
-            <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-              <feGaussianBlur stdDeviation="3" result="coloredBlur" />
-              <feMerge>
-                <feMergeNode in="coloredBlur" />
-                <feMergeNode in="SourceGraphic" />
-              </feMerge>
-            </filter>
-          </defs>
-
-          <g clipPath={`url(#image-clip-${tile.id})`}>
-            <g transform={`translate(${imageTransform.x}, ${imageTransform.y})`}>
-              {(() => {
-                const people = tile.regions.find(
-                  r => r.type === 'people' && r.visible
-                );
-
-                return (
-                  <>
-                    {/* BACKGROUND */}
-                    {people && (
-                      <path
-                        d={`
-                          M 0 0
-                          H ${imageTransform.width}
-                          V ${imageTransform.height}
-                          H 0
-                          Z
-                          ${people.pathData}
-                        `}
-                        fillRule="evenodd"
-                        style={getRegionStyle('background')}
-                        filter={
-                          hoveredRegion === 'background'
-                            ? 'url(#glow)'
-                            : undefined
-                        }
-                        onMouseEnter={() => {
-                          if (backgroundEnabled)
-                            setLocalHoveredRegion('background');
-                        }}
-                        onMouseLeave={() => {
-                          if (backgroundEnabled)
-                            setLocalHoveredRegion(null);
-                        }}
-                        onClick={e => handleRegionClick('background', e)}
-                        onDoubleClick={e => {
-                          const bgRegion = tile.regions.find(
-                            r => r.type === 'background'
-                          );
-                          if (bgRegion)
-                            handleRegionDoubleClick(bgRegion, e);
-                        }}
-                      />
-                    )}
-
-                    {/* PEOPLE */}
-                    {people && (
-                      <path
-                        d={people.pathData}
-                        style={getRegionStyle('people')}
-                        filter={
-                          hoveredRegion === 'people'
-                            ? 'url(#glow)'
-                            : undefined
-                        }
-                        onMouseEnter={() => {
-                          if (peopleEnabled)
-                            setLocalHoveredRegion('people');
-                        }}
-                        onMouseLeave={() => {
-                          if (peopleEnabled)
-                            setLocalHoveredRegion(null);
-                        }}
-                        onClick={e => handleRegionClick('people', e)}
-                        onDoubleClick={e =>
-                          handleRegionDoubleClick(people, e)
-                        }
-                      />
-                    )}
-
-                    {/* Animated pulse on hover */}
-                    {hoveredRegion && (
-                      <g
-                        style={{
-                          animation:
-                            'pulseOpacity 1.5s ease-in-out infinite',
-                        }}
-                        opacity="0.5"
-                      >
-                        {hoveredRegion === 'people' && people && (
-                          <path
-                            d={people.pathData}
-                            fill="none"
-                            stroke="#00ff64"
-                            strokeWidth="1"
-                            strokeDasharray="5,5"
-                            pointerEvents="none"
-                          />
-                        )}
-                      </g>
-                    )}
-                  </>
-                );
-              })()}
-            </g>
-          </g>
-        </svg>
-      )}
-
-      {editingRegion && imageTransform && mainCanvasRef.current && (
-  <BrushTool
-    regionId={editingRegion.id}
-    regionPathData={editPathData}
-    regionType={editingRegion.type}
-    imageTransform={imageTransform}
-    canvasWidth={mainCanvasRef.current.width}
-    canvasHeight={mainCanvasRef.current.height}
-    viewportScale={scale}  
-    onPathUpdate={handlePathUpdate}
-    onExit={handleExitEditMode}
-  />
-)}
-
-    </div>
-
-
+        {editingRegion && imageTransform && mainCanvasRef.current && (
+          <BrushTool
+            region={editingRegion}
+            imageTransform={imageTransform}
+            canvasWidth={mainCanvasRef.current.width}
+            canvasHeight={mainCanvasRef.current.height}
+            onMaskUpdate={handleMaskUpdate}
+            onExit={() => setEditingRegion(null)}
+          />
+        )}
+      </div>
 
       <ScanAnimation isActive={showScan} />
     </div>

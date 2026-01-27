@@ -1,13 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import * as fabric from 'fabric';
-import * as ClipperLib from 'clipper-lib';
-import { HideButton } from './HideButton';
-import type { RegionType } from '@/types/workspace';
+import { Paintbrush, Eraser } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import type { Region } from '@/types/workspace';
 
 interface BrushToolProps {
-  regionId: string;
-  regionPathData: string;
-  regionType: RegionType;
+  region: Region;
   imageTransform: {
     scale: number;
     x: number;
@@ -17,460 +14,297 @@ interface BrushToolProps {
   };
   canvasWidth: number;
   canvasHeight: number;
-  viewportScale: number;
-  onPathUpdate: (newPathData: string) => void;
+  onMaskUpdate: (newMaskData: Uint8Array) => void;
   onExit: () => void;
 }
 
 export function BrushTool({
-  regionId,
-  regionPathData,
-  regionType,
+  region,
   imageTransform,
   canvasWidth,
   canvasHeight,
-  viewportScale,
-  onPathUpdate,
-  onExit
+  onMaskUpdate,
+  onExit,
 }: BrushToolProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const fabricCanvasRef = useRef<fabric.Canvas | null>(null);
-  const currentPathRef = useRef<string>(regionPathData);
-  
   const [mode, setMode] = useState<'add' | 'erase'>('erase');
   const [brushSize, setBrushSize] = useState(20);
-  const [buttonPos, setButtonPos] = useState({ x: 0, y: 0 });
+  const [isDrawing, setIsDrawing] = useState(false);
   const [cursorPos, setCursorPos] = useState({ x: 0, y: 0 });
-  
-  const cursorRef = useRef({ x: 0, y: 0 });
-  const buttonRef = useRef({ x: 0, y: 0 });
-  const isHoveringButtonRef = useRef(false);
-  const isDrawingRef = useRef(false);
-  const modeRef = useRef<'add' | 'erase'>(mode);
+  const [buttonPos, setButtonPos] = useState({ x: 0, y: 0 });
+  const [isHoveringButton, setIsHoveringButton] = useState(false);
+
+  const maskDataRef = useRef<Uint8Array>(new Uint8Array(region.maskData));
+  const buttonTargetRef = useRef({ x: 0, y: 0 });
+  const buttonCurrentRef = useRef({ x: 0, y: 0 });
 
   // Initialize canvas
   useEffect(() => {
-    if (!canvasRef.current) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
 
-    const canvas = new fabric.Canvas(canvasRef.current, {
-      isDrawingMode: true,
-      width: canvasWidth,
-      height: canvasHeight,
-    });
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
 
-    canvas.defaultCursor = 'none';
-    canvas.hoverCursor = 'none';
-    canvas.moveCursor = 'none';
-    fabricCanvasRef.current = canvas;
+    renderMask();
+  }, [canvasWidth, canvasHeight]);
 
-    // Configure brush with color coding
-    const brush = new fabric.PencilBrush(canvas);
-    brush.width = brushSize;
-    brush.color = mode === 'erase' ? 'rgba(255, 80, 80, 0.7)' : 'rgba(34, 197, 94, 0.7)';
-    canvas.freeDrawingBrush = brush;
-    canvas.freeDrawingCursor = 'none';
+  // Render current mask state
+  const renderMask = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
 
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
 
-    // Show existing region as reference
-    if (regionPathData) {
-      const referencePath = new fabric.Path(regionPathData, {
-        fill: 'rgba(255, 80, 80, 0.25)',
-        stroke: 'rgba(255, 80, 80, 0.9)',
-        strokeWidth: 2.5,
-        selectable: false,
-        evented: false,
-        name: 'reference-path',
-      });
-      canvas.add(referencePath);
-      canvas.sendObjectToBack(referencePath);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Create ImageData from mask
+    const imageData = new ImageData(region.maskWidth, region.maskHeight);
+    const maskData = maskDataRef.current;
+
+    const color = mode === 'erase' ? [255, 80, 80] : [34, 197, 94];
+
+    for (let i = 0; i < maskData.length; i++) {
+      const alpha = maskData[i];
+      if (alpha > 10) {
+        imageData.data[i * 4] = color[0];
+        imageData.data[i * 4 + 1] = color[1];
+        imageData.data[i * 4 + 2] = color[2];
+        imageData.data[i * 4 + 3] = 128;
+      }
     }
 
-    // Track drawing state
-    canvas.on('mouse:down', () => {
-      isDrawingRef.current = true;
-    });
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = region.maskWidth;
+    tempCanvas.height = region.maskHeight;
+    const tempCtx = tempCanvas.getContext('2d')!;
+    tempCtx.putImageData(imageData, 0, 0);
 
-    canvas.on('mouse:up', () => {
-      isDrawingRef.current = false;
-    });
+    ctx.drawImage(tempCanvas, 0, 0, canvas.width, canvas.height);
+  };
 
-    // Handle completed strokes
-    canvas.on('path:created', async (e: any) => {
-      const drawnPath = e.path;
-      
-      // Convert stroke to filled polygon
-      const filledPolygon = strokePathToFilledPolygon(drawnPath, brushSize);
-      
-      // Convert to SVG path
-      const drawnPathData = polygonToSvgPath(filledPolygon);
-      
-      // Perform boolean operation
-      const newPathData = await performBooleanOperation(
-        currentPathRef.current,
-        drawnPathData,
-        modeRef.current
-      );
-      
-      // Update reference
-      currentPathRef.current = newPathData;
-      onPathUpdate(newPathData);
-      
-      // Remove drawn stroke
-      canvas.remove(drawnPath);
-      
-      // Update reference path visual
-      const refPath = canvas.getObjects().find((obj: any) => obj.name === 'reference-path');
-      if (refPath) {
-        canvas.remove(refPath);
+  // Paint into mask
+  const paintAt = (x: number, y: number) => {
+    const scaleX = region.maskWidth / canvasWidth;
+    const scaleY = region.maskHeight / canvasHeight;
+
+    const maskX = Math.floor(x * scaleX);
+    const maskY = Math.floor(y * scaleY);
+    const radius = Math.floor(brushSize * Math.max(scaleX, scaleY) / 2);
+
+    const value = mode === 'add' ? 255 : 0;
+
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        if (dx * dx + dy * dy <= radius * radius) {
+          const px = maskX + dx;
+          const py = maskY + dy;
+
+          if (px >= 0 && px < region.maskWidth && py >= 0 && py < region.maskHeight) {
+            const idx = py * region.maskWidth + px;
+            maskDataRef.current[idx] = value;
+          }
+        }
       }
-      
-      if (newPathData && newPathData.length > 0) {
-        const updatedRefPath = new fabric.Path(newPathData, {
-          fill: 'rgba(255, 80, 80, 0.25)',
-          stroke: 'rgba(255, 80, 80, 0.9)',
-          strokeWidth: 2.5,
-          selectable: false,
-          evented: false,
-          name: 'reference-path',
-        });
-        canvas.add(updatedRefPath);
-        canvas.sendObjectToBack(updatedRefPath);
-      }
-      
-      canvas.renderAll();
-    });
-
-    return () => {
-      canvas.dispose();
-    };
-  }, [regionPathData, canvasWidth, canvasHeight]);
-
-  // Update brush when mode/size changes
-  useEffect(() => {
-    modeRef.current = mode;
-    const canvas = fabricCanvasRef.current;
-    if (canvas?.freeDrawingBrush) {
-      canvas.freeDrawingBrush.width = brushSize;
-      canvas.freeDrawingBrush.color = mode === 'erase' 
-        ? 'rgba(255, 80, 80, 0.7)' 
-        : 'rgba(34, 197, 94, 0.7)';
     }
-  }, [mode, brushSize]);
 
-  // Button follow cursor animation
+    renderMask();
+  };
+
+  const handlePointerDown = (e: React.PointerEvent) => {
+    if (isHoveringButton) return;
+    setIsDrawing(true);
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    paintAt(x, y);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    setCursorPos({ x, y });
+    buttonTargetRef.current = { x: x + 40, y: y - 40 };
+
+    if (isDrawing && !isHoveringButton) {
+      paintAt(x, y);
+    }
+  };
+
+  const handlePointerUp = () => {
+    if (isDrawing) {
+      setIsDrawing(false);
+      onMaskUpdate(new Uint8Array(maskDataRef.current));
+    }
+  };
+
+  // Button follow animation
   useEffect(() => {
     let raf: number;
 
-    const tick = () => {
-      if (isHoveringButtonRef.current) {
-        raf = requestAnimationFrame(tick);
+    const animate = () => {
+      if (isHoveringButton) {
+        raf = requestAnimationFrame(animate);
         return;
       }
 
-      const target = cursorRef.current;
-      const current = buttonRef.current;
+      const target = buttonTargetRef.current;
+      const current = buttonCurrentRef.current;
 
       const dx = target.x - current.x;
       const dy = target.y - current.y;
-      const cursorDistance = Math.hypot(dx, dy);
+      const distance = Math.hypot(dx, dy);
 
-      const baseSpeed = 0.05;
-      const slowRadius = 140;
-      const proximity = Math.min(cursorDistance / slowRadius, 1);
-      const speed = baseSpeed * proximity * proximity;
+      const speed = 0.05 * Math.min(distance / 140, 1) ** 2;
 
-      if (cursorDistance > 6) {
+      if (distance > 6) {
         current.x += dx * speed;
         current.y += dy * speed;
       }
 
-      buttonRef.current = current;
-      setButtonPos({ x: current.x, y: current.y });
+      buttonCurrentRef.current = current;
+      setButtonPos({ ...current });
 
-      raf = requestAnimationFrame(tick);
+      raf = requestAnimationFrame(animate);
     };
 
-    raf = requestAnimationFrame(tick);
+    raf = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(raf);
-  }, []);
+  }, [isHoveringButton]);
 
-  // Track cursor position for custom cursor
-  const toggleMode = () => {
-    setMode(prev => prev === 'add' ? 'erase' : 'add');
-  };
+  // Handle brush size drag
+  const dragRef = useRef({
+    active: false,
+    hasMoved: false,
+    startX: 0,
+    startY: 0,
+    startSize: brushSize,
+  });
 
   return (
     <>
-      {/* Brush Canvas Overlay */}
-<div
-  className="absolute z-20"
-  onPointerMove={(e) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-
-    // 1️⃣ Reticle position (EXACTLY where Fabric draws)
-    setCursorPos({ x, y });
-
-    // 2️⃣ Button target position (offset ON PURPOSE)
-    cursorRef.current = {
-      x: x + 40,
-      y: y - 40,
-    };
-  }}
-  onPointerDown={e => e.stopPropagation()}
-  onPointerUp={e => e.stopPropagation()}
-  onClick={e => e.stopPropagation()}
-  style={{
-    left: imageTransform.x,
-    top: imageTransform.y,
-    width: imageTransform.width,
-    height: imageTransform.height,
-    overflow: 'hidden',
-  }}
->
+      {/* Brush canvas */}
+      <div
+        className="absolute z-20 pointer-events-auto"
+        style={{
+          left: imageTransform.x,
+          top: imageTransform.y,
+          width: imageTransform.width,
+          height: imageTransform.height,
+          overflow: 'hidden',
+        }}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerLeave={handlePointerUp}
+      >
         <canvas
           ref={canvasRef}
-          className="absolute inset-0 pointer-events-auto"
+          className="absolute inset-0"
           style={{ cursor: 'none' }}
         />
       </div>
 
-<div
-  className="absolute pointer-events-none z-30"
-  style={{
-    left: imageTransform.x + cursorPos.x,
-    top: imageTransform.y + cursorPos.y,
-    transform: 'translate(-50%, -50%)',
-    display: isHoveringButtonRef.current ? 'none' : 'block',
-  }}
->
+      {/* Cursor */}
+      {!isHoveringButton && (
         <div
-          className="rounded-full border-2 transition-colors"
+          className="absolute pointer-events-none z-30"
           style={{
-width: brushSize,
-height: brushSize,
-            borderColor: mode === 'erase' ? 'rgba(255, 80, 80, 0.9)' : 'rgba(34, 197, 94, 0.9)',
-            backgroundColor: mode === 'erase' ? 'rgba(255, 80, 80, 0.1)' : 'rgba(34, 197, 94, 0.1)',
+            left: imageTransform.x + cursorPos.x,
+            top: imageTransform.y + cursorPos.y,
+            transform: 'translate(-50%, -50%)',
           }}
-        />
-        {/* Center dot */}
-        <div
-          className="absolute top-1/2 left-1/2 w-1 h-1 rounded-full -translate-x-1/2 -translate-y-1/2"
-          style={{
-            backgroundColor: mode === 'erase' ? 'rgb(255, 80, 80)' : 'rgb(34, 197, 94)',
-          }}
-        />
-      </div>
+        >
+          <div
+            className="rounded-full border-2 transition-colors"
+            style={{
+              width: brushSize,
+              height: brushSize,
+              borderColor: mode === 'erase' ? 'rgba(255, 80, 80, 0.9)' : 'rgba(34, 197, 94, 0.9)',
+              backgroundColor: mode === 'erase' ? 'rgba(255, 80, 80, 0.1)' : 'rgba(34, 197, 94, 0.1)',
+            }}
+          />
+          <div
+            className="absolute top-1/2 left-1/2 w-1 h-1 rounded-full -translate-x-1/2 -translate-y-1/2"
+            style={{
+              backgroundColor: mode === 'erase' ? 'rgb(255, 80, 80)' : 'rgb(34, 197, 94)',
+            }}
+          />
+        </div>
+      )}
 
-      {/* Hide Button - only show when not drawing */}
-      {!isDrawingRef.current && (
-        <HideButton
-          position={buttonPos}
-          mode={mode}
-          brushSize={brushSize}
-          onToggle={toggleMode}
-          onSizeChange={setBrushSize}
-          hoverRef={isHoveringButtonRef}
-        />
+      {/* Control button */}
+      {!isDrawing && (
+        <div
+          className="absolute z-30 pointer-events-auto"
+          style={{
+            left: buttonPos.x,
+            top: buttonPos.y,
+            transform: 'translate(-50%, -50%)',
+          }}
+          onPointerEnter={() => setIsHoveringButton(true)}
+          onPointerLeave={() => setIsHoveringButton(false)}
+        >
+          <Button
+            size="icon"
+            variant="secondary"
+            className="h-10 w-10 rounded-full shadow-lg select-none"
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              dragRef.current = {
+                active: true,
+                hasMoved: false,
+                startX: e.clientX,
+                startY: e.clientY,
+                startSize: brushSize,
+              };
+              (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+            }}
+            onPointerMove={(e) => {
+              dragRef.current.hasMoved = true;
+              if (!dragRef.current.active) return;
+
+              const dx = e.clientX - dragRef.current.startX;
+              const dy = dragRef.current.startY - e.clientY;
+              const distance = Math.sqrt(dx * dx + dy * dy);
+              const direction = dy >= 0 ? 1 : -1;
+
+              const nextSize = Math.max(
+                5,
+                Math.min(80, dragRef.current.startSize + distance * 0.15 * direction)
+              );
+
+              setBrushSize(Math.round(nextSize));
+            }}
+            onPointerUp={(e) => {
+              e.stopPropagation();
+
+              const wasDragging = dragRef.current.hasMoved;
+              dragRef.current.active = false;
+              dragRef.current.hasMoved = false;
+
+              try {
+                (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+              } catch {}
+
+              if (!wasDragging) {
+                setMode(prev => (prev === 'add' ? 'erase' : 'add'));
+              }
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {mode === 'add' ? (
+              <Eraser className="h-4 w-4" />
+            ) : (
+              <Paintbrush className="h-4 w-4" />
+            )}
+          </Button>
+        </div>
       )}
     </>
   );
-}
-
-// Convert stroke path to filled polygon using offset
-function strokePathToFilledPolygon(
-  pathObj: fabric.Path,
-  strokeWidth: number
-): ClipperLib.Path {
-  const points: ClipperLib.Path = [];
-
-  // Extract points from path
-  if (pathObj.path) {
-    for (const seg of pathObj.path) {
-      const x = seg[1];
-      const y = seg[2];
-      if (typeof x === 'number' && typeof y === 'number') {
-        points.push({ X: x, Y: y });
-      }
-    }
-  }
-
-  // Use Clipper offset to create filled area
-  const offset = new ClipperLib.ClipperOffset();
-  offset.AddPath(
-    points,
-    ClipperLib.JoinType.jtRound,
-    ClipperLib.EndType.etOpenRound
-  );
-
-  const solution = new ClipperLib.Paths();
-  offset.Execute(solution, strokeWidth / 2);
-
-  return solution[0] ?? points;
-}
-
-// Boolean operations using clipper
-async function performBooleanOperation(
-  existingPathData: string,
-  newPathData: string,
-  mode: 'add' | 'erase'
-): Promise<string> {
-  try {
-    const existingPolygon = svgPathToPolygon(existingPathData, 2);
-    const newPolygon = svgPathToPolygon(newPathData, 2);
-
-    // Scale for precision
-    const scale = 100;
-    const scaledExisting = existingPolygon.map(p => ({ 
-      X: Math.round(p.X * scale), 
-      Y: Math.round(p.Y * scale) 
-    }));
-    const scaledNew = newPolygon.map(p => ({ 
-      X: Math.round(p.X * scale), 
-      Y: Math.round(p.Y * scale) 
-    }));
-
-    const clipper = new ClipperLib.Clipper();
-    const solution = new ClipperLib.Paths();
-
-    clipper.AddPath(scaledExisting, ClipperLib.PolyType.ptSubject, true);
-    clipper.AddPath(scaledNew, ClipperLib.PolyType.ptClip, true);
-
-    const succeeded = clipper.Execute(
-      mode === 'add' ? ClipperLib.ClipType.ctUnion : ClipperLib.ClipType.ctDifference,
-      solution,
-      ClipperLib.PolyFillType.pftNonZero,
-      ClipperLib.PolyFillType.pftNonZero
-    );
-
-    if (!succeeded || solution.length === 0) {
-      console.warn('Boolean operation failed');
-      return existingPathData;
-    }
-
-    // Scale back
-    const scaledBack = solution[0].map(p => ({ 
-      X: p.X / scale, 
-      Y: p.Y / scale 
-    }));
-
-    return polygonToSvgPath(scaledBack, true);
-  } catch (error) {
-    console.error('Boolean operation error:', error);
-    return existingPathData;
-  }
-}
-
-// Convert SVG path to polygon
-function svgPathToPolygon(pathData: string, samplingInterval: number = 5): ClipperLib.Path {
-  const points: ClipperLib.Path = [];
-  const commands = pathData.match(/[MLHVCSQTAZ][^MLHVCSQTAZ]*/gi) || [];
-
-  let currentX = 0;
-  let currentY = 0;
-  let startX = 0;
-  let startY = 0;
-
-  commands.forEach(cmd => {
-    const type = cmd[0].toUpperCase();
-    const values = cmd.slice(1).trim().split(/[\s,]+/).map(Number).filter(n => !isNaN(n));
-
-    switch (type) {
-      case 'M':
-        currentX = values[0];
-        currentY = values[1];
-        startX = currentX;
-        startY = currentY;
-        points.push({ X: currentX, Y: currentY });
-        break;
-      case 'L':
-        currentX = values[0];
-        currentY = values[1];
-        points.push({ X: currentX, Y: currentY });
-        break;
-      case 'H':
-        currentX = values[0];
-        points.push({ X: currentX, Y: currentY });
-        break;
-      case 'V':
-        currentY = values[0];
-        points.push({ X: currentX, Y: currentY });
-        break;
-      case 'C':
-        // Cubic bezier - sample points
-        const x1 = values[0], y1 = values[1];
-        const x2 = values[2], y2 = values[3];
-        const x3 = values[4], y3 = values[5];
-
-        for (let t = 0; t <= 1; t += 0.1) {
-          const xt = Math.pow(1 - t, 3) * currentX +
-            3 * Math.pow(1 - t, 2) * t * x1 +
-            3 * (1 - t) * Math.pow(t, 2) * x2 +
-            Math.pow(t, 3) * x3;
-          const yt = Math.pow(1 - t, 3) * currentY +
-            3 * Math.pow(1 - t, 2) * t * y1 +
-            3 * (1 - t) * Math.pow(t, 2) * y2 +
-            Math.pow(t, 3) * y3;
-          points.push({ X: xt, Y: yt });
-        }
-
-        currentX = x3;
-        currentY = y3;
-        break;
-      case 'Q':
-        // Quadratic bezier
-        const qx1 = values[0], qy1 = values[1];
-        const qx2 = values[2], qy2 = values[3];
-
-        for (let t = 0; t <= 1; t += 0.1) {
-          const xt = Math.pow(1 - t, 2) * currentX +
-            2 * (1 - t) * t * qx1 +
-            Math.pow(t, 2) * qx2;
-          const yt = Math.pow(1 - t, 2) * currentY +
-            2 * (1 - t) * t * qy1 +
-            Math.pow(t, 2) * qy2;
-          points.push({ X: xt, Y: yt });
-        }
-
-        currentX = qx2;
-        currentY = qy2;
-        break;
-      case 'Z':
-        if (currentX !== startX || currentY !== startY) {
-          points.push({ X: startX, Y: startY });
-        }
-        break;
-    }
-  });
-
-  return points;
-}
-
-// Convert polygon to SVG path
-function polygonToSvgPath(polygon: ClipperLib.Path, smooth: boolean = false): string {
-  if (polygon.length === 0) return '';
-
-  let path = `M ${polygon[0].X.toFixed(2)} ${polygon[0].Y.toFixed(2)}`;
-
-  if (smooth && polygon.length > 3) {
-    // Use quadratic curves for smoothness
-    for (let i = 1; i < polygon.length - 1; i += 2) {
-      const p1 = polygon[i];
-      const p2 = polygon[Math.min(i + 1, polygon.length - 1)];
-      path += ` Q ${p1.X.toFixed(2)} ${p1.Y.toFixed(2)} ${p2.X.toFixed(2)} ${p2.Y.toFixed(2)}`;
-    }
-    if (polygon.length % 2 === 0) {
-      const last = polygon[polygon.length - 1];
-      path += ` L ${last.X.toFixed(2)} ${last.Y.toFixed(2)}`;
-    }
-  } else {
-    for (let i = 1; i < polygon.length; i++) {
-      path += ` L ${polygon[i].X.toFixed(2)} ${polygon[i].Y.toFixed(2)}`;
-    }
-  }
-
-  path += ' Z';
-  return path;
 }
