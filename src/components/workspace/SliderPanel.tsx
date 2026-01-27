@@ -352,15 +352,13 @@ export function SliderPanel({
           )}
         </div>
 
-                {showMaskImage && (
-          <div className="mt-4 -mx-4">
-            <img
-              src="/Slider%20Panel.png"
-              alt="Mask adjustment preview"
-              className="w-full rounded-md border border-[#2A2A2A]"
-            />
-          </div>
-        )}
+        <div className="mt-4 -mx-4">
+          <img
+            src="/slider-panel.png"
+            alt="Mask adjustment preview"
+            className="w-full rounded-md border border-[#2A2A2A]"
+          />
+        </div>
 
 
         {/* Line 238 - Divider */}
