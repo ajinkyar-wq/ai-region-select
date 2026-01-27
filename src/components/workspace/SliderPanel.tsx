@@ -355,7 +355,7 @@ export function SliderPanel({
                 {showMaskImage && (
           <div className="mt-4 -mx-4">
             <img
-              src="/Slider Panel.png"
+              src="/Slider%20Panel.png"
               alt="Mask adjustment preview"
               className="w-full rounded-md border border-[#2A2A2A]"
             />
