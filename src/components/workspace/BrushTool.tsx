@@ -43,8 +43,8 @@ export function BrushTool({
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    canvas.width = canvasWidth;
-    canvas.height = canvasHeight;
+    canvas.width = imageTransform.width;
+    canvas.height = imageTransform.height;
 
     renderMask();
   }, [canvasWidth, canvasHeight]);
@@ -86,8 +86,8 @@ export function BrushTool({
 
   // Paint into mask
   const paintAt = (x: number, y: number) => {
-    const scaleX = region.maskWidth / canvasWidth;
-    const scaleY = region.maskHeight / canvasHeight;
+    const scaleX = region.maskWidth / imageTransform.width;
+    const scaleY = region.maskHeight / imageTransform.height;
 
     const maskX = Math.floor(x * scaleX);
     const maskY = Math.floor(y * scaleY);
@@ -289,7 +289,7 @@ export function BrushTool({
 
               try {
                 (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-              } catch {}
+              } catch { }
 
               if (!wasDragging) {
                 setMode(prev => (prev === 'add' ? 'erase' : 'add'));

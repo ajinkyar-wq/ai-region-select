@@ -66,14 +66,28 @@ export function Workspace() {
   ) => {
     if (!type || !image) return;
 
-    if (edit) {
-      const region = image.regions.find(r => r.type === type);
-      if (!region) return;
+if (edit) {
+  const region = image.regions.find(r => r.type === type);
+  if (!region) return;
 
-      setActiveMask(region);
-      setBrushActive(true);
-      return;
-    }
+  // ✅ CLEAR ALL SELECTIONS
+  setImage(prev =>
+    prev
+      ? {
+          ...prev,
+          regions: prev.regions.map(r => ({
+            ...r,
+            selected: false,
+          })),
+        }
+      : prev
+  );
+
+  // ✅ ENTER EDIT MODE
+  setActiveMask(region);
+  setBrushActive(true);
+  return;
+}
 
     const isAlreadySelected = image.regions.some(
       r => r.type === type && r.selected

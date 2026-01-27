@@ -1,4 +1,4 @@
-export type RegionType = 'person' | 'background' | 'manual';
+export type RegionType = 'person' | 'background' | 'manual' | 'people-group';
 
 export interface Region {
   id: string;
@@ -6,6 +6,7 @@ export interface Region {
   label: string;
   // Bitmap mask data
   maskData: Uint8Array;
+  innerMaskData?: Uint8Array; // Eroded mask for inner selection zone
   maskWidth: number;
   maskHeight: number;
   // Display properties
@@ -28,4 +29,5 @@ export const REGION_COLORS: Record<string, string> = {
   person: '#FF5050',
   background: '#5050FF',
   manual: '#50FF50',
+  'people-group': '#FF5050',
 };

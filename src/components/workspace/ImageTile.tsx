@@ -135,7 +135,22 @@ export function ImageTile({
 
   // Render masks to overlay canvas
   useEffect(() => {
-    if (!overlayCanvasRef.current || !imageTransform || editingRegion) return;
+    if (!overlayCanvasRef.current || !imageTransform) return;
+
+    // 🚫 DO NOT render ANY masks while editing
+    if (editingRegion) {
+      const ctx = overlayCanvasRef.current.getContext('2d');
+      if (ctx) {
+        ctx.clearRect(
+          0,
+          0,
+          overlayCanvasRef.current.width,
+          overlayCanvasRef.current.height
+        );
+      }
+      return;
+    }
+
 
     const canvas = overlayCanvasRef.current;
     const ctx = canvas.getContext('2d');
@@ -143,7 +158,6 @@ export function ImageTile({
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Filter enabled regions
     const visibleRegions = tile.regions.filter(r => {
       if (r.type === 'person' && !peopleEnabled) return false;
       if (r.type === 'background' && !backgroundEnabled) return false;
@@ -153,52 +167,190 @@ export function ImageTile({
     visibleRegions.forEach(region => {
       const isHovered = region.id === hoveredRegionId;
       const isSelected = region.selected;
-      const isActive = isHovered || isSelected;
 
-      // Create ImageData from mask
-      const imageData = new ImageData(region.maskWidth, region.maskHeight);
-      const { maskData } = region;
+      const mask = region.maskData;
+      const inner = region.innerMaskData;
 
-      // Parse color
+      const w = region.maskWidth;
+      const h = region.maskHeight;
+
+      // Base fill (UNCHANGED SHAPE)
+      const imageData = new ImageData(w, h);
+
       const colorMatch = region.color.match(/#([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})/i);
       const r = colorMatch ? parseInt(colorMatch[1], 16) : 255;
       const g = colorMatch ? parseInt(colorMatch[2], 16) : 80;
       const b = colorMatch ? parseInt(colorMatch[3], 16) : 80;
 
-      const fillAlpha = isActive ? 64 : 0;
-      const strokeAlpha = isActive ? 230 : 200;
+      const baseAlpha =
+        isSelected ? 110 :
+          isHovered ? 75 :
+            0;
 
-      for (let i = 0; i < maskData.length; i++) {
-  const a = maskData[i] / 255;
-  if (a > 0.01) {
-    imageData.data[i * 4]     = r;
-    imageData.data[i * 4 + 1] = g;
-    imageData.data[i * 4 + 2] = b;
-    imageData.data[i * 4 + 3] = Math.round(a * fillAlpha);
-  }
-}
+      // ---- PASS 1: NORMAL MASK RENDER (NO DISTORTION)
+      for (let i = 0; i < mask.length; i++) {
+        if (mask[i] <= 0 || baseAlpha === 0) continue;
 
+        const idx = i * 4;
+        imageData.data[idx] = r;
+        imageData.data[idx + 1] = g;
+        imageData.data[idx + 2] = b;
+        imageData.data[idx + 3] = baseAlpha;
+      }
 
-      // Create temp canvas for mask
+      // ---- PASS 2: INNER↔OUTER SEPARATION LINE (ONLY)
+      if ((isHovered || isSelected) && inner) {
+        const lineAlpha = isSelected ? 220 : 170;
+
+        for (let y = 1; y < h - 1; y++) {
+          for (let x = 1; x < w - 1; x++) {
+            const i = y * w + x;
+
+            // Must be OUTER pixel
+            if (mask[i] <= 0 || inner[i] > 0) continue;
+
+            // Check 4-neighbors for INNER
+            if (
+              inner[i - 1] > 0 ||
+              inner[i + 1] > 0 ||
+              inner[i - w] > 0 ||
+              inner[i + w] > 0
+            ) {
+              const idx = i * 4;
+              imageData.data[idx] = r;
+              imageData.data[idx + 1] = g;
+              imageData.data[idx + 2] = b;
+              imageData.data[idx + 3] = lineAlpha;
+            }
+          }
+        }
+      }
+
+      // ---- DRAW
       const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = region.maskWidth;
-      tempCanvas.height = region.maskHeight;
-      const tempCtx = tempCanvas.getContext('2d')!;
-      tempCtx.putImageData(imageData, 0, 0);
-
-      // Draw scaled mask WITH IMAGE OFFSET
+      tempCanvas.width = w;
+      tempCanvas.height = h;
+      tempCanvas.getContext('2d')!.putImageData(imageData, 0, 0);
+      // ---- PASS A: BASE TINT
       ctx.save();
       ctx.globalCompositeOperation = 'source-over';
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(tempCanvas, imageTransform.x, imageTransform.y, imageTransform.width, imageTransform.height);
 
+      ctx.drawImage(
+        tempCanvas,
+        imageTransform.x,
+        imageTransform.y,
+        imageTransform.width,
+        imageTransform.height
+      );
       ctx.restore();
+
+      // ---- PASS B: GLASS LIGHTING
+      if (isHovered || isSelected) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'screen';
+        ctx.globalAlpha = 0.45;      // SAME AS GROUP
+        ctx.shadowColor = region.color;
+        ctx.shadowBlur = 16;         // SAME AS GROUP
+
+        ctx.drawImage(
+          tempCanvas,
+          imageTransform.x,
+          imageTransform.y,
+          imageTransform.width,
+          imageTransform.height
+        );
+        ctx.restore();
+      }
     });
-  }, [tile.regions, imageTransform, hoveredRegionId, editingRegion, peopleEnabled, backgroundEnabled]);
+    // ---- GROUP INNER CONTOURS (from individual people)
+    const isGroupActive = tile.regions.some(
+      r => r.type === 'people-group' &&
+        (r.id === hoveredRegionId || r.selected)
+    );
+
+    if (isGroupActive) {
+      const lineAlpha = 170;
+
+      tile.regions
+        .filter(r => r.type === 'person' && r.innerMaskData)
+        .forEach(person => {
+          const w = person.maskWidth;
+          const h = person.maskHeight;
+          const mask = person.maskData;
+          const inner = person.innerMaskData!;
+
+          const imageData = new ImageData(w, h);
+
+          const colorMatch = person.color.match(/#([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})/i);
+          const r = colorMatch ? parseInt(colorMatch[1], 16) : 255;
+          const g = colorMatch ? parseInt(colorMatch[2], 16) : 80;
+          const b = colorMatch ? parseInt(colorMatch[3], 16) : 80;
+
+          for (let y = 1; y < h - 1; y++) {
+            for (let x = 1; x < w - 1; x++) {
+              const i = y * w + x;
+
+              if (mask[i] <= 0 || inner[i] > 0) continue;
+
+              if (
+                inner[i - 1] > 0 ||
+                inner[i + 1] > 0 ||
+                inner[i - w] > 0 ||
+                inner[i + w] > 0
+              ) {
+                const idx = i * 4;
+                imageData.data[idx] = r;
+                imageData.data[idx + 1] = g;
+                imageData.data[idx + 2] = b;
+                imageData.data[idx + 3] = lineAlpha;
+              }
+            }
+          }
+
+          const temp = document.createElement('canvas');
+          temp.width = w;
+          temp.height = h;
+          temp.getContext('2d')!.putImageData(imageData, 0, 0);
+
+          ctx.drawImage(
+            temp,
+            imageTransform!.x,
+            imageTransform!.y,
+            imageTransform!.width,
+            imageTransform!.height
+          );
+          ctx.save();
+          ctx.globalCompositeOperation = 'screen';
+          ctx.globalAlpha = 0.45;
+          ctx.shadowColor = person.color;
+          ctx.shadowBlur = 16;
+
+          ctx.drawImage(
+            temp,
+            imageTransform!.x,
+            imageTransform!.y,
+            imageTransform!.width,
+            imageTransform!.height
+          );
+          ctx.restore();
+
+        });
+    }
+
+  }, [
+    tile.regions,
+    imageTransform,
+    hoveredRegionId,
+    editingRegion,
+    peopleEnabled,
+    backgroundEnabled
+  ]);
 
   // Handle click detection
   const handleCanvasClick = (e: React.MouseEvent) => {
+    const isMultiToggle = e.ctrlKey || e.metaKey;
     if (editingRegion) {
       setEditingRegion(null);
       return;
@@ -227,32 +379,77 @@ export function ImageTile({
     for (let i = tile.regions.length - 1; i >= 0; i--) {
       const region = tile.regions[i];
       if ((region.type === 'person' && !peopleEnabled) ||
-          (region.type === 'background' && !backgroundEnabled)) {
+        (region.type === 'background' && !backgroundEnabled)) {
         continue;
       }
 
-      const scaleX = region.maskWidth / imageTransform.width;
-      const scaleY = region.maskHeight / imageTransform.height;
-      const maskX = Math.floor(x * scaleX);
-      const maskY = Math.floor(y * scaleY);
-      const maskIdx = maskY * region.maskWidth + maskX;
+      if (region.type === 'person') {
+        const hit = hitTestPersonRegion(x, y, region, imageTransform);
+        if (!hit) continue;
 
-      if (region.maskData[maskIdx] > 128) {
-        clickedRegion = region;
+        if (hit === 'inner') {
+          clickedRegion = region;
+        } else {
+          clickedRegion =
+            tile.regions.find(r => r.type === 'people-group') ?? null;
+        }
         break;
       }
     }
 
     if (clickedRegion) {
-      const updatedRegions = tile.regions.map(r => ({
-        ...r,
-        selected: r.id === clickedRegion.id ? !r.selected : false,
-      }));
+      const updatedRegions = tile.regions.map(r => {
+        // ⌘ / Ctrl + click → toggle ONLY this region
+        if (isMultiToggle) {
+          if (r.id === clickedRegion.id) {
+            return { ...r, selected: !r.selected };
+          }
+          return r; // ← DO NOT TOUCH OTHERS
+        }
+
+        // Normal click → single select
+        return {
+          ...r,
+          selected: r.id === clickedRegion.id,
+        };
+      });
+
       onUpdateTile({ regions: updatedRegions });
     } else {
-      onUpdateTile({ regions: tile.regions.map(r => ({ ...r, selected: false })) });
+      // Clicked empty space → clear selection (ONLY if not multi-toggle)
+      if (!isMultiToggle) {
+        onUpdateTile({
+          regions: tile.regions.map(r => ({ ...r, selected: false })),
+        });
+      }
     }
   };
+
+  function hitTestPersonRegion(
+    x: number,
+    y: number,
+    region: Region,
+    imageTransform: {
+      width: number;
+      height: number;
+    }
+  ): 'inner' | 'outer' | null {
+    const scaleX = region.maskWidth / imageTransform.width;
+    const scaleY = region.maskHeight / imageTransform.height;
+
+    const mx = Math.floor(x * scaleX);
+    const my = Math.floor(y * scaleY);
+    const idx = my * region.maskWidth + mx;
+
+    if (region.maskData[idx] <= 128) return null;
+
+    if (region.innerMaskData && region.innerMaskData[idx] > 128) {
+      return 'inner';
+    }
+
+    return 'outer';
+  }
+
 
   const handleCanvasDoubleClick = (e: React.MouseEvent) => {
     const canvas = overlayCanvasRef.current;
@@ -270,20 +467,33 @@ export function ImageTile({
     for (let i = tile.regions.length - 1; i >= 0; i--) {
       const region = tile.regions[i];
       if ((region.type === 'person' && !peopleEnabled) ||
-          (region.type === 'background' && !backgroundEnabled)) {
+        (region.type === 'background' && !backgroundEnabled)) {
         continue;
       }
+      if (region.type === 'person') {
+        const hit = hitTestPersonRegion(x, y, region, imageTransform);
+        if (!hit) continue;
 
-      const scaleX = region.maskWidth / imageTransform.width;
-      const scaleY = region.maskHeight / imageTransform.height;
-      const maskX = Math.floor(x * scaleX);
-      const maskY = Math.floor(y * scaleY);
-      const maskIdx = maskY * region.maskWidth + maskX;
-
-      if (region.maskData[maskIdx] > 128) {
-        setEditingRegion(region);
-        break;
+        if (hit === 'inner') {
+          setEditingRegion(region);
+        } else {
+          const group = tile.regions.find(r => r.type === 'people-group');
+          if (group) setEditingRegion(group);
+        }
+        return;
       }
+      const bg = tile.regions.find(r => r.type === 'background');
+      if (bg && backgroundEnabled) {
+        const scaleX = bg.maskWidth / imageTransform.width;
+        const scaleY = bg.maskHeight / imageTransform.height;
+        const idx = Math.floor(y * scaleY) * bg.maskWidth + Math.floor(x * scaleX);
+
+        if (bg.maskData[idx] > 128) {
+          setEditingRegion(bg);
+          return;
+        }
+      }
+
     }
   };
 
@@ -305,28 +515,36 @@ export function ImageTile({
       return;
     }
 
-    let foundRegion: string | null = null;
-
+    // PERSONS FIRST
     for (let i = tile.regions.length - 1; i >= 0; i--) {
       const region = tile.regions[i];
-      if ((region.type === 'person' && !peopleEnabled) ||
-          (region.type === 'background' && !backgroundEnabled)) {
-        continue;
+      if (region.type !== 'person' || !peopleEnabled) continue;
+
+      const hit = hitTestPersonRegion(x, y, region, imageTransform);
+      if (!hit) continue;
+
+      if (hit === 'inner') {
+        setLocalHoveredRegion(region.id);
+      } else {
+        const group = tile.regions.find(r => r.type === 'people-group');
+        setLocalHoveredRegion(group ? group.id : null);
       }
+      return;
+    }
 
-      const scaleX = region.maskWidth / imageTransform.width;
-      const scaleY = region.maskHeight / imageTransform.height;
-      const maskX = Math.floor(x * scaleX);
-      const maskY = Math.floor(y * scaleY);
-      const maskIdx = maskY * region.maskWidth + maskX;
-
-      if (region.maskData[maskIdx] > 128) {
-        foundRegion = region.id;
-        break;
+    // BACKGROUND
+    const bg = tile.regions.find(r => r.type === 'background');
+    if (bg && backgroundEnabled) {
+      const scaleX = bg.maskWidth / imageTransform.width;
+      const scaleY = bg.maskHeight / imageTransform.height;
+      const idx = Math.floor(y * scaleY) * bg.maskWidth + Math.floor(x * scaleX);
+      if (bg.maskData[idx] > 128) {
+        setLocalHoveredRegion(bg.id);
+        return;
       }
     }
 
-    setLocalHoveredRegion(foundRegion);
+    setLocalHoveredRegion(null);
   };
 
   const handleMaskUpdate = (newMaskData: Uint8Array) => {
@@ -371,7 +589,20 @@ export function ImageTile({
             canvasWidth={mainCanvasRef.current.width}
             canvasHeight={mainCanvasRef.current.height}
             onMaskUpdate={handleMaskUpdate}
-            onExit={() => setEditingRegion(null)}
+            onExit={() => {
+              // 1. Exit edit mode
+              setEditingRegion(null);
+
+              // 2. Re-select the edited region ONLY
+              onUpdateTile({
+                regions: tile.regions.map(r => ({
+                  ...r,
+                  selected: r.id === editingRegion.id,
+                })),
+              });
+            }}
+
+
           />
         )}
       </div>

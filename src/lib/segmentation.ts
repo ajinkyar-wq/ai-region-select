@@ -1,11 +1,10 @@
 /**
- * YOLOv8 Instance Segmentation - Matching main.js implementation
+ * YOLOv8 Instance Segmentation
  */
 import * as ort from 'onnxruntime-web';
 import type { Region } from '@/types/workspace';
 import { REGION_COLORS } from '@/types/workspace';
 
-// YOLOv8 Labels
 const YOLO_LABELS = [
   "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
   "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat",
@@ -30,7 +29,6 @@ let nmsSession: ort.InferenceSession | null = null;
 let maskSession: ort.InferenceSession | null = null;
 let isOpenCVReady = false;
 
-// Wait for OpenCV to be ready
 function waitForOpenCV(): Promise<void> {
   return new Promise((resolve) => {
     if (typeof window !== 'undefined' && (window as any).cv && (window as any).cv.Mat) {
@@ -55,7 +53,6 @@ async function initializeYOLO() {
   }
 
   try {
-    // Wait for OpenCV
     await waitForOpenCV();
 
     const [yolo, nms, mask] = await Promise.all([
@@ -64,7 +61,6 @@ async function initializeYOLO() {
       ort.InferenceSession.create('/model/mask-yolov8-seg.onnx'),
     ]);
 
-    // Warmup
     const tensor = new ort.Tensor('float32', new Float32Array(640 * 640 * 3), MODEL_INPUT_SHAPE);
     await yolo.run({ images: tensor });
 
@@ -72,7 +68,7 @@ async function initializeYOLO() {
     nmsSession = nms;
     maskSession = mask;
 
-    console.log('YOLOv8 models loaded successfully');
+    console.log('YOLOv8 models loaded');
     return { yoloSession, nmsSession, maskSession };
   } catch (error) {
     console.error('Failed to load YOLOv8 models:', error);
@@ -80,7 +76,6 @@ async function initializeYOLO() {
   }
 }
 
-// Preprocessing using OpenCV (matching main.js)
 function preprocessing(
   imageElement: HTMLImageElement,
   modelWidth: number,
@@ -144,7 +139,7 @@ function hexToRgba(hex: string, alpha: number): number[] {
     : [0, 0, 0, alpha];
 }
 
-  function enforcePixelOwnership(regions: Region[]) {
+function enforcePixelOwnership(regions: Region[]) {
   if (regions.length <= 1) return regions;
 
   const width = regions[0].maskWidth;
@@ -155,7 +150,6 @@ function hexToRgba(hex: string, alpha: number): number[] {
     let bestRegion = -1;
     let bestValue = 0;
 
-    // find which person owns this pixel
     for (let r = 0; r < regions.length; r++) {
       const v = regions[r].maskData[i];
       if (v > bestValue) {
@@ -164,7 +158,6 @@ function hexToRgba(hex: string, alpha: number): number[] {
       }
     }
 
-    // remove pixel from all other people
     for (let r = 0; r < regions.length; r++) {
       if (r !== bestRegion) {
         regions[r].maskData[i] = 0;
@@ -172,7 +165,49 @@ function hexToRgba(hex: string, alpha: number): number[] {
     }
   }
 
-  return regions;
+}
+
+function unionPersonMasks(personRegions: Region[]): Uint8Array {
+  const size = personRegions[0].maskWidth * personRegions[0].maskHeight;
+  const out = new Uint8Array(size);
+
+  for (const region of personRegions) {
+    for (let i = 0; i < size; i++) {
+      if (region.maskData[i] > 0) {
+        out[i] = 255;
+      }
+    }
+  }
+
+  return out;
+}
+
+function erodeMask(
+  maskData: Uint8Array,
+  width: number,
+  height: number,
+  radius: number
+): Uint8Array {
+  const cv = (window as any).cv;
+
+  const src = cv.matFromArray(height, width, cv.CV_8UC1, maskData);
+  const dst = new cv.Mat();
+
+  const kernelSize = radius * 2 + 1;
+  const kernel = cv.getStructuringElement(
+    cv.MORPH_ELLIPSE,
+    new cv.Size(kernelSize, kernelSize)
+  );
+
+  cv.erode(src, dst, kernel);
+
+  const out = new Uint8Array(dst.data);
+
+  src.delete();
+  dst.delete();
+  kernel.delete();
+
+  return out;
 }
 
 
@@ -200,7 +235,6 @@ export async function segmentImage(
 
     const regions: Region[] = [];
 
-    // Calculate actual image size on canvas
     const scale = Math.min(canvas.width / imageElement.width, canvas.height / imageElement.height);
     const scaledWidth = Math.floor(imageElement.width * scale);
     const scaledHeight = Math.floor(imageElement.height * scale);
@@ -214,12 +248,10 @@ export async function segmentImage(
       const labelIdx = scores.indexOf(score);
       const label = YOLO_LABELS[labelIdx];
 
-      // Only process "person" detections
       if (label !== 'person') continue;
 
       const color = '#FF5050';
 
-      // Box math
       box = overflowBoxes(
         [box[0] - 0.5 * box[2], box[1] - 0.5 * box[3], box[2], box[3]],
         maxSize
@@ -249,7 +281,6 @@ export async function segmentImage(
         config: maskConfig,
       });
 
-      // Extract alpha channel
       const mH = mask_filter.dims[0];
       const mW = mask_filter.dims[1];
       const rawMask = new Uint8Array(mH * mW);
@@ -257,47 +288,83 @@ export async function segmentImage(
       for (let i = 0; i < mH * mW; i++) {
         const alphaValue = mask_filter.data[i * 4 + 3];
         rawMask[i] = Math.min(255, Math.max(0, Number(alphaValue) || 0));
-
       }
 
-      // Scale mask to actual image dimensions using OpenCV
       const srcMat = cv.matFromArray(mH, mW, cv.CV_8UC1, rawMask);
       const dstMat = new cv.Mat();
       cv.resize(srcMat, dstMat, new cv.Size(scaledWidth, scaledHeight), 0, 0, cv.INTER_LINEAR);
       
       const scaledMask = new Uint8Array(dstMat.data);
       for (let i = 0; i < scaledMask.length; i++) {
-  scaledMask[i] = scaledMask[i] > 96 ? 255 : 0;
-}
+        scaledMask[i] = scaledMask[i] > 96 ? 255 : 0;
+      }
 
       srcMat.delete();
       dstMat.delete();
 
-      regions.push({
-        id: `person-${idx}-${Date.now()}`,
-        type: 'person',
-        label: `Person ${regions.filter(r => r.type === 'person').length + 1}`,
-        maskData: scaledMask,
-        maskWidth: scaledWidth,
-        maskHeight: scaledHeight,
-        color: REGION_COLORS.person,
-        visible: true,
-        selected: false,
-        hovered: false,
-      });
+
+regions.push({
+  id: `person-${idx}-${Date.now()}`,
+  type: 'person',
+  label: `Person ${regions.filter(r => r.type === 'person').length + 1}`,
+  maskData: scaledMask,          // OUTER mask
+  maskWidth: scaledWidth,
+  maskHeight: scaledHeight,
+  color: REGION_COLORS.person,
+  visible: true,
+  selected: false,
+  hovered: false,
+});
     }
-    const personRegions = regions.filter(r => r.type === 'person');
+
+const personRegions = regions.filter(r => r.type === 'person');
 enforcePixelOwnership(personRegions);
+
+for (const region of personRegions) {
+  region.innerMaskData = erodeMask(
+    region.maskData,      // IMPORTANT: FINAL mask
+    region.maskWidth,
+    region.maskHeight,
+    12                  // same radius as before
+  );
+}
+
+
+// Write back explicitly to avoid relying on mutation side-effects
+for (let i = 0; i < regions.length; i++) {
+  if (regions[i].type === 'person') {
+    const updated = personRegions.find(p => p.id === regions[i].id);
+    if (updated) regions[i] = updated;
+  }
+}
+
+let peopleGroupRegion: Region | null = null;
+
+if (personRegions.length > 0) {
+  peopleGroupRegion = {
+    id: `people-group-${Date.now()}`,
+    type: 'people-group',
+    label: 'All People',
+    maskData: unionPersonMasks(personRegions),
+    maskWidth: personRegions[0].maskWidth,
+    maskHeight: personRegions[0].maskHeight,
+    color: REGION_COLORS['people-group'],
+    visible: true,
+    selected: false,
+    hovered: false,
+  };
+}
+
 
     input.delete();
 
-    // Create background mask at image dimensions
-    if (regions.length > 0) {
+
+    // Create background mask
+    if (personRegions.length > 0) {
       const bgMask = new Uint8Array(scaledWidth * scaledHeight);
       bgMask.fill(255);
 
-      // Subtract all person masks
-      regions.forEach((region) => {
+      personRegions.forEach((region) => {
         const { maskData } = region;
         for (let i = 0; i < maskData.length; i++) {
           if (maskData[i] > 128) {
@@ -320,12 +387,21 @@ enforcePixelOwnership(personRegions);
       });
     }
 
+const orderedRegions: Region[] = [];
 
+if (peopleGroupRegion) orderedRegions.push(peopleGroupRegion);
 
-    return regions;
+orderedRegions.push(...personRegions);
 
+const backgroundRegion = regions.find(r => r.type === 'background');
+if (backgroundRegion) orderedRegions.push(backgroundRegion);
 
-    
+console.log(
+  'Created regions:',
+  orderedRegions.map(r => `${r.type}:${r.id}`)
+);
+
+return orderedRegions;
   } catch (error) {
     console.error('Segmentation failed:', error);
     return [];
