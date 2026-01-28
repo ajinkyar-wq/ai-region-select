@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { SlidersHorizontal, Crop, ChevronDown, ChevronRight, Plus,
+import {
+  SlidersHorizontal, Crop, ChevronDown, ChevronRight, Plus,
   Brush,
   User,
   Slash,
   Circle
- } from 'lucide-react';
+} from 'lucide-react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Slider } from '@/components/ui/slider';
 
@@ -12,7 +13,7 @@ interface SliderPanelProps {
   isOpen?: boolean;
   onToggle?: () => void;
   onSelectRegion: (type: 'people' | 'background' | null, edit?: boolean) => void;
-  onCreateManualMask: () => void; 
+  onCreateManualMask: () => void;
   peopleEnabled: boolean;
   setPeopleEnabled: (v: boolean) => void;
   backgroundEnabled: boolean;
@@ -20,8 +21,8 @@ interface SliderPanelProps {
   showMaskImage: boolean;
 }
 
-export function SliderPanel({ 
-  isOpen = true, 
+export function SliderPanel({
+  isOpen = true,
   onToggle,
   onSelectRegion,
   showMaskImage,
@@ -30,7 +31,7 @@ export function SliderPanel({
   backgroundEnabled,
   setBackgroundEnabled,
   onCreateManualMask,
- }: SliderPanelProps) {
+}: SliderPanelProps) {
   const [activeTab, setActiveTab] = useState<'sliders' | 'crop' | 'masking'>('masking');
   const [showAddMaskMenu, setShowAddMaskMenu] = useState(false);
   const [selectedMaskMode, setSelectedMaskMode] = useState<'brush' | 'linear' | 'radial' | 'range'>('brush');
@@ -92,8 +93,8 @@ export function SliderPanel({
           >
             {/* Mask Icon - 16x16 with dashed border pattern */}
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <rect x="2" y="2" width="12" height="12" rx="1" fill="currentColor" fillOpacity="0.1"/>
-              <rect x="2.5" y="2.5" width="11" height="11" rx="0.5" stroke="currentColor" strokeDasharray="1 2"/>
+              <rect x="2" y="2" width="12" height="12" rx="1" fill="currentColor" fillOpacity="0.1" />
+              <rect x="2.5" y="2.5" width="11" height="11" rx="0.5" stroke="currentColor" strokeDasharray="1 2" />
             </svg>
             <span className="text-[10px] font-semibold uppercase tracking-[0.05em] leading-[1.6]">
               Masking
@@ -122,18 +123,18 @@ export function SliderPanel({
           {showAddMaskMenu && (
             <div className="absolute right-0 top-9 z-50 w-[132px] rounded-lg bg-[#242424] p-1 shadow-xl border border-[#5E5E5E]">
               {/* Brush */}
-<button
-  onClick={() => {
-    onCreateManualMask();   // ✅ CREATE MASK
-    setShowAddMaskMenu(false);
-  }}
-  className="flex w-full items-center gap-[6px] px-2 py-2 text-left hover:bg-white/10 rounded"
->
-  <Brush className="h-3 w-3 text-white" />
-  <span className="text-[12px] font-normal leading-[1.33] text-[#ABABAB]">
-    Brush
-  </span>
-</button>
+              <button
+                onClick={() => {
+                  onCreateManualMask();   // ✅ CREATE MASK
+                  setShowAddMaskMenu(false);
+                }}
+                className="flex w-full items-center gap-[6px] px-2 py-2 text-left hover:bg-white/10 rounded"
+              >
+                <Brush className="h-3 w-3 text-white" />
+                <span className="text-[12px] font-normal leading-[1.33] text-[#ABABAB]">
+                  Brush
+                </span>
+              </button>
 
               {/* Object */}
               <button
@@ -141,10 +142,10 @@ export function SliderPanel({
                 className="flex w-full items-center gap-[6px] px-2 py-2 text-left hover:bg-white/10 rounded"
               >
                 <svg width="12" height="12" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-white">
-                  <rect x="0.5" y="0.5" width="6" height="6" rx="0.5" stroke="currentColor"/>
-                  <rect x="9.5" y="0.5" width="6" height="6" rx="0.5" stroke="currentColor"/>
-                  <rect x="0.5" y="9.5" width="6" height="6" rx="0.5" stroke="currentColor"/>
-                  <rect x="9.5" y="9.5" width="6" height="6" rx="0.5" stroke="currentColor"/>
+                  <rect x="0.5" y="0.5" width="6" height="6" rx="0.5" stroke="currentColor" />
+                  <rect x="9.5" y="0.5" width="6" height="6" rx="0.5" stroke="currentColor" />
+                  <rect x="0.5" y="9.5" width="6" height="6" rx="0.5" stroke="currentColor" />
+                  <rect x="9.5" y="9.5" width="6" height="6" rx="0.5" stroke="currentColor" />
                 </svg>
                 <span className="text-[12px] font-normal leading-[1.33] text-[#ABABAB]">Object</span>
               </button>
@@ -155,7 +156,7 @@ export function SliderPanel({
                 className="flex w-full items-center gap-[6px] px-2 py-2 text-left hover:bg-white/10 rounded"
               >
                 <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <rect x="1.5" y="1.5" width="9" height="9" rx="0.5" stroke="#ABABAB"/>
+                  <rect x="1.5" y="1.5" width="9" height="9" rx="0.5" stroke="#ABABAB" />
                 </svg>
                 <span className="text-[12px] font-normal leading-[1.33] text-[#ABABAB]">Linear Gradient</span>
               </button>
@@ -166,7 +167,7 @@ export function SliderPanel({
                 className="flex w-full items-center gap-[6px] px-2 py-2 text-left hover:bg-white/10 rounded"
               >
                 <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <circle cx="6" cy="6" r="4.5" stroke="#ABABAB"/>
+                  <circle cx="6" cy="6" r="4.5" stroke="#ABABAB" />
                 </svg>
                 <span className="text-[12px] font-normal leading-[1.33] text-[#ABABAB]">Radial Gradient</span>
               </button>
@@ -186,8 +187,8 @@ export function SliderPanel({
               <ChevronRight className="h-4 w-4 text-white" />
             )}
             <div className="flex flex-1 items-center gap-[6px]">
-              <Checkbox 
-                id="people" 
+              <Checkbox
+                id="people"
                 className="h-4 w-4 border-[#474747]"
                 checked={peopleEnabled}
                 onCheckedChange={(checked) => setPeopleEnabled(checked as boolean)}
@@ -200,45 +201,44 @@ export function SliderPanel({
           </button>
 
           {accordionStates.people && (
-            <div className={`flex flex-wrap gap-1 pl-6 transition-all ${
-              peopleEnabled ? 'opacity-100' : 'opacity-40 pointer-events-none'
-            }`}>
-{[
-  { label: 'All People', real: true },
-  {
-    label: 'Person 2',
-    image: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=200&h=200&q=80',
-  },
-  {
-    label: 'Person 3',
-    image: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80',
-  },
-  {
-    label: 'Person 4',
-    image: 'https://images.unsplash.com/photo-1527980965255-d3b416303d12?auto=format&fit=crop&w=200&h=200&q=80',
-  },
-].map((item, i) => (
-  <div
-    key={i}
-    onMouseEnter={() => item.real && onSelectRegion('people')}
-    onMouseLeave={() => item.real && onSelectRegion(null)}
-    onClick={() => item.real && onSelectRegion('people')}
-    onDoubleClick={() => item.real && onSelectRegion('people', true)}
-    className={`flex h-12 w-12 items-center justify-center overflow-hidden rounded-full
+            <div className={`flex flex-wrap gap-1 pl-6 transition-all ${peopleEnabled ? 'opacity-100' : 'opacity-40 pointer-events-none'
+              }`}>
+              {[
+                { label: 'All People', real: true },
+                {
+                  label: 'Person 2',
+                  image: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=200&h=200&q=80',
+                },
+                {
+                  label: 'Person 3',
+                  image: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80',
+                },
+                {
+                  label: 'Person 4',
+                  image: 'https://images.unsplash.com/photo-1527980965255-d3b416303d12?auto=format&fit=crop&w=200&h=200&q=80',
+                },
+              ].map((item, i) => (
+                <div
+                  key={i}
+                  onMouseEnter={() => item.real && onSelectRegion('people')}
+                  onMouseLeave={() => item.real && onSelectRegion(null)}
+                  onClick={() => item.real && onSelectRegion('people')}
+                  onDoubleClick={() => item.real && onSelectRegion('people', true)}
+                  className={`flex h-12 w-12 items-center justify-center overflow-hidden rounded-full
       ${item.real ? 'cursor-pointer bg-[#3A3A3A]' : 'bg-[#303030]'}`}
-    title={item.label}
-  >
-    {item.real ? (
-      <User className="h-4 w-4 text-white opacity-80" />
-    ) : (
-      <img
-        src={item.image}
-        alt={item.label}
-        className="h-full w-full object-cover"
-      />
-    )}
-  </div>
-))}
+                  title={item.label}
+                >
+                  {item.real ? (
+                    <User className="h-4 w-4 text-white opacity-80" />
+                  ) : (
+                    <img
+                      src={item.image}
+                      alt={item.label}
+                      className="h-full w-full object-cover"
+                    />
+                  )}
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -255,8 +255,8 @@ export function SliderPanel({
               <ChevronRight className="h-4 w-4 text-white" />
             )}
             <div className="flex flex-1 items-center gap-[6px]">
-              <Checkbox 
-                id="landscape" 
+              <Checkbox
+                id="landscape"
                 className="h-4 w-4 border-[#474747]"
                 checked={backgroundEnabled}
                 onCheckedChange={(checked) => setBackgroundEnabled(checked as boolean)}
@@ -270,45 +270,44 @@ export function SliderPanel({
 
           {accordionStates.landscape && (
             <div className="flex flex-col gap-6 pl-6">
-              <div className={`flex flex-wrap gap-1 transition-all ${
-                backgroundEnabled ? 'opacity-100' : 'opacity-40 pointer-events-none'
-              }`}>
-{[
-  { label: 'Background', real: true },
-  {
-    label: 'Landscape 2',
-    image: 'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=200&h=200&q=80',
-  },
-  {
-    label: 'Landscape 3',
-    image: 'https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&w=200&h=200&q=80',
-  },
-  {
-    label: 'Landscape 4',
-    image: 'https://images.unsplash.com/photo-1470770841072-f978cf4d019e?auto=format&fit=crop&w=200&h=200&q=80',
-  },
-].map((item, i) => (
-  <div
-    key={i}
-    onMouseEnter={() => item.real && onSelectRegion('background')}
-    onMouseLeave={() => item.real && onSelectRegion(null)}
-    onClick={() => item.real && onSelectRegion('background')}
-    onDoubleClick={() => item.real && onSelectRegion('background', true)}
-    className={`flex h-12 w-12 items-center justify-center overflow-hidden rounded-full
+              <div className={`flex flex-wrap gap-1 transition-all ${backgroundEnabled ? 'opacity-100' : 'opacity-40 pointer-events-none'
+                }`}>
+                {[
+                  { label: 'Background', real: true },
+                  {
+                    label: 'Landscape 2',
+                    image: 'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=200&h=200&q=80',
+                  },
+                  {
+                    label: 'Landscape 3',
+                    image: 'https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&w=200&h=200&q=80',
+                  },
+                  {
+                    label: 'Landscape 4',
+                    image: 'https://images.unsplash.com/photo-1470770841072-f978cf4d019e?auto=format&fit=crop&w=200&h=200&q=80',
+                  },
+                ].map((item, i) => (
+                  <div
+                    key={i}
+                    onMouseEnter={() => item.real && onSelectRegion('background')}
+                    onMouseLeave={() => item.real && onSelectRegion(null)}
+                    onClick={() => item.real && onSelectRegion('background')}
+                    onDoubleClick={() => item.real && onSelectRegion('background', true)}
+                    className={`flex h-12 w-12 items-center justify-center overflow-hidden rounded-full
       ${item.real ? 'cursor-pointer bg-[#3A3A3A]' : 'bg-[#303030]'}`}
-    title={item.label}
-  >
-    {item.real ? (
-      <Circle className="h-4 w-4 text-white opacity-80" />
-    ) : (
-      <img
-        src={item.image}
-        alt={item.label}
-        className="h-full w-full object-cover"
-      />
-    )}
-  </div>
-))}
+                    title={item.label}
+                  >
+                    {item.real ? (
+                      <Circle className="h-4 w-4 text-white opacity-80" />
+                    ) : (
+                      <img
+                        src={item.image}
+                        alt={item.label}
+                        className="h-full w-full object-cover"
+                      />
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
           )}
@@ -352,19 +351,21 @@ export function SliderPanel({
           )}
         </div>
 
-        <div className="mt-4 -mx-4">
-          <img
-            src="/slider-panel.png"
-            alt="Mask adjustment preview"
-            className="w-full rounded-md border border-[#2A2A2A]"
-          />
-        </div>
+        {showMaskImage && (
+          <div className="mt-4 -mx-4">
+            <img
+              src="/slider-panel.png"
+              alt="Mask adjustment preview"
+              className="w-full rounded-md border border-[#2A2A2A]"
+            />
+          </div>
+        )}
 
 
         {/* Line 238 - Divider */}
         <div className="h-[1px] w-[344px] bg-[#111111]" />
       </div>
     </>
-    
+
   );
 }

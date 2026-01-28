@@ -6,6 +6,7 @@ export interface Region {
   label: string;
   // Bitmap mask data
   maskData: Uint8Array;
+  originalMaskData?: Uint8Array;
   innerMaskData?: Uint8Array; // Eroded mask for inner selection zone
   maskWidth: number;
   maskHeight: number;

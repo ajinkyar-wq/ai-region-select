@@ -8,6 +8,7 @@ import { BottomBar } from './BottomBar';
 import { SliderPanel } from './SliderPanel';
 import type { ImageTileData, Region } from '@/types/workspace';
 import { REGION_COLORS } from '@/types/workspace';
+import { Columns2 } from 'lucide-react'; // or any compare icon you want
 
 export function Workspace() {
   const [image, setImage] = useState<ImageTileData | null>(null);
@@ -66,28 +67,28 @@ export function Workspace() {
   ) => {
     if (!type || !image) return;
 
-if (edit) {
-  const region = image.regions.find(r => r.type === type);
-  if (!region) return;
+    if (edit) {
+      const region = image.regions.find(r => r.type === type);
+      if (!region) return;
 
-  // ✅ CLEAR ALL SELECTIONS
-  setImage(prev =>
-    prev
-      ? {
-          ...prev,
-          regions: prev.regions.map(r => ({
-            ...r,
-            selected: false,
-          })),
-        }
-      : prev
-  );
+      // ✅ CLEAR ALL SELECTIONS
+      setImage(prev =>
+        prev
+          ? {
+            ...prev,
+            regions: prev.regions.map(r => ({
+              ...r,
+              selected: false,
+            })),
+          }
+          : prev
+      );
 
-  // ✅ ENTER EDIT MODE
-  setActiveMask(region);
-  setBrushActive(true);
-  return;
-}
+      // ✅ ENTER EDIT MODE
+      setActiveMask(region);
+      setBrushActive(true);
+      return;
+    }
 
     const isAlreadySelected = image.regions.some(
       r => r.type === type && r.selected
@@ -96,12 +97,12 @@ if (edit) {
     setImage(prev =>
       prev
         ? {
-            ...prev,
-            regions: prev.regions.map(r => ({
-              ...r,
-              selected: isAlreadySelected ? false : r.type === type,
-            })),
-          }
+          ...prev,
+          regions: prev.regions.map(r => ({
+            ...r,
+            selected: isAlreadySelected ? false : r.type === type,
+          })),
+        }
         : prev
     );
   };
@@ -127,6 +128,26 @@ if (edit) {
               className="relative flex flex-1 flex-col overflow-hidden"
               style={{ marginRight: isPanelOpen ? 344 : 0 }}
             >
+
+<div className="absolute top-3 right-3 z-30 pointer-events-auto">
+  <button
+    className="
+      h-9 w-9
+      rounded-md
+      bg-black/60
+      border border-white/10
+      text-white
+      flex items-center justify-center
+      hover:bg-black/80
+      transition
+      shadow-md
+    "
+    title="Compare"
+  >
+    <Columns2 className="h-4 w-4 opacity-90" />
+  </button>
+</div>
+
               <div className="relative flex-1 pb-[128px]">
                 <ImageTile
                   tile={image}

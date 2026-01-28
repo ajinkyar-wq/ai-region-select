@@ -3,6 +3,9 @@ import { ScanAnimation } from './ScanAnimation';
 import { BrushTool } from './BrushTool';
 import { segmentImage } from '@/lib/segmentation';
 import type { ImageTileData, Region } from '@/types/workspace';
+import { RotateCcw } from 'lucide-react';
+
+
 
 interface ImageViewProps {
   tile: ImageTileData;
@@ -395,6 +398,23 @@ export function ImageTile({
         }
         break;
       }
+
+      if (!clickedRegion && backgroundEnabled) {
+        const bg = tile.regions.find(r => r.type === 'background');
+        if (bg) {
+          const scaleX = bg.maskWidth / imageTransform.width;
+          const scaleY = bg.maskHeight / imageTransform.height;
+
+          const mx = Math.floor(x * scaleX);
+          const my = Math.floor(y * scaleY);
+          const idx = my * bg.maskWidth + mx;
+
+          if (bg.maskData[idx] > 128) {
+            clickedRegion = bg;
+          }
+        }
+      }
+
     }
 
     if (clickedRegion) {
@@ -558,6 +578,45 @@ export function ImageTile({
     onUpdateTile({ regions: updatedRegions });
   };
 
+  const resetRegionMask = (regionId: string) => {
+    onUpdateTile({
+      regions: tile.regions.map(r => {
+        if (r.id !== regionId || !r.originalMaskData) return r;
+
+        return {
+          ...r,
+          maskData: new Uint8Array(r.originalMaskData), // restore
+        };
+      }),
+    });
+  };
+
+  function getMaskAnchor(region: Region) {
+    const { maskData, maskWidth, maskHeight } = region;
+
+    let minX = maskWidth, minY = maskHeight;
+    let maxX = 0, maxY = 0;
+
+    for (let y = 0; y < maskHeight; y++) {
+      for (let x = 0; x < maskWidth; x++) {
+        const i = y * maskWidth + x;
+        if (maskData[i] > 0) {
+          minX = Math.min(minX, x);
+          minY = Math.min(minY, y);
+          maxX = Math.max(maxX, x);
+          maxY = Math.max(maxY, y);
+        }
+      }
+    }
+
+    return {
+      x: (minX + maxX) / 2,
+      y: minY, // top edge feels right UX-wise
+    };
+  }
+
+
+
   return (
     <div
       ref={containerRef}
@@ -581,6 +640,51 @@ export function ImageTile({
           onMouseMove={handleMouseMove}
           onMouseLeave={() => setLocalHoveredRegion(null)}
         />
+
+        {!editingRegion &&
+          imageTransform &&
+          tile.regions
+            .filter(r => r.selected)
+            .map(region => {
+              const anchor = getMaskAnchor(region);
+
+              const x =
+                imageTransform.x +
+                (anchor.x / region.maskWidth) * imageTransform.width;
+
+              const y =
+                imageTransform.y +
+                (anchor.y / region.maskHeight) * imageTransform.height;
+
+              return (
+                <div
+                  key={region.id}
+                  className="absolute z-40 pointer-events-auto"
+                  style={{
+                    left: x,
+                    top: y - 28,
+                    transform: 'translate(-50%, -100%)',
+                  }}
+                >
+                  <button
+                    className="
+                     flex h-8 w-8 items-center justify-center
+                     rounded-full bg-black/80 text-white
+                     hover:bg-black
+                    shadow-lg
+                     "
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      resetRegionMask(region.id);
+                    }}
+                    title="Reset mask"
+                  >
+                    <RotateCcw size={14} />
+                  </button>
+                </div>
+              );
+            })}
+
 
         {editingRegion && imageTransform && mainCanvasRef.current && (
           <BrushTool

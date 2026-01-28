@@ -307,6 +307,7 @@ regions.push({
   id: `person-${idx}-${Date.now()}`,
   type: 'person',
   label: `Person ${regions.filter(r => r.type === 'person').length + 1}`,
+  originalMaskData: new Uint8Array(scaledMask),
   maskData: scaledMask,          // OUTER mask
   maskWidth: scaledWidth,
   maskHeight: scaledHeight,
@@ -325,7 +326,7 @@ for (const region of personRegions) {
     region.maskData,      // IMPORTANT: FINAL mask
     region.maskWidth,
     region.maskHeight,
-    12                  // same radius as before
+    12                    // same radius as before
   );
 }
 
@@ -346,6 +347,7 @@ if (personRegions.length > 0) {
     type: 'people-group',
     label: 'All People',
     maskData: unionPersonMasks(personRegions),
+    originalMaskData: unionPersonMasks(personRegions), 
     maskWidth: personRegions[0].maskWidth,
     maskHeight: personRegions[0].maskHeight,
     color: REGION_COLORS['people-group'],
@@ -378,6 +380,7 @@ if (personRegions.length > 0) {
         type: 'background',
         label: 'Background',
         maskData: bgMask,
+        originalMaskData: new Uint8Array(bgMask),
         maskWidth: scaledWidth,
         maskHeight: scaledHeight,
         color: REGION_COLORS.background,
