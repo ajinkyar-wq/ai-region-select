@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useRef } from 'react';
 import { DropZone } from './DropZone';
 import { ImageTile } from './ImageTile';
 import { TitleBar } from './TitleBar';
@@ -6,9 +6,10 @@ import { TopBar } from './TopBar';
 import { Filmstrip } from './Filmstrip';
 import { BottomBar } from './BottomBar';
 import { SliderPanel } from './SliderPanel';
+import { DraggableToolbar } from './DraggableToolbar';
 import type { ImageTileData, Region } from '@/types/workspace';
 import { REGION_COLORS } from '@/types/workspace';
-import { Columns2 } from 'lucide-react'; // or any compare icon you want
+import { Columns2, Paintbrush, Eraser } from 'lucide-react';
 
 export function Workspace() {
   const [image, setImage] = useState<ImageTileData | null>(null);
@@ -20,6 +21,12 @@ export function Workspace() {
   const [activeMask, setActiveMask] = useState<Region | null>(null);
   const [brushActive, setBrushActive] = useState(false);
   const [hoveredRegion, setHoveredRegion] = useState<'person' | 'background' | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const [brushMode, setBrushMode] = useState<'add' | 'erase'>('add');
+  const [brushSize, setBrushSize] = useState([50]);
+  const [brushSoftness, setBrushSoftness] = useState([20]);
+  const [brushOpacity, setBrushOpacity] = useState([70]);
 
   const showMaskImage = !!image?.regions.some(r => r.selected);
 
@@ -46,6 +53,7 @@ export function Workspace() {
 
     setActiveMask(newMask);
     setBrushActive(true);
+    setBrushMode('add'); // Default to add
   };
 
   const handleFileDrop = useCallback((file: File) => {
@@ -107,6 +115,27 @@ export function Workspace() {
     );
   };
 
+  const handleResetMasks = () => {
+    if (!image) return;
+
+    setImage(prev => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        regions: prev.regions.map(r => {
+          // Only reset selected regions that have original data
+          if (r.selected && r.originalMaskData) {
+            return {
+              ...r,
+              maskData: new Uint8Array(r.originalMaskData),
+            };
+          }
+          return r;
+        }),
+      };
+    });
+  };
+
   return (
     <div
       className="relative h-screen w-screen bg-[#111111] overflow-hidden"
@@ -125,28 +154,79 @@ export function Workspace() {
 
           <div className="relative flex flex-1 overflow-hidden">
             <div
+              ref={containerRef}
               className="relative flex flex-1 flex-col overflow-hidden"
               style={{ marginRight: isPanelOpen ? 344 : 0 }}
             >
 
-<div className="absolute top-3 right-3 z-30 pointer-events-auto">
-  <button
-    className="
-      h-9 w-9
-      rounded-md
-      bg-black/60
-      border border-white/10
-      text-white
-      flex items-center justify-center
-      hover:bg-black/80
-      transition
-      shadow-md
-    "
-    title="Compare"
-  >
-    <Columns2 className="h-4 w-4 opacity-90" />
-  </button>
-</div>
+              <div className="absolute top-3 right-3 z-30 pointer-events-auto">
+                <button
+                  className="
+                  h-9 w-9
+                  rounded-md
+                  bg-black/60
+                  border border-white/10
+                  text-white
+                  flex items-center justify-center
+                  hover:bg-black/80
+                  transition
+                  shadow-md
+                 "
+                  title="Compare"
+                >
+                  <Columns2 className="h-4 w-4 opacity-90" />
+                </button>
+              </div>
+
+              {/* Draggable Toolbar */}
+              {image && (
+                <DraggableToolbar
+                  containerRef={containerRef}
+                  activeId={brushActive ? (brushMode === 'erase' ? 'eraser' : 'brush') : 'move'}
+                  onActiveChange={(id) => {
+                    if (id === 'brush') {
+                      setBrushActive(true);
+                      setBrushMode('add');
+                    } else if (id === 'eraser') {
+                      setBrushActive(true);
+                      setBrushMode('erase');
+                    } else {
+                      // Handle other tools if needed
+                    }
+                  }}
+                  // State Props
+                  brushSize={brushSize}
+                  onBrushSizeChange={setBrushSize}
+                  brushSoftness={brushSoftness}
+                  onBrushSoftnessChange={setBrushSoftness}
+                  brushOpacity={brushOpacity}
+                  onBrushOpacityChange={setBrushOpacity}
+
+                  // Reset Handler
+                  onResetMask={handleResetMasks}
+
+                  items={[
+                    {
+                      id: 'brush',
+                      icon: <Paintbrush className="h-[20px] w-[20px]" />, // aligned with 20px icon size in design
+                      label: 'Brush',
+                      onClick: () => {
+                        setBrushActive(true);
+                        setBrushMode('add');
+                      },
+                    },
+                    {
+                      id: 'eraser',
+                      icon: <Eraser className="h-[20px] w-[20px]" />,
+                      label: 'Eraser',
+                      onClick: () => {
+                        setBrushActive(true);
+                        setBrushMode('erase');
+                      },
+                    },
+                  ]}
+                />
+              )}
 
               <div className="relative flex-1 pb-[128px]">
                 <ImageTile
@@ -155,6 +235,13 @@ export function Workspace() {
                   hoveredRegionOverride={hoveredRegion}
                   activeMask={activeMask}
                   brushActive={brushActive}
+
+                  // Pass Brush State
+                  brushMode={brushMode}
+                  brushSize={brushSize[0]} // Pass number
+                  brushSoftness={brushSoftness[0]}
+                  brushOpacity={brushOpacity[0]}
+
                   peopleEnabled={peopleEnabled}
                   backgroundEnabled={backgroundEnabled}
                   onUpdateTile={(updates) => {

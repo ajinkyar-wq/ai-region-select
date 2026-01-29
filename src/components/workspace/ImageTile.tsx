@@ -16,6 +16,14 @@ interface ImageViewProps {
   backgroundEnabled?: boolean;
   activeMask?: Region | null;
   brushActive?: boolean;
+
+
+  // Brush Props
+  brushMode?: 'add' | 'erase';
+  brushSize?: number;
+  brushSoftness?: number;
+  brushOpacity?: number;
+
 }
 
 export function ImageTile({
@@ -25,6 +33,10 @@ export function ImageTile({
   hoveredRegionOverride,
   activeMask,
   brushActive,
+  brushMode,
+  brushSize,
+  brushSoftness,
+  brushOpacity,
   peopleEnabled = true,
   backgroundEnabled = true,
 }: ImageViewProps) {
@@ -45,6 +57,17 @@ export function ImageTile({
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [localHoveredRegion, setLocalHoveredRegion] = useState<string | null>(null);
   const [editingRegion, setEditingRegion] = useState<Region | null>(null);
+
+  // Sync editingRegion with tile updates (e.g. Reset Mask)
+  useEffect(() => {
+    if (editingRegion) {
+      const fresh = tile.regions.find(r => r.id === editingRegion.id);
+      // Only update if reference changed (implies update)
+      if (fresh && fresh !== editingRegion) {
+        setEditingRegion(fresh);
+      }
+    }
+  }, [tile.regions, editingRegion]);
 
   const MIN_SCALE = 0.3;
   const MAX_SCALE = 4;
@@ -578,19 +601,6 @@ export function ImageTile({
     onUpdateTile({ regions: updatedRegions });
   };
 
-  const resetRegionMask = (regionId: string) => {
-    onUpdateTile({
-      regions: tile.regions.map(r => {
-        if (r.id !== regionId || !r.originalMaskData) return r;
-
-        return {
-          ...r,
-          maskData: new Uint8Array(r.originalMaskData), // restore
-        };
-      }),
-    });
-  };
-
   function getMaskAnchor(region: Region) {
     const { maskData, maskWidth, maskHeight } = region;
 
@@ -614,8 +624,6 @@ export function ImageTile({
       y: minY, // top edge feels right UX-wise
     };
   }
-
-
 
   return (
     <div
@@ -641,77 +649,40 @@ export function ImageTile({
           onMouseLeave={() => setLocalHoveredRegion(null)}
         />
 
-        {!editingRegion &&
-          imageTransform &&
-          tile.regions
-            .filter(r => r.selected)
-            .map(region => {
-              const anchor = getMaskAnchor(region);
 
-              const x =
-                imageTransform.x +
-                (anchor.x / region.maskWidth) * imageTransform.width;
+        {
+          editingRegion && imageTransform && mainCanvasRef.current && (
+            <BrushTool
+              region={editingRegion}
+              imageTransform={imageTransform}
+              canvasWidth={mainCanvasRef.current.width}
+              canvasHeight={mainCanvasRef.current.height}
+              onMaskUpdate={handleMaskUpdate}
+              mode={brushMode}
+              brushSize={brushSize}
+              softness={brushSoftness}
+              opacity={brushOpacity}
 
-              const y =
-                imageTransform.y +
-                (anchor.y / region.maskHeight) * imageTransform.height;
+              onExit={() => {
+                // 1. Exit edit mode
+                setEditingRegion(null);
 
-              return (
-                <div
-                  key={region.id}
-                  className="absolute z-40 pointer-events-auto"
-                  style={{
-                    left: x,
-                    top: y - 28,
-                    transform: 'translate(-50%, -100%)',
-                  }}
-                >
-                  <button
-                    className="
-                     flex h-8 w-8 items-center justify-center
-                     rounded-full bg-black/80 text-white
-                     hover:bg-black
-                    shadow-lg
-                     "
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      resetRegionMask(region.id);
-                    }}
-                    title="Reset mask"
-                  >
-                    <RotateCcw size={14} />
-                  </button>
-                </div>
-              );
-            })}
+                // 2. Re-select the edited region ONLY
+                onUpdateTile({
+                  regions: tile.regions.map(r => ({
+                    ...r,
+                    selected: r.id === editingRegion.id,
+                  })),
+                });
+              }}
 
 
-        {editingRegion && imageTransform && mainCanvasRef.current && (
-          <BrushTool
-            region={editingRegion}
-            imageTransform={imageTransform}
-            canvasWidth={mainCanvasRef.current.width}
-            canvasHeight={mainCanvasRef.current.height}
-            onMaskUpdate={handleMaskUpdate}
-            onExit={() => {
-              // 1. Exit edit mode
-              setEditingRegion(null);
-
-              // 2. Re-select the edited region ONLY
-              onUpdateTile({
-                regions: tile.regions.map(r => ({
-                  ...r,
-                  selected: r.id === editingRegion.id,
-                })),
-              });
-            }}
-
-
-          />
-        )}
-      </div>
+            />
+          )
+        }
+      </div >
 
       <ScanAnimation isActive={showScan} />
-    </div>
+    </div >
   );
 }

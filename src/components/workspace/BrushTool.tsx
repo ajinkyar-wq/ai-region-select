@@ -1,6 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { Paintbrush, Eraser } from 'lucide-react';
-import { Button } from '@/components/ui/button';
 import type { Region } from '@/types/workspace';
 
 interface BrushToolProps {
@@ -16,6 +14,12 @@ interface BrushToolProps {
   canvasHeight: number;
   onMaskUpdate: (newMaskData: Uint8Array) => void;
   onExit: () => void;
+
+  // Controlled props
+  mode?: 'add' | 'erase';
+  brushSize?: number;
+  softness?: number;
+  opacity?: number;
 }
 
 export function BrushTool({
@@ -24,19 +28,14 @@ export function BrushTool({
   canvasWidth,
   canvasHeight,
   onMaskUpdate,
-  onExit,
+  mode = 'add',
+  brushSize = 20,
 }: BrushToolProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [mode, setMode] = useState<'add' | 'erase'>('erase');
-  const [brushSize, setBrushSize] = useState(20);
   const [isDrawing, setIsDrawing] = useState(false);
   const [cursorPos, setCursorPos] = useState({ x: 0, y: 0 });
-  const [buttonPos, setButtonPos] = useState({ x: 0, y: 0 });
-  const [isHoveringButton, setIsHoveringButton] = useState(false);
 
   const maskDataRef = useRef<Uint8Array>(new Uint8Array(region.maskData));
-  const buttonTargetRef = useRef({ x: 0, y: 0 });
-  const buttonCurrentRef = useRef({ x: 0, y: 0 });
 
   // Initialize canvas
   useEffect(() => {
@@ -48,6 +47,12 @@ export function BrushTool({
 
     renderMask();
   }, [canvasWidth, canvasHeight]);
+
+  // Sync with external mask changes (e.g. Reset)
+  useEffect(() => {
+    maskDataRef.current = new Uint8Array(region.maskData);
+    renderMask();
+  }, [region.maskData, region.id]);
 
   // Render current mask state
   const renderMask = () => {
@@ -71,7 +76,7 @@ export function BrushTool({
         imageData.data[i * 4] = color[0];
         imageData.data[i * 4 + 1] = color[1];
         imageData.data[i * 4 + 2] = color[2];
-        imageData.data[i * 4 + 3] = 128;
+        imageData.data[i * 4 + 3] = 128; // Semi-transparent preview
       }
     }
 
@@ -83,6 +88,11 @@ export function BrushTool({
 
     ctx.drawImage(tempCanvas, 0, 0, canvas.width, canvas.height);
   };
+
+  // Re-render when mode changes to update preview color
+  useEffect(() => {
+    renderMask();
+  }, [mode]);
 
   // Paint into mask
   const paintAt = (x: number, y: number) => {
@@ -113,8 +123,8 @@ export function BrushTool({
   };
 
   const handlePointerDown = (e: React.PointerEvent) => {
-    if (isHoveringButton) return;
     setIsDrawing(true);
+    e.currentTarget.setPointerCapture(e.pointerId);
 
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
@@ -128,74 +138,31 @@ export function BrushTool({
     const y = e.clientY - rect.top;
 
     setCursorPos({ x, y });
-    buttonTargetRef.current = { x: x + 40, y: y - 40 };
 
-    if (isDrawing && !isHoveringButton) {
+    if (isDrawing) {
       paintAt(x, y);
     }
   };
 
-  const handlePointerUp = () => {
+  const handlePointerUp = (e: React.PointerEvent) => {
     if (isDrawing) {
       setIsDrawing(false);
+      e.currentTarget.releasePointerCapture(e.pointerId);
       onMaskUpdate(new Uint8Array(maskDataRef.current));
     }
   };
-
-  // Button follow animation
-  useEffect(() => {
-    let raf: number;
-
-    const animate = () => {
-      if (isHoveringButton) {
-        raf = requestAnimationFrame(animate);
-        return;
-      }
-
-      const target = buttonTargetRef.current;
-      const current = buttonCurrentRef.current;
-
-      const dx = target.x - current.x;
-      const dy = target.y - current.y;
-      const distance = Math.hypot(dx, dy);
-
-      const speed = 0.05 * Math.min(distance / 140, 1) ** 2;
-
-      if (distance > 6) {
-        current.x += dx * speed;
-        current.y += dy * speed;
-      }
-
-      buttonCurrentRef.current = current;
-      setButtonPos({ ...current });
-
-      raf = requestAnimationFrame(animate);
-    };
-
-    raf = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(raf);
-  }, [isHoveringButton]);
-
-  // Handle brush size drag
-  const dragRef = useRef({
-    active: false,
-    hasMoved: false,
-    startX: 0,
-    startY: 0,
-    startSize: brushSize,
-  });
 
   return (
     <>
       {/* Brush canvas */}
       <div
-        className="absolute z-20 pointer-events-auto"
+        className="absolute z-20 pointer-events-auto cursor-none"
         style={{
           left: imageTransform.x,
           top: imageTransform.y,
           width: imageTransform.width,
           height: imageTransform.height,
-          overflow: 'hidden',
+          overflow: 'hidden', // Contain the cursor within image bounds
         }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
@@ -205,22 +172,18 @@ export function BrushTool({
         <canvas
           ref={canvasRef}
           className="absolute inset-0"
-          style={{ cursor: 'none' }}
         />
-      </div>
 
-      {/* Cursor */}
-      {!isHoveringButton && (
+        {/* Cursor - now inside the container to be clipped and positioned relatively */}
         <div
-          className="absolute pointer-events-none z-30"
+          className="absolute pointer-events-none z-30 transform -translate-x-1/2 -translate-y-1/2"
           style={{
-            left: imageTransform.x + cursorPos.x,
-            top: imageTransform.y + cursorPos.y,
-            transform: 'translate(-50%, -50%)',
+            left: cursorPos.x,
+            top: cursorPos.y,
           }}
         >
           <div
-            className="rounded-full border-2 transition-colors"
+            className="rounded-full border-2 transition-all duration-75 ease-out"
             style={{
               width: brushSize,
               height: brushSize,
@@ -235,76 +198,7 @@ export function BrushTool({
             }}
           />
         </div>
-      )}
-
-      {/* Control button */}
-      {!isDrawing && (
-        <div
-          className="absolute z-30 pointer-events-auto"
-          style={{
-            left: buttonPos.x,
-            top: buttonPos.y,
-            transform: 'translate(-50%, -50%)',
-          }}
-          onPointerEnter={() => setIsHoveringButton(true)}
-          onPointerLeave={() => setIsHoveringButton(false)}
-        >
-          <Button
-            size="icon"
-            variant="secondary"
-            className="h-10 w-10 rounded-full shadow-lg select-none"
-            onPointerDown={(e) => {
-              e.stopPropagation();
-              dragRef.current = {
-                active: true,
-                hasMoved: false,
-                startX: e.clientX,
-                startY: e.clientY,
-                startSize: brushSize,
-              };
-              (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-            }}
-            onPointerMove={(e) => {
-              dragRef.current.hasMoved = true;
-              if (!dragRef.current.active) return;
-
-              const dx = e.clientX - dragRef.current.startX;
-              const dy = dragRef.current.startY - e.clientY;
-              const distance = Math.sqrt(dx * dx + dy * dy);
-              const direction = dy >= 0 ? 1 : -1;
-
-              const nextSize = Math.max(
-                5,
-                Math.min(80, dragRef.current.startSize + distance * 0.15 * direction)
-              );
-
-              setBrushSize(Math.round(nextSize));
-            }}
-            onPointerUp={(e) => {
-              e.stopPropagation();
-
-              const wasDragging = dragRef.current.hasMoved;
-              dragRef.current.active = false;
-              dragRef.current.hasMoved = false;
-
-              try {
-                (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-              } catch { }
-
-              if (!wasDragging) {
-                setMode(prev => (prev === 'add' ? 'erase' : 'add'));
-              }
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {mode === 'add' ? (
-              <Eraser className="h-4 w-4" />
-            ) : (
-              <Paintbrush className="h-4 w-4" />
-            )}
-          </Button>
-        </div>
-      )}
+      </div>
     </>
   );
 }
