@@ -179,7 +179,7 @@ export function Workspace() {
               </div>
 
               {/* Draggable Toolbar */}
-              {image && (
+              {image && image.regions.some(r => r.selected) && (
                 <DraggableToolbar
                   containerRef={containerRef}
                   activeId={brushActive ? (brushMode === 'erase' ? 'eraser' : 'brush') : 'move'}
