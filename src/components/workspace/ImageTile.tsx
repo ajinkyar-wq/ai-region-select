@@ -16,6 +16,12 @@ interface ImageViewProps {
   backgroundEnabled?: boolean;
   activeMask?: Region | null;
   brushActive?: boolean;
+
+  // Brush Props
+  brushMode?: 'add' | 'erase';
+  brushSize?: number;
+  brushSoftness?: number;
+  brushOpacity?: number;
 }
 
 export function ImageTile({
@@ -25,6 +31,10 @@ export function ImageTile({
   hoveredRegionOverride,
   activeMask,
   brushActive,
+  brushMode,
+  brushSize,
+  brushSoftness,
+  brushOpacity,
   peopleEnabled = true,
   backgroundEnabled = true,
 }: ImageViewProps) {
@@ -45,6 +55,16 @@ export function ImageTile({
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [localHoveredRegion, setLocalHoveredRegion] = useState<string | null>(null);
   const [editingRegion, setEditingRegion] = useState<Region | null>(null);
+
+  // Sync editingRegion with changes from parent (e.g. Reset Mask)
+  useEffect(() => {
+    if (editingRegion) {
+      const fresh = tile.regions.find(r => r.id === editingRegion.id);
+      if (fresh && fresh !== editingRegion) {
+        setEditingRegion(fresh);
+      }
+    }
+  }, [tile.regions, editingRegion]);
 
   const MIN_SCALE = 0.3;
   const MAX_SCALE = 4;
@@ -663,17 +683,7 @@ export function ImageTile({
                         </button>
                       )}
 
-                    {/* RESET */}
-                    <button
-                      className="flex h-8 w-8 items-center justify-center rounded-full bg-black/80 text-white hover:bg-black shadow-lg"
-                      title="Reset mask"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        resetRegionMask(region.id);
-                      }}
-                    >
-                      <RotateCcw size={14} />
-                    </button>
+
                   </div>
                 </div>
               );
@@ -687,6 +697,11 @@ export function ImageTile({
             canvasWidth={mainCanvasRef.current.width}
             canvasHeight={mainCanvasRef.current.height}
             onMaskUpdate={handleMaskUpdate}
+            // Pass down brush props
+            mode={brushMode}
+            brushSize={brushSize}
+            softness={brushSoftness}
+            opacity={brushOpacity}
             onExit={() => {
               // 1. Exit edit mode
               setEditingRegion(null);

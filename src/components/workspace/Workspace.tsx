@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useRef } from 'react';
 import { DropZone } from './DropZone';
 import { ImageTile } from './ImageTile';
 import { TitleBar } from './TitleBar';
@@ -6,9 +6,10 @@ import { TopBar } from './TopBar';
 import { Filmstrip } from './Filmstrip';
 import { BottomBar } from './BottomBar';
 import { SliderPanel } from './SliderPanel';
+import { DraggableToolbar } from './DraggableToolbar';
 import type { ImageTileData, Region } from '@/types/workspace';
 import { REGION_COLORS } from '@/types/workspace';
-import { Columns2 } from 'lucide-react'; // or any compare icon you want
+import { Columns2, Paintbrush, Eraser } from 'lucide-react';
 
 export function Workspace() {
   const [image, setImage] = useState<ImageTileData | null>(null);
@@ -20,6 +21,12 @@ export function Workspace() {
   const [activeMask, setActiveMask] = useState<Region | null>(null);
   const [brushActive, setBrushActive] = useState(false);
   const [hoveredRegion, setHoveredRegion] = useState<'person' | 'background' | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const [brushMode, setBrushMode] = useState<'add' | 'erase'>('add');
+  const [brushSize, setBrushSize] = useState([50]);
+  const [brushSoftness, setBrushSoftness] = useState([20]);
+  const [brushOpacity, setBrushOpacity] = useState([70]);
 
   const showMaskImage = !!image?.regions.some(r => r.selected);
 
@@ -46,6 +53,7 @@ export function Workspace() {
 
     setActiveMask(newMask);
     setBrushActive(true);
+    setBrushMode('add'); // Default to add
   };
 
   const handleFileDrop = useCallback((file: File) => {
@@ -125,6 +133,7 @@ export function Workspace() {
 
           <div className="relative flex flex-1 overflow-hidden">
             <div
+              ref={containerRef}
               className="relative flex flex-1 flex-col overflow-hidden"
               style={{ marginRight: isPanelOpen ? 344 : 0 }}
             >
@@ -148,6 +157,75 @@ export function Workspace() {
                 </button>
               </div>
 
+              {/* Draggable Toolbar */}
+              {image && (
+                <DraggableToolbar
+                  containerRef={containerRef}
+                  activeId={brushActive ? (brushMode === 'erase' ? 'eraser' : 'brush') : 'move'}
+                  onActiveChange={(id) => {
+                    if (id === 'brush') {
+                      setBrushActive(true);
+                      setBrushMode('add');
+                    } else if (id === 'eraser') {
+                      setBrushActive(true);
+                      setBrushMode('erase');
+                    } else {
+                      // Handle other tools if needed
+                    }
+                  }}
+                  // State Props
+                  brushSize={brushSize}
+                  onBrushSizeChange={setBrushSize}
+                  brushSoftness={brushSoftness}
+                  onBrushSoftnessChange={setBrushSoftness}
+                  brushOpacity={brushOpacity}
+                  onBrushOpacityChange={setBrushOpacity}
+
+                  items={[
+                    {
+                      id: 'brush',
+                      icon: <Paintbrush className="h-[20px] w-[20px]" />,
+                      label: 'Brush',
+                      onClick: () => {
+                        setBrushActive(true);
+                        setBrushMode('add');
+                      },
+                    },
+                    {
+                      id: 'eraser',
+                      icon: <Eraser className="h-[20px] w-[20px]" />,
+                      label: 'Eraser',
+                      onClick: () => {
+                        setBrushActive(true);
+                        setBrushMode('erase');
+                      },
+                    },
+                  ]}
+                  onResetMask={() => {
+                    if (!image) return;
+
+                    // Reset selected regions
+                    // Logic: Find selected regions and revert maskData to their initial/inner state
+                    // Note: region.innerMaskData is expected to be the "original" mask
+
+                    const newRegions = image.regions.map(r => {
+                      if (r.selected) {
+                        // Reset logic
+                        if (r.originalMaskData) {
+                          return {
+                            ...r,
+                            maskData: new Uint8Array(r.originalMaskData) // Deep copy
+                          };
+                        }
+                      }
+                      return r;
+                    });
+
+                    setImage({ ...image, regions: newRegions });
+                  }}
+                />
+              )}
+
               <div className="relative flex-1 pb-[128px]">
                 <ImageTile
                   tile={image}
@@ -155,6 +233,13 @@ export function Workspace() {
                   hoveredRegionOverride={hoveredRegion}
                   activeMask={activeMask}
                   brushActive={brushActive}
+
+                  // Pass Brush State
+                  brushMode={brushMode}
+                  brushSize={brushSize[0]} // Pass number
+                  brushSoftness={brushSoftness[0]}
+                  brushOpacity={brushOpacity[0]}
+
                   peopleEnabled={peopleEnabled}
                   backgroundEnabled={backgroundEnabled}
                   onUpdateTile={(updates) => {

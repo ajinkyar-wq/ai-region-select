@@ -1,6 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { Paintbrush, Eraser } from 'lucide-react';
-import { Button } from '@/components/ui/button';
 import type { Region } from '@/types/workspace';
 
 interface BrushToolProps {
@@ -16,6 +14,11 @@ interface BrushToolProps {
   canvasHeight: number;
   onMaskUpdate: (newMaskData: Uint8Array) => void;
   onExit: () => void;
+  // New Props
+  mode?: 'add' | 'erase';
+  brushSize?: number;
+  softness?: number; // Not used in logic yet but passed
+  opacity?: number;  // Not used in logic yet but passed
 }
 
 export function BrushTool({
@@ -25,18 +28,16 @@ export function BrushTool({
   canvasHeight,
   onMaskUpdate,
   onExit,
+  mode = 'add',
+  brushSize = 20,
 }: BrushToolProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [mode, setMode] = useState<'add' | 'erase'>('erase');
-  const [brushSize, setBrushSize] = useState(20);
+
+  // Internal drawing state
   const [isDrawing, setIsDrawing] = useState(false);
   const [cursorPos, setCursorPos] = useState({ x: 0, y: 0 });
-  const [buttonPos, setButtonPos] = useState({ x: 0, y: 0 });
-  const [isHoveringButton, setIsHoveringButton] = useState(false);
 
   const maskDataRef = useRef<Uint8Array>(new Uint8Array(region.maskData));
-  const buttonTargetRef = useRef({ x: 0, y: 0 });
-  const buttonCurrentRef = useRef({ x: 0, y: 0 });
 
   // Initialize canvas
   useEffect(() => {
@@ -47,7 +48,13 @@ export function BrushTool({
     canvas.height = imageTransform.height;
 
     renderMask();
-  }, [canvasWidth, canvasHeight]);
+  }, [canvasWidth, canvasHeight, mode]); // Re-render on mode change
+
+  // Sync with external mask updates (Reset)
+  useEffect(() => {
+    maskDataRef.current = new Uint8Array(region.maskData);
+    renderMask();
+  }, [region.maskData]);
 
   // Render current mask state
   const renderMask = () => {
@@ -113,7 +120,6 @@ export function BrushTool({
   };
 
   const handlePointerDown = (e: React.PointerEvent) => {
-    if (isHoveringButton) return;
     setIsDrawing(true);
 
     const rect = e.currentTarget.getBoundingClientRect();
@@ -128,62 +134,21 @@ export function BrushTool({
     const y = e.clientY - rect.top;
 
     setCursorPos({ x, y });
-    buttonTargetRef.current = { x: x + 40, y: y - 40 };
 
-    if (isDrawing && !isHoveringButton) {
+    if (isDrawing) {
       paintAt(x, y);
     }
   };
 
-  const handlePointerUp = () => {
+  const handlePointerUp = (e: React.PointerEvent) => {
     if (isDrawing) {
       setIsDrawing(false);
       onMaskUpdate(new Uint8Array(maskDataRef.current));
+      try {
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch { }
     }
   };
-
-  // Button follow animation
-  useEffect(() => {
-    let raf: number;
-
-    const animate = () => {
-      if (isHoveringButton) {
-        raf = requestAnimationFrame(animate);
-        return;
-      }
-
-      const target = buttonTargetRef.current;
-      const current = buttonCurrentRef.current;
-
-      const dx = target.x - current.x;
-      const dy = target.y - current.y;
-      const distance = Math.hypot(dx, dy);
-
-      const speed = 0.05 * Math.min(distance / 140, 1) ** 2;
-
-      if (distance > 6) {
-        current.x += dx * speed;
-        current.y += dy * speed;
-      }
-
-      buttonCurrentRef.current = current;
-      setButtonPos({ ...current });
-
-      raf = requestAnimationFrame(animate);
-    };
-
-    raf = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(raf);
-  }, [isHoveringButton]);
-
-  // Handle brush size drag
-  const dragRef = useRef({
-    active: false,
-    hasMoved: false,
-    startX: 0,
-    startY: 0,
-    startSize: brushSize,
-  });
 
   return (
     <>
@@ -210,101 +175,31 @@ export function BrushTool({
       </div>
 
       {/* Cursor */}
-      {!isHoveringButton && (
+      <div
+        className="absolute pointer-events-none z-30"
+        style={{
+          left: imageTransform.x + cursorPos.x,
+          top: imageTransform.y + cursorPos.y,
+          transform: 'translate(-50%, -50%)',
+        }}
+      // Force hide cursor when not over canvas? No, keep it.
+      >
         <div
-          className="absolute pointer-events-none z-30"
+          className="rounded-full border-2 transition-colors"
           style={{
-            left: imageTransform.x + cursorPos.x,
-            top: imageTransform.y + cursorPos.y,
-            transform: 'translate(-50%, -50%)',
+            width: brushSize,
+            height: brushSize,
+            borderColor: mode === 'erase' ? 'rgba(255, 80, 80, 0.9)' : 'rgba(34, 197, 94, 0.9)',
+            backgroundColor: mode === 'erase' ? 'rgba(255, 80, 80, 0.1)' : 'rgba(34, 197, 94, 0.1)',
           }}
-        >
-          <div
-            className="rounded-full border-2 transition-colors"
-            style={{
-              width: brushSize,
-              height: brushSize,
-              borderColor: mode === 'erase' ? 'rgba(255, 80, 80, 0.9)' : 'rgba(34, 197, 94, 0.9)',
-              backgroundColor: mode === 'erase' ? 'rgba(255, 80, 80, 0.1)' : 'rgba(34, 197, 94, 0.1)',
-            }}
-          />
-          <div
-            className="absolute top-1/2 left-1/2 w-1 h-1 rounded-full -translate-x-1/2 -translate-y-1/2"
-            style={{
-              backgroundColor: mode === 'erase' ? 'rgb(255, 80, 80)' : 'rgb(34, 197, 94)',
-            }}
-          />
-        </div>
-      )}
-
-      {/* Control button */}
-      {!isDrawing && (
+        />
         <div
-          className="absolute z-30 pointer-events-auto"
+          className="absolute top-1/2 left-1/2 w-1 h-1 rounded-full -translate-x-1/2 -translate-y-1/2"
           style={{
-            left: buttonPos.x,
-            top: buttonPos.y,
-            transform: 'translate(-50%, -50%)',
+            backgroundColor: mode === 'erase' ? 'rgb(255, 80, 80)' : 'rgb(34, 197, 94)',
           }}
-          onPointerEnter={() => setIsHoveringButton(true)}
-          onPointerLeave={() => setIsHoveringButton(false)}
-        >
-          <Button
-            size="icon"
-            variant="secondary"
-            className="h-10 w-10 rounded-full shadow-lg select-none"
-            onPointerDown={(e) => {
-              e.stopPropagation();
-              dragRef.current = {
-                active: true,
-                hasMoved: false,
-                startX: e.clientX,
-                startY: e.clientY,
-                startSize: brushSize,
-              };
-              (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-            }}
-            onPointerMove={(e) => {
-              dragRef.current.hasMoved = true;
-              if (!dragRef.current.active) return;
-
-              const dx = e.clientX - dragRef.current.startX;
-              const dy = dragRef.current.startY - e.clientY;
-              const distance = Math.sqrt(dx * dx + dy * dy);
-              const direction = dy >= 0 ? 1 : -1;
-
-              const nextSize = Math.max(
-                5,
-                Math.min(80, dragRef.current.startSize + distance * 0.15 * direction)
-              );
-
-              setBrushSize(Math.round(nextSize));
-            }}
-            onPointerUp={(e) => {
-              e.stopPropagation();
-
-              const wasDragging = dragRef.current.hasMoved;
-              dragRef.current.active = false;
-              dragRef.current.hasMoved = false;
-
-              try {
-                (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-              } catch { }
-
-              if (!wasDragging) {
-                setMode(prev => (prev === 'add' ? 'erase' : 'add'));
-              }
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {mode === 'add' ? (
-              <Eraser className="h-4 w-4" />
-            ) : (
-              <Paintbrush className="h-4 w-4" />
-            )}
-          </Button>
-        </div>
-      )}
+        />
+      </div>
     </>
   );
 }
