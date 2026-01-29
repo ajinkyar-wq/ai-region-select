@@ -3,7 +3,7 @@ import { ScanAnimation } from './ScanAnimation';
 import { BrushTool } from './BrushTool';
 import { segmentImage } from '@/lib/segmentation';
 import type { ImageTileData, Region } from '@/types/workspace';
-import { RotateCcw } from 'lucide-react';
+import { RotateCcw, Users, Ungroup } from 'lucide-react';
 
 
 
@@ -125,7 +125,19 @@ export function ImageTile({
       const start = Date.now();
 
       const regions = await segmentImage(img, mainCanvas);
-      onUpdateTile({ regions, isProcessing: false });
+
+      onUpdateTile({
+        regions: regions.map(r => {
+          if (r.type === 'people-group') {
+            return { ...r, visible: true };
+          }
+          if (r.type === 'person') {
+            return { ...r, visible: false };
+          }
+          return r;
+        }),
+        isProcessing: false,
+      });
 
       const elapsed = Date.now() - start;
       if (elapsed < 900) {
@@ -161,10 +173,24 @@ export function ImageTile({
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+    const groupVisible = tile.regions.some(
+      r => r.type === 'people-group' && r.visible
+    );
+
     const visibleRegions = tile.regions.filter(r => {
-      if (r.type === 'person' && !peopleEnabled) return false;
-      if (r.type === 'background' && !backgroundEnabled) return false;
-      return r.visible;
+      if (r.type === 'background') {
+        return backgroundEnabled && r.visible;
+      }
+
+      if (r.type === 'people-group') {
+        return r.visible;
+      }
+
+      if (r.type === 'person') {
+        return !groupVisible && peopleEnabled && r.visible;
+      }
+
+      return false;
     });
 
     visibleRegions.forEach(region => {
@@ -201,33 +227,6 @@ export function ImageTile({
         imageData.data[idx + 3] = baseAlpha;
       }
 
-      // ---- PASS 2: INNER↔OUTER SEPARATION LINE (ONLY)
-      if ((isHovered || isSelected) && inner) {
-        const lineAlpha = isSelected ? 220 : 170;
-
-        for (let y = 1; y < h - 1; y++) {
-          for (let x = 1; x < w - 1; x++) {
-            const i = y * w + x;
-
-            // Must be OUTER pixel
-            if (mask[i] <= 0 || inner[i] > 0) continue;
-
-            // Check 4-neighbors for INNER
-            if (
-              inner[i - 1] > 0 ||
-              inner[i + 1] > 0 ||
-              inner[i - w] > 0 ||
-              inner[i + w] > 0
-            ) {
-              const idx = i * 4;
-              imageData.data[idx] = r;
-              imageData.data[idx + 1] = g;
-              imageData.data[idx + 2] = b;
-              imageData.data[idx + 3] = lineAlpha;
-            }
-          }
-        }
-      }
 
       // ---- DRAW
       const tempCanvas = document.createElement('canvas');
@@ -267,80 +266,6 @@ export function ImageTile({
         ctx.restore();
       }
     });
-    // ---- GROUP INNER CONTOURS (from individual people)
-    const isGroupActive = tile.regions.some(
-      r => r.type === 'people-group' &&
-        (r.id === hoveredRegionId || r.selected)
-    );
-
-    if (isGroupActive) {
-      const lineAlpha = 170;
-
-      tile.regions
-        .filter(r => r.type === 'person' && r.innerMaskData)
-        .forEach(person => {
-          const w = person.maskWidth;
-          const h = person.maskHeight;
-          const mask = person.maskData;
-          const inner = person.innerMaskData!;
-
-          const imageData = new ImageData(w, h);
-
-          const colorMatch = person.color.match(/#([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})/i);
-          const r = colorMatch ? parseInt(colorMatch[1], 16) : 255;
-          const g = colorMatch ? parseInt(colorMatch[2], 16) : 80;
-          const b = colorMatch ? parseInt(colorMatch[3], 16) : 80;
-
-          for (let y = 1; y < h - 1; y++) {
-            for (let x = 1; x < w - 1; x++) {
-              const i = y * w + x;
-
-              if (mask[i] <= 0 || inner[i] > 0) continue;
-
-              if (
-                inner[i - 1] > 0 ||
-                inner[i + 1] > 0 ||
-                inner[i - w] > 0 ||
-                inner[i + w] > 0
-              ) {
-                const idx = i * 4;
-                imageData.data[idx] = r;
-                imageData.data[idx + 1] = g;
-                imageData.data[idx + 2] = b;
-                imageData.data[idx + 3] = lineAlpha;
-              }
-            }
-          }
-
-          const temp = document.createElement('canvas');
-          temp.width = w;
-          temp.height = h;
-          temp.getContext('2d')!.putImageData(imageData, 0, 0);
-
-          ctx.drawImage(
-            temp,
-            imageTransform!.x,
-            imageTransform!.y,
-            imageTransform!.width,
-            imageTransform!.height
-          );
-          ctx.save();
-          ctx.globalCompositeOperation = 'screen';
-          ctx.globalAlpha = 0.45;
-          ctx.shadowColor = person.color;
-          ctx.shadowBlur = 16;
-
-          ctx.drawImage(
-            temp,
-            imageTransform!.x,
-            imageTransform!.y,
-            imageTransform!.width,
-            imageTransform!.height
-          );
-          ctx.restore();
-
-        });
-    }
 
   }, [
     tile.regions,
@@ -390,12 +315,15 @@ export function ImageTile({
         const hit = hitTestPersonRegion(x, y, region, imageTransform);
         if (!hit) continue;
 
-        if (hit === 'inner') {
+        if (region.visible) {
           clickedRegion = region;
         } else {
-          clickedRegion =
-            tile.regions.find(r => r.type === 'people-group') ?? null;
+          const group = tile.regions.find(
+            r => r.type === 'people-group' && r.visible
+          );
+          clickedRegion = group ?? null;
         }
+
         break;
       }
 
@@ -494,12 +422,17 @@ export function ImageTile({
         const hit = hitTestPersonRegion(x, y, region, imageTransform);
         if (!hit) continue;
 
-        if (hit === 'inner') {
+        if (region.visible) {
           setEditingRegion(region);
         } else {
-          const group = tile.regions.find(r => r.type === 'people-group');
-          if (group) setEditingRegion(group);
+          const group = tile.regions.find(
+            r => r.type === 'people-group' && r.visible
+          );
+          if (group) {
+            setEditingRegion(group);
+          }
         }
+
         return;
       }
       const bg = tile.regions.find(r => r.type === 'background');
@@ -543,12 +476,17 @@ export function ImageTile({
       const hit = hitTestPersonRegion(x, y, region, imageTransform);
       if (!hit) continue;
 
-      if (hit === 'inner') {
+      // 🔑 IMPORTANT: only hover visible regions
+      if (region.visible) {
         setLocalHoveredRegion(region.id);
       } else {
-        const group = tile.regions.find(r => r.type === 'people-group');
+        // fallback to visible group if it exists
+        const group = tile.regions.find(
+          r => r.type === 'people-group' && r.visible
+        );
         setLocalHoveredRegion(group ? group.id : null);
       }
+
       return;
     }
 
@@ -590,6 +528,35 @@ export function ImageTile({
       }),
     });
   };
+
+  const splitGroup = () => {
+    onUpdateTile({
+      regions: tile.regions.map(r => {
+        if (r.type === 'people-group') {
+          return { ...r, visible: false, selected: false };
+        }
+        if (r.type === 'person') {
+          return { ...r, visible: true };
+        }
+        return r;
+      }),
+    });
+  };
+
+  const groupPeople = () => {
+    onUpdateTile({
+      regions: tile.regions.map(r => {
+        if (r.type === 'people-group') {
+          return { ...r, visible: true, selected: true };
+        }
+        if (r.type === 'person') {
+          return { ...r, visible: false, selected: false };
+        }
+        return r;
+      }),
+    });
+  };
+
 
   function getMaskAnchor(region: Region) {
     const { maskData, maskWidth, maskHeight } = region;
@@ -666,21 +633,48 @@ export function ImageTile({
                     transform: 'translate(-50%, -100%)',
                   }}
                 >
-                  <button
-                    className="
-                     flex h-8 w-8 items-center justify-center
-                     rounded-full bg-black/80 text-white
-                     hover:bg-black
-                    shadow-lg
-                     "
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      resetRegionMask(region.id);
-                    }}
-                    title="Reset mask"
-                  >
-                    <RotateCcw size={14} />
-                  </button>
+                  <div className="flex gap-1">
+                    {/* SPLIT / UNGROUP */}
+                    {region.type === 'people-group' && region.selected && (
+                      <button
+                        className="flex h-8 w-8 items-center justify-center rounded-full bg-black/80 text-white hover:bg-black shadow-lg"
+                        title="Ungroup"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          splitGroup();
+                        }}
+                      >
+                        <Ungroup size={14} />
+                      </button>
+                    )}
+
+                    {/* GROUP */}
+                    {region.type === 'person' &&
+                      !tile.regions.some(r => r.type === 'people-group' && r.visible) && (
+                        <button
+                          className="flex h-8 w-8 items-center justify-center rounded-full bg-black/80 text-white hover:bg-black shadow-lg"
+                          title="Group"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            groupPeople();
+                          }}
+                        >
+                          <Users size={14} />
+                        </button>
+                      )}
+
+                    {/* RESET */}
+                    <button
+                      className="flex h-8 w-8 items-center justify-center rounded-full bg-black/80 text-white hover:bg-black shadow-lg"
+                      title="Reset mask"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        resetRegionMask(region.id);
+                      }}
+                    >
+                      <RotateCcw size={14} />
+                    </button>
+                  </div>
                 </div>
               );
             })}
