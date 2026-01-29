@@ -129,24 +129,24 @@ export function Workspace() {
               style={{ marginRight: isPanelOpen ? 344 : 0 }}
             >
 
-<div className="absolute top-3 right-3 z-30 pointer-events-auto">
-  <button
-    className="
-      h-9 w-9
-      rounded-md
-      bg-black/60
-      border border-white/10
-      text-white
-      flex items-center justify-center
-      hover:bg-black/80
-      transition
-      shadow-md
-    "
-    title="Compare"
-  >
-    <Columns2 className="h-4 w-4 opacity-90" />
-  </button>
-</div>
+              <div className="absolute top-3 right-3 z-30 pointer-events-auto">
+                <button
+                  className="
+                  h-9 w-9
+                  rounded-md
+                  bg-black/60
+                  border border-white/10
+                  text-white
+                  flex items-center justify-center
+                  hover:bg-black/80
+                  transition
+                  shadow-md
+                 "
+                  title="Compare"
+                >
+                  <Columns2 className="h-4 w-4 opacity-90" />
+                </button>
+              </div>
 
               <div className="relative flex-1 pb-[128px]">
                 <ImageTile
