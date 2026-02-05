@@ -58,10 +58,12 @@ export function DraggableToolbar({
   // const [softness, setSoftness] = useState([20]);
   // const [opacity, setOpacity] = useState([70]);
 
-  // We store the exact position. Initial position: Left edge, vertically centered-ish.
-  const [pos, setPos] = useState({ x: 16, y: 100 });
+  // We store the exact position. Initial position is now CSS-based (null), meaning "Right Docked".
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const [orientation, setOrientation] = useState<'vertical' | 'horizontal'>('vertical');
-  const [edge, setEdge] = useState<'left' | 'right' | 'top' | 'bottom'>('left');
+  const [edge, setEdge] = useState<'left' | 'right' | 'top' | 'bottom'>('right'); // Default edge to right conceptually
+
+
 
   const [isDragging, setIsDragging] = useState(false);
   const toolbarRef = useRef<HTMLDivElement>(null);
@@ -179,6 +181,14 @@ export function DraggableToolbar({
   };
 
   const getPositionStyle = () => {
+    if (!pos) {
+      // 12px (top offset) + 36px (button) + 8px (gap) = 56px
+      return {
+        right: 16,
+        top: 56,
+        cursor: isDragging ? 'grabbing' : 'grab',
+      };
+    }
     return {
       left: pos.x,
       top: pos.y,
@@ -214,6 +224,14 @@ export function DraggableToolbar({
     const GAP = 12;
     const PANEL_WIDTH = 240; // Approximate width based on Figma
     const PANEL_HEIGHT = 180; // Approximate height
+
+    if (!pos) {
+      return {
+        right: 16 + 48 + 12, // Margin + Toolbar + Gap
+        top: 56,
+        position: 'absolute'
+      };
+    }
 
     // Defaults
     let style: React.CSSProperties = { position: 'absolute' };

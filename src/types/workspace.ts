@@ -26,6 +26,10 @@ export interface Region {
   visible: boolean;
   selected: boolean;
   hovered: boolean;
+  // Outliner state
+  hasEdits?: boolean;
+  groupId?: string;
+  previewUrl?: string;
 }
 
 export interface ImageTileData {

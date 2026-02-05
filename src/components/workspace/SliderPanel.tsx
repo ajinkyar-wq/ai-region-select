@@ -1,55 +1,107 @@
 import { useState } from 'react';
 import {
-  SlidersHorizontal, Crop, ChevronDown, ChevronRight, Plus,
+  SlidersHorizontal, Crop, ChevronDown, ChevronRight, Plus, PlusCircle,
   Brush,
-  User,
-  Slash,
-  Circle
+  Eye,
+  EyeOff,
+  Trash2,
+  Layers
 } from 'lucide-react';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Slider } from '@/components/ui/slider';
+import type { Region } from '@/types/workspace';
 
 interface SliderPanelProps {
   isOpen?: boolean;
   onToggle?: () => void;
-  onSelectRegion: (type: 'people' | 'background' | null, edit?: boolean) => void;
+  regions: Region[];
+  onSelectRegion: (id: string, multi: boolean) => void;
+  onToggleVisibility: (id: string) => void;
+  onToggleBatchVisibility: (ids: string[], visible: boolean) => void;
+  onDeleteRegion: (id: string) => void;
   onCreateManualMask: () => void;
   onCreateLinearGradient?: () => void;
   onCreateRadialGradient?: () => void;
-  peopleEnabled: boolean;
-  setPeopleEnabled: (v: boolean) => void;
-  backgroundEnabled: boolean;
-  setBackgroundEnabled: (v: boolean) => void;
+  onApplyEdits?: () => void;
+  onSelectBatchRegions?: (ids: string[], multi: boolean) => void;
+  onMoveRegion?: (id: string, targetGroupId: string | undefined) => void;
   showMaskImage: boolean;
 }
 
 export function SliderPanel({
   isOpen = true,
   onToggle,
+  regions,
   onSelectRegion,
+  onToggleVisibility,
+  onToggleBatchVisibility,
+  onDeleteRegion,
   showMaskImage,
-  peopleEnabled,
-  setPeopleEnabled,
-  backgroundEnabled,
-  setBackgroundEnabled,
   onCreateManualMask,
   onCreateLinearGradient,
   onCreateRadialGradient,
+  onApplyEdits,
+  onSelectBatchRegions,
+  onMoveRegion,
 }: SliderPanelProps) {
   const [activeTab, setActiveTab] = useState<'sliders' | 'crop' | 'masking'>('masking');
   const [showAddMaskMenu, setShowAddMaskMenu] = useState(false);
-  const [selectedMaskMode, setSelectedMaskMode] = useState<'brush' | 'linear' | 'radial' | 'range'>('brush');
-  const [accordionStates, setAccordionStates] = useState({
-    people: true,
-    landscape: false,
-    objects: false,
+
+  // Group expansion states
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({
+    'smart-selections': true,
+    'masks': true,
   });
 
-  const toggleAccordion = (key: keyof typeof accordionStates) => {
-    setAccordionStates(prev => ({ ...prev, [key]: !prev[key] }));
+  const toggleGroup = (key: string) => {
+    setExpandedGroups(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
   if (!isOpen) return null;
+
+  // UNIFIED LIST LOGIC
+  // 1. Filter only regions that have edits (Manual masks have edits by default)
+  const editedRegions = regions.filter(r => r.hasEdits);
+
+  // 2. Group by groupId
+  const topLevelItems: (Region | { type: 'group'; id: string; regions: Region[] })[] = [];
+  const groups: Record<string, Region[]> = {};
+
+  editedRegions.forEach(r => {
+    if (r.groupId) {
+      if (!groups[r.groupId]) {
+        groups[r.groupId] = [];
+      }
+      groups[r.groupId].push(r);
+    } else {
+      topLevelItems.push(r);
+    }
+  });
+
+  // 3. Insert Groups into topLevelItems
+  Object.entries(groups).forEach(([groupId, groupRegions]) => {
+    topLevelItems.push({ type: 'group', id: groupId, regions: groupRegions });
+  });
+
+  // Helper for DnD
+  const handleDragStart = (e: React.DragEvent, id: string) => {
+    e.dataTransfer.setData('text/plain', id);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDrop = (e: React.DragEvent, targetGroupId: string | undefined) => {
+    e.preventDefault();
+    const id = e.dataTransfer.getData('text/plain');
+    if (id) {
+      onMoveRegion?.(id, targetGroupId);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
+
+  // Global index for striping across groups
+  let globalIndex = 0;
 
   return (
     <>
@@ -59,9 +111,9 @@ export function SliderPanel({
       </div>
 
       {/* Panel - Full height overlay on right */}
-      <div className="absolute right-0 top-0 z-40 flex h-full w-[344px] flex-col gap-[18px] overflow-y-auto bg-[#1C1C1C]/95 px-4 pt-3 pb-0 shadow-2xl backdrop-blur-[120px]">
+      <div className="absolute right-0 top-0 z-40 flex h-full w-[344px] flex-col gap-0 overflow-y-auto bg-[#1C1C1C]/95 pt-3 pb-0 shadow-2xl backdrop-blur-[120px]">
         {/* Tab Selector */}
-        <div className="flex items-end w-full gap-3">
+        <div className="flex items-end w-full gap-3 px-4 mb-[18px]">
           {/* SLIDERS TAB */}
           <button
             onClick={() => setActiveTab('sliders')}
@@ -113,15 +165,15 @@ export function SliderPanel({
         <div className="h-[1px] w-[344px] bg-[#111111]" />
 
         {/* Masks Header */}
-        <div className="relative flex w-[312px] items-center justify-end gap-2">
-          <h2 className="flex-1 text-[14px] font-semibold leading-[1.4285714285714286] text-[#E2E2E2]" style={{ fontFamily: 'Google Sans, sans-serif' }}>Masks</h2>
+        <div className="relative flex w-full items-center justify-between py-4 px-4">
+          <h2 className="text-[14px] font-semibold leading-[20px] text-[#E2E2E2]" style={{ fontFamily: 'Google Sans, sans-serif' }}>Masks</h2>
 
           <button
             onClick={() => setShowAddMaskMenu(v => !v)}
             className="flex h-4 w-4 items-center justify-center text-white hover:opacity-80"
             aria-label="Add mask"
           >
-            <Plus className="h-4 w-4" />
+            <PlusCircle className="h-4 w-4" />
           </button>
 
           {showAddMaskMenu && (
@@ -185,197 +237,262 @@ export function SliderPanel({
           )}
         </div>
 
-        {/* People Accordion - Expanded */}
-        <div className="flex w-[321px] flex-col justify-center gap-2">
-          <button
-            onClick={() => toggleAccordion('people')}
-            className="flex w-full items-center gap-2"
-          >
-            {accordionStates.people ? (
-              <ChevronDown className="h-4 w-4 text-white" />
+        {/* OUTLINER CONTENT - Inset to match Figma */}
+        <div className="flex flex-col w-full flex-1 px-4"
+          onDragOver={handleDragOver}
+          onDrop={(e) => {
+            // Drop on empty space = root
+            e.stopPropagation();
+            handleDrop(e, undefined);
+          }}
+        >
+          {/* UNIFIED LIST RENDERING */}
+          <div className="flex flex-col w-full min-h-[50px]">
+            {topLevelItems.length === 0 ? (
+              <div className="px-5 py-2 text-[11px] text-[#555] italic">No active masks</div>
             ) : (
-              <ChevronRight className="h-4 w-4 text-white" />
-            )}
-            <div className="flex flex-1 items-center gap-[6px]">
-              <Checkbox
-                id="people"
-                className="h-4 w-4 border-[#474747]"
-                checked={peopleEnabled}
-                onCheckedChange={(checked) => setPeopleEnabled(checked as boolean)}
-                onClick={(e) => e.stopPropagation()}
-              />
-              <label htmlFor="people" className="text-[14px] font-normal leading-[1.14] text-[#E2E2E2] cursor-pointer">
-                People
-              </label>
-            </div>
-          </button>
+              topLevelItems.map((item) => {
+                if ('type' in item && item.type === 'group') {
+                  // RENDER GROUP
+                  const groupRegions = item.regions;
+                  const groupId = item.id;
+                  const isExpanded = expandedGroups[groupId];
+                  const isAllVisible = groupRegions.every(r => r.visible);
 
-          {accordionStates.people && (
-            <div className={`flex flex-wrap gap-1 pl-6 transition-all ${peopleEnabled ? 'opacity-100' : 'opacity-40 pointer-events-none'
-              }`}>
-              {[
-                { label: 'All People', real: true },
-                {
-                  label: 'Person 2',
-                  image: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=200&h=200&q=80',
-                },
-                {
-                  label: 'Person 3',
-                  image: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80',
-                },
-                {
-                  label: 'Person 4',
-                  image: 'https://images.unsplash.com/photo-1527980965255-d3b416303d12?auto=format&fit=crop&w=200&h=200&q=80',
-                },
-              ].map((item, i) => (
-                <div
-                  key={i}
-                  onMouseEnter={() => item.real && onSelectRegion('people')}
-                  onMouseLeave={() => item.real && onSelectRegion(null)}
-                  onClick={() => item.real && onSelectRegion('people')}
-                  onDoubleClick={() => item.real && onSelectRegion('people', true)}
-                  className={`flex h-12 w-12 items-center justify-center overflow-hidden rounded-full
-      ${item.real ? 'cursor-pointer bg-[#3A3A3A]' : 'bg-[#303030]'}`}
-                  title={item.label}
-                >
-                  {item.real ? (
-                    <User className="h-4 w-4 text-white opacity-80" />
-                  ) : (
-                    <img
-                      src={item.image}
-                      alt={item.label}
-                      className="h-full w-full object-cover"
+                  // Consume index for the group header itself
+                  const groupHeaderIndex = globalIndex++;
+
+                  return (
+                    <div
+                      key={groupId}
+                      className="flex flex-col"
+                      onDragOver={handleDragOver}
+                      onDrop={(e) => {
+                        e.stopPropagation();
+                        handleDrop(e, groupId);
+                      }}
+                    >
+                      <div
+                        className={`
+                            group flex items-center justify-between
+                            h-[35px] px-2 cursor-pointer select-none
+                            transition-colors
+                            ${groupHeaderIndex % 2 === 0 ? 'bg-[#222222]' : 'bg-[#272727]'}
+                            hover:bg-[#353535]
+                          `}
+                        onClick={(e) => {
+                          const multi = e.metaKey || e.ctrlKey;
+                          // Batch select all items in group
+                          onSelectBatchRegions?.(groupRegions.map(r => r.id), multi);
+                        }}
+                      >
+                        <div className="flex items-center gap-2 overflow-hidden">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleGroup(groupId);
+                            }}
+                            className="p-0.5 hover:bg-white/10 rounded"
+                          >
+                            {isExpanded ? (
+                              <ChevronDown className="h-3 w-3 text-[#ABABAB]" />
+                            ) : (
+                              <ChevronRight className="h-3 w-3 text-[#ABABAB]" />
+                            )}
+                          </button>
+
+                          {/* Group Icon */}
+                          <div className="w-4 h-4 flex-shrink-0 flex items-center justify-center">
+                            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-[#E2E2E2]">
+                              <path d="M1.75 3.5C2 3.5 1.75 3.5 1.75 3.5H5.25L6.125 4.375H12.25V10.5H1.75V3.5Z" fill="currentColor" fillOpacity="0.8" stroke="currentColor" strokeWidth="1" />
+                            </svg>
+                          </div>
+                          <span className="text-[13px] text-[#E2E2E2] truncate">Mask Group</span>
+                        </div>
+
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onToggleBatchVisibility(groupRegions.map(r => r.id), !isAllVisible);
+                          }}
+                          className={`p-1 hover:text-white ${!isAllVisible ? 'text-white/40' : 'text-[#ABABAB]'}`}
+                        >
+                          {isAllVisible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+                        </button>
+                      </div>
+
+                      {/* Group Children */}
+                      {isExpanded && (
+                        <div className="flex flex-col">
+                          {groupRegions.map((region) => {
+                            const itemIndex = globalIndex++;
+                            return (
+                              <OutlinerItem
+                                key={region.id}
+                                region={region}
+                                index={itemIndex}
+                                onSelect={(multi) => onSelectRegion(region.id, multi)}
+                                onToggleVis={() => onToggleVisibility(region.id)}
+                                onDelete={() => onDeleteRegion(region.id)}
+                                onDragStart={(e) => handleDragStart(e, region.id)}
+                                isChild={true}
+                              />
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                } else {
+                  // RENDER SINGLE ITEM
+                  const region = item as Region;
+                  const itemIndex = globalIndex++;
+                  return (
+                    <OutlinerItem
+                      key={region.id}
+                      region={region}
+                      index={itemIndex}
+                      onSelect={(multi) => onSelectRegion(region.id, multi)}
+                      onToggleVis={() => onToggleVisibility(region.id)}
+                      onDelete={() => onDeleteRegion(region.id)}
+                      onDragStart={(e) => handleDragStart(e, region.id)}
                     />
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Landscape Accordion - Collapsed */}
-        <div className="flex w-[321px] flex-col justify-center gap-2">
-          <button
-            onClick={() => toggleAccordion('landscape')}
-            className="flex w-full items-center gap-2"
-          >
-            {accordionStates.landscape ? (
-              <ChevronDown className="h-4 w-4 text-white" />
-            ) : (
-              <ChevronRight className="h-4 w-4 text-white" />
+                  );
+                }
+              })
             )}
-            <div className="flex flex-1 items-center gap-[6px]">
-              <Checkbox
-                id="landscape"
-                className="h-4 w-4 border-[#474747]"
-                checked={backgroundEnabled}
-                onCheckedChange={(checked) => setBackgroundEnabled(checked as boolean)}
-                onClick={(e) => e.stopPropagation()}
-              />
-              <label htmlFor="landscape" className="text-[14px] font-normal leading-[1.14] text-[#ABABAB] cursor-pointer">
-                Landscape
-              </label>
-            </div>
-          </button>
-
-          {accordionStates.landscape && (
-            <div className="flex flex-col gap-6 pl-6">
-              <div className={`flex flex-wrap gap-1 transition-all ${backgroundEnabled ? 'opacity-100' : 'opacity-40 pointer-events-none'
-                }`}>
-                {[
-                  { label: 'Background', real: true },
-                  {
-                    label: 'Landscape 2',
-                    image: 'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=200&h=200&q=80',
-                  },
-                  {
-                    label: 'Landscape 3',
-                    image: 'https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&w=200&h=200&q=80',
-                  },
-                  {
-                    label: 'Landscape 4',
-                    image: 'https://images.unsplash.com/photo-1470770841072-f978cf4d019e?auto=format&fit=crop&w=200&h=200&q=80',
-                  },
-                ].map((item, i) => (
-                  <div
-                    key={i}
-                    onMouseEnter={() => item.real && onSelectRegion('background')}
-                    onMouseLeave={() => item.real && onSelectRegion(null)}
-                    onClick={() => item.real && onSelectRegion('background')}
-                    onDoubleClick={() => item.real && onSelectRegion('background', true)}
-                    className={`flex h-12 w-12 items-center justify-center overflow-hidden rounded-full
-      ${item.real ? 'cursor-pointer bg-[#3A3A3A]' : 'bg-[#303030]'}`}
-                    title={item.label}
-                  >
-                    {item.real ? (
-                      <Circle className="h-4 w-4 text-white opacity-80" />
-                    ) : (
-                      <img
-                        src={item.image}
-                        alt={item.label}
-                        className="h-full w-full object-cover"
-                      />
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Objects Accordion - Collapsed */}
-        <div className="flex w-[321px] flex-col justify-center gap-2">
-          <button
-            onClick={() => toggleAccordion('objects')}
-            className="flex w-full items-center gap-2"
-          >
-            {accordionStates.objects ? (
-              <ChevronDown className="h-4 w-4 text-white" />
-            ) : (
-              <ChevronRight className="h-4 w-4 text-white" />
-            )}
-            <div className="flex flex-1 items-center gap-[6px]">
-              <Checkbox id="objects" className="h-4 w-4 border-[#474747]" />
-              <label htmlFor="objects" className="text-[14px] font-normal leading-[1.14] text-[#E2E2E2] cursor-pointer">
-                Objects
-              </label>
-            </div>
-          </button>
-
-          {accordionStates.objects && (
-            <div className="flex flex-wrap gap-1 pl-6">
-              {[
-                { url: '/placeholder.svg', label: 'Object 1' },
-                { url: '/placeholder.svg', label: 'Object 2' },
-                { url: '/placeholder.svg', label: 'Object 3' },
-                { url: '/placeholder.svg', label: 'Object 4' },
-              ].map((item, i) => (
-                <div
-                  key={i}
-                  className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-[56px] bg-[#303030] p-1"
-                >
-                  <img src={item.url} alt={item.label} className="h-full w-full rounded-full object-cover" />
-                </div>
-              ))}
-            </div>
-          )}
+          </div>
         </div>
 
         {showMaskImage && (
-          <div className="mt-4 -mx-4">
+          <div className="mt-4">
             <img
               src="/slider-panel.png"
               alt="Mask adjustment preview"
-              className="w-full rounded-md border border-[#2A2A2A]"
+              className="w-full border-t border-b border-[#2A2A2A] cursor-pointer active:scale-[0.99] transition-transform"
+              onClick={() => onApplyEdits?.()}
             />
           </div>
         )}
-
 
         {/* Line 238 - Divider */}
         <div className="h-[1px] w-[344px] bg-[#111111]" />
       </div>
     </>
-
   );
+}
+
+// ----------------------------------------------------------------------
+// SUB-COMPONENT: Outliner Item
+// ----------------------------------------------------------------------
+
+function OutlinerItem({
+  region,
+  index,
+  onSelect,
+  onToggleVis,
+  onDelete,
+  onDragStart,
+  isChild = false
+}: {
+  region: Region;
+  index: number;
+  onSelect: (multi: boolean) => void;
+  onToggleVis: () => void;
+  onDelete?: () => void;
+  onDragStart?: (e: React.DragEvent) => void;
+  isChild?: boolean;
+}) {
+  const Icon = getRegionIcon(region.type);
+
+  return (
+    <div
+      draggable={!!onDragStart}
+      onDragStart={onDragStart}
+      onClick={(e) => {
+        // prevent triggering selection when clicking controls
+        onSelect(e.metaKey || e.ctrlKey);
+      }}
+      className={`
+        group flex items-center justify-between
+        h-[35px] px-2 cursor-pointer select-none
+        transition-colors
+        ${region.selected ? 'bg-[#04395E] text-white' : index % 2 === 0 ? 'bg-[#222222]' : 'bg-[#272727]'}
+        ${!region.selected && 'hover:bg-[#353535] text-[#ABABAB]'}
+        ${isChild ? 'pl-6' : ''}
+      `}
+    >
+      <div className="flex items-center gap-2 overflow-hidden">
+        {/* Preview Thumbnail or Icon */}
+        <div className="w-4 h-4 flex-shrink-0 flex items-center justify-center bg-black/20 rounded-sm">
+          {region.previewUrl ? (
+            <img src={region.previewUrl} className="w-full h-full object-contain" alt="" />
+          ) : (
+            Icon
+          )}
+        </div>
+        <span className="text-[13px] truncate">{region.label || formatType(region.type)}</span>
+      </div>
+
+      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        {onDelete && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+            className="p-1 hover:text-red-400"
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+        )}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleVis();
+          }}
+          className={`p-1 hover:text-white ${!region.visible ? 'text-white/40' : ''}`}
+        >
+          {region.visible ? (
+            <Eye className="h-3.5 w-3.5" />
+          ) : (
+            <EyeOff className="h-3.5 w-3.5" />
+          )}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function getRegionIcon(type: Region['type']) {
+  const className = "h-3.5 w-3.5 opacity-70";
+  switch (type) {
+    case 'manual': return <Brush className={className} />;
+    case 'linear-gradient': return (
+      <svg width="14" height="14" viewBox="0 0 12 12" fill="none" className={className}>
+        <rect x="1.5" y="1.5" width="9" height="9" rx="0.5" stroke="currentColor" />
+      </svg>
+    );
+    case 'radial-gradient': return (
+      <svg width="14" height="14" viewBox="0 0 12 12" fill="none" className={className}>
+        <circle cx="6" cy="6" r="4.5" stroke="currentColor" />
+      </svg>
+    );
+    case 'person': return (
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+        <path d="M8 8C9.65685 8 11 6.65685 11 5C11 3.34315 9.65685 2 8 2C6.34315 2 5 3.34315 5 5C5 6.65685 6.34315 8 8 8Z" stroke="currentColor" />
+        <path d="M8 9C5.33333 9 3 11 3 14H13C13 11 10.6667 9 8 9Z" stroke="currentColor" />
+      </svg>
+    );
+    case 'background': return (
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+        <path d="M2 12L5 8L8 11L11 6L14 12H2Z" stroke="currentColor" />
+      </svg>
+    );
+    default: return <div className="w-3.5 h-3.5 border border-dashed border-current rounded-sm opacity-50" />;
+  }
+}
+
+function formatType(type: string) {
+  return type.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 }

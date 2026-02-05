@@ -12,6 +12,7 @@ import type { ImageTileData, Region } from '@/types/workspace';
 import { REGION_COLORS } from '@/types/workspace';
 import { Columns2, Paintbrush, Eraser } from 'lucide-react';
 import { generateRadialGradientMask } from '@/lib/mask-analysis';
+import { generateMaskPreview } from '@/lib/mask-preview';
 
 export function Workspace() {
   const [image, setImage] = useState<ImageTileData | null>(null);
@@ -41,18 +42,21 @@ export function Workspace() {
     // Use image dimensions if available, else default
     const width = image.width ?? 640;
     const height = image.height ?? 640;
+    const maskData = new Uint8Array(width * height);
 
     const newMask: Region = {
       id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2),
       type: 'manual',
       label: 'My Mask',
-      maskData: new Uint8Array(width * height),
+      maskData,
       maskWidth: width,
       maskHeight: height,
       color: REGION_COLORS.manual,
       visible: true,
       selected: true,
       hovered: false,
+      hasEdits: true, // Manual masks always listed
+      previewUrl: generateMaskPreview(maskData, width, height, REGION_COLORS.manual),
     };
 
     setImage(prev =>
@@ -62,6 +66,66 @@ export function Workspace() {
     setActiveMask(newMask);
     setBrushActive(true);
     setBrushMode('add'); // Default to add
+  };
+
+  const handleApplyEdits = () => {
+    if (!image) return;
+
+    setImage(prev => {
+      if (!prev) return prev;
+
+      const selectedRegions = prev.regions.filter(r => r.selected);
+
+      // Grouping Logic:
+      // 1. If any selected region is already in a group, we merge ALL selected regions into that group.
+      //    (If multiple groups are involved, we pick the first one we encounter - "merging groups")
+      // 2. If no group involved, but multiple items selected, create NEW group.
+      // 3. If single item selected and no group, keep as is (or if it was in a group, it stays in it).
+
+      const existingGroup = selectedRegions.find(r => r.groupId)?.groupId;
+
+      let targetGroupId: string | undefined = existingGroup;
+
+      if (!targetGroupId && selectedRegions.length > 1) {
+        targetGroupId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+      }
+
+      const newRegions = prev.regions.map(r => {
+        if (r.selected) {
+          const previewUrl = r.previewUrl || generateMaskPreview(r.maskData, r.maskWidth, r.maskHeight, r.color);
+          // If we have a target group, enforce it. 
+          // If we DON'T have a target group (single item, never grouped), keep existing groupId (undefined or whatever it was if we didn't want to ungroup).
+          // Wait, if I select a grouped item and click edit, it should stay in group. 
+          // This logic holds because `targetGroupId` will pick it up.
+          // What if I select a grouped item AND an ungrouped item? `targetGroupId` will be the group. Both become grouped. Correct.
+          return { ...r, hasEdits: true, previewUrl, groupId: targetGroupId !== undefined ? targetGroupId : r.groupId };
+        }
+        return r;
+      });
+      return { ...prev, regions: newRegions };
+    });
+  };
+
+  const handleSelectBatchRegions = (ids: string[], multi: boolean) => {
+    if (!image) return;
+    setImage({
+      ...image,
+      regions: image.regions.map(r => {
+        // If ID is in list, select it.
+        // If multi is false, deselect everything else.
+        // If multi is true, keep others as they are.
+        if (ids.includes(r.id)) return { ...r, selected: true };
+        return multi ? r : { ...r, selected: false };
+      })
+    });
+  };
+
+  const handleMoveRegion = (id: string, targetGroupId: string | undefined) => {
+    if (!image) return;
+    setImage({
+      ...image,
+      regions: image.regions.map(r => r.id === id ? { ...r, groupId: targetGroupId } : r)
+    });
   };
 
   const handleEditManualMask = (regionId: string) => {
@@ -99,13 +163,45 @@ export function Workspace() {
         setImage(prev => {
           if (!prev) return prev;
 
-          // Delete Manual OR Gradient if selected
-          const hasSelectedDeletable = prev.regions.some(r => (r.type === 'manual' || r.type === 'linear-gradient' || r.type === 'radial-gradient') && r.selected);
-          if (!hasSelectedDeletable) return prev;
+          // 1. Identify masks to HARD delete (Manual/Gradient)
+          const manualToDelete = prev.regions.filter(r =>
+            (r.type === 'manual' || r.type === 'linear-gradient' || r.type === 'radial-gradient') && r.selected
+          );
+
+          // 2. Identify masks to SOFT delete/reset (AI Masks)
+          const aiToReset = prev.regions.filter(r =>
+            (r.type === 'person' || r.type === 'background' || r.type === 'people-group') && r.selected
+          );
+
+          if (manualToDelete.length === 0 && aiToReset.length === 0) return prev;
+
+          // 3. Clear Active Mask if it's being deleted/reset
+          const allAffected = [...manualToDelete, ...aiToReset];
+          if (activeMask && allAffected.some(r => r.id === activeMask.id)) {
+            setActiveMask(null);
+            setBrushActive(false);
+          }
+
+          // 4. Construct new state
+          // A. Filter out manual masks
+          let newRegions = prev.regions.filter(r => !manualToDelete.some(del => del.id === r.id));
+
+          // B. Reset AI masks
+          newRegions = newRegions.map(r => {
+            if (aiToReset.some(reset => reset.id === r.id)) {
+              return {
+                ...r,
+                hasEdits: false,
+                selected: false,
+                visible: true // Reset visibility too
+              };
+            }
+            return r;
+          });
 
           return {
             ...prev,
-            regions: prev.regions.filter(r => !((r.type === 'manual' || r.type === 'linear-gradient' || r.type === 'radial-gradient') && r.selected))
+            regions: newRegions
           };
         });
       }
@@ -113,7 +209,7 @@ export function Workspace() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [image]);
+  }, [image, activeMask]);
 
   const selectRegionByType = (
     type: 'person' | 'background' | null,
@@ -256,6 +352,8 @@ export function Workspace() {
         visible: true,
         selected: true,
         hovered: false,
+        hasEdits: true,
+        previewUrl: generateMaskPreview(maskData, width, height, REGION_COLORS.manual),
       };
 
       setImage(prev =>
@@ -338,6 +436,8 @@ export function Workspace() {
         visible: true,
         selected: true,
         hovered: false,
+        hasEdits: true,
+        previewUrl: generateMaskPreview(maskData, width, height, REGION_COLORS.manual),
       };
 
       setImage(prev =>
@@ -480,21 +580,69 @@ export function Workspace() {
             <SliderPanel
               isOpen={isPanelOpen}
               onToggle={() => setIsPanelOpen(!isPanelOpen)}
-              onSelectRegion={(type, edit) => {
-                if (edit) {
-                  selectRegionByType(type as 'person' | 'background', true);
-                } else {
-                  setHoveredRegion(type as 'person' | 'background');
+              regions={image?.regions || []}
+              onSelectRegion={(id, multi) => {
+                if (!image) return;
+                const newRegions = image.regions.map(r => {
+                  if (r.id === id) return { ...r, selected: true };
+                  return multi ? r : { ...r, selected: false };
+                });
+                setImage({ ...image, regions: newRegions });
+
+                // Also set active mask if it's a manual/gradient type
+                const selected = newRegions.find(r => r.id === id);
+                if (selected && (selected.type === 'manual' || selected.type === 'linear-gradient' || selected.type === 'radial-gradient')) {
+                  setActiveMask(selected);
                 }
               }}
-              peopleEnabled={peopleEnabled}
+              onToggleVisibility={(id) => {
+                if (!image) return;
+                setImage({
+                  ...image,
+                  regions: image.regions.map(r => r.id === id ? { ...r, visible: !r.visible } : r)
+                });
+              }}
+              onToggleBatchVisibility={(ids, visible) => {
+                if (!image) return;
+                setImage({
+                  ...image,
+                  regions: image.regions.map(r => ids.includes(r.id) ? { ...r, visible } : r)
+                });
+              }}
+              onDeleteRegion={(id) => {
+                if (!image) return;
+                const region = image.regions.find(r => r.id === id);
+                if (!region) return;
+
+                const isManual = region.type === 'manual' || region.type === 'linear-gradient' || region.type === 'radial-gradient';
+
+                setImage(prev => {
+                  if (!prev) return prev;
+                  let newRegions: Region[];
+
+                  if (isManual) {
+                    // Hard Delete
+                    newRegions = prev.regions.filter(r => r.id !== id);
+                  } else {
+                    // Soft Delete (Reset)
+                    newRegions = prev.regions.map(r => r.id === id ? { ...r, hasEdits: false, selected: false, visible: true } : r);
+                  }
+
+                  return { ...prev, regions: newRegions };
+                });
+
+                if (activeMask?.id === id) {
+                  setActiveMask(null);
+                  setBrushActive(false);
+                }
+              }}
               showMaskImage={showMaskImage}
-              setPeopleEnabled={setPeopleEnabled}
-              backgroundEnabled={backgroundEnabled}
               onCreateManualMask={handleCreateManualMask}
               onCreateLinearGradient={handleCreateLinearGradient}
               onCreateRadialGradient={handleCreateRadialGradient}
-              setBackgroundEnabled={setBackgroundEnabled}
+              onApplyEdits={handleApplyEdits}
+              onSelectBatchRegions={handleSelectBatchRegions}
+              onMoveRegion={handleMoveRegion}
             />
           </div>
         </div>

@@ -81,9 +81,13 @@ export function ImageTile({
   useEffect(() => {
     if (editingRegion) {
       const fresh = tile.regions.find(r => r.id === editingRegion.id);
-      // Only update if reference changed (implies update)
-      if (fresh && fresh !== editingRegion) {
-        setEditingRegion(fresh);
+      if (fresh) {
+        if (fresh !== editingRegion) {
+          setEditingRegion(fresh);
+        }
+      } else {
+        // Region was deleted -> Exit Edit Mode
+        setEditingRegion(null);
       }
     }
   }, [tile.regions, editingRegion]);
