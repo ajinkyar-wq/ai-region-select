@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Region } from '@/types/workspace';
 
-interface BrushToolProps {
+interface AIMaskEditorProps {
     region: Region;
     imageTransform: {
         scale: number;
@@ -22,7 +22,7 @@ interface BrushToolProps {
     opacity?: number;
 }
 
-export function BrushTool({
+export function AIMaskEditor({
     region,
     imageTransform,
     canvasWidth,
@@ -30,7 +30,7 @@ export function BrushTool({
     onMaskUpdate,
     mode = 'add',
     brushSize = 20,
-}: BrushToolProps) {
+}: AIMaskEditorProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [isDrawing, setIsDrawing] = useState(false);
     const [cursorPos, setCursorPos] = useState({ x: 0, y: 0 });
@@ -45,17 +45,17 @@ export function BrushTool({
         canvas.width = imageTransform.width;
         canvas.height = imageTransform.height;
 
-        renderMask();
+        renderEditorCanvas();
     }, [canvasWidth, canvasHeight]);
 
     // Sync with external mask changes (e.g. Reset)
     useEffect(() => {
         maskDataRef.current = new Uint8Array(region.maskData);
-        renderMask();
+        renderEditorCanvas();
     }, [region.maskData, region.id]);
 
     // Render current mask state
-    const renderMask = () => {
+    const renderEditorCanvas = () => {
         const canvas = canvasRef.current;
         if (!canvas) return;
 
@@ -91,11 +91,11 @@ export function BrushTool({
 
     // Re-render when mode changes to update preview color
     useEffect(() => {
-        renderMask();
+        renderEditorCanvas();
     }, [mode]);
 
     // Paint into mask
-    const paintAt = (x: number, y: number) => {
+    const processEditorStroke = (x: number, y: number) => {
         const scaleX = region.maskWidth / imageTransform.width;
         const scaleY = region.maskHeight / imageTransform.height;
 
@@ -119,7 +119,7 @@ export function BrushTool({
             }
         }
 
-        renderMask();
+        renderEditorCanvas();
     };
 
     const handlePointerDown = (e: React.PointerEvent) => {
@@ -129,7 +129,7 @@ export function BrushTool({
         const rect = e.currentTarget.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
-        paintAt(x, y);
+        processEditorStroke(x, y);
     };
 
     const handlePointerMove = (e: React.PointerEvent) => {
@@ -140,7 +140,7 @@ export function BrushTool({
         setCursorPos({ x, y });
 
         if (isDrawing) {
-            paintAt(x, y);
+            processEditorStroke(x, y);
         }
     };
 
@@ -168,6 +168,7 @@ export function BrushTool({
                 onPointerMove={handlePointerMove}
                 onPointerUp={handlePointerUp}
                 onPointerLeave={handlePointerUp}
+                onClick={(e) => e.stopPropagation()} // Prevent click from bubbling to backdrop (closing editor)
             >
                 <canvas
                     ref={canvasRef}

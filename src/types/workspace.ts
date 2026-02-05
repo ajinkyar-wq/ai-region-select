@@ -1,4 +1,4 @@
-export type RegionType = 'person' | 'background' | 'manual' | 'people-group';
+export type RegionType = 'person' | 'background' | 'manual' | 'people-group' | 'linear-gradient' | 'radial-gradient';
 
 export interface Region {
   id: string;
@@ -10,6 +10,17 @@ export interface Region {
   innerMaskData?: Uint8Array; // Eroded mask for inner selection zone
   maskWidth: number;
   maskHeight: number;
+  // Gradient params
+  gradient?: {
+    start: { x: number; y: number };
+    end: { x: number; y: number };
+  };
+  radialGradient?: {
+    center: { x: number; y: number }; // Normalized 0-1
+    radius: { x: number; y: number }; // Normalized 0-1 (using x as radius for circle)
+    feather: number; // 0-1 Ratio (Inner Radius / Outer Radius)
+    invert: boolean;
+  };
   // Display properties
   color: string;
   visible: boolean;
@@ -24,6 +35,8 @@ export interface ImageTileData {
   regions: Region[];
   isProcessing: boolean;
   selectedRegionId: string | null;
+  width?: number;
+  height?: number;
 }
 
 export const REGION_COLORS: Record<string, string> = {

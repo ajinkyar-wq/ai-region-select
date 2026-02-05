@@ -14,6 +14,8 @@ interface SliderPanelProps {
   onToggle?: () => void;
   onSelectRegion: (type: 'people' | 'background' | null, edit?: boolean) => void;
   onCreateManualMask: () => void;
+  onCreateLinearGradient?: () => void;
+  onCreateRadialGradient?: () => void;
   peopleEnabled: boolean;
   setPeopleEnabled: (v: boolean) => void;
   backgroundEnabled: boolean;
@@ -31,6 +33,8 @@ export function SliderPanel({
   backgroundEnabled,
   setBackgroundEnabled,
   onCreateManualMask,
+  onCreateLinearGradient,
+  onCreateRadialGradient,
 }: SliderPanelProps) {
   const [activeTab, setActiveTab] = useState<'sliders' | 'crop' | 'masking'>('masking');
   const [showAddMaskMenu, setShowAddMaskMenu] = useState(false);
@@ -125,7 +129,7 @@ export function SliderPanel({
               {/* Brush */}
               <button
                 onClick={() => {
-                  onCreateManualMask();   // ✅ CREATE MASK
+                  onCreateManualMask();
                   setShowAddMaskMenu(false);
                 }}
                 className="flex w-full items-center gap-[6px] px-2 py-2 text-left hover:bg-white/10 rounded"
@@ -152,7 +156,10 @@ export function SliderPanel({
 
               {/* Linear Gradient */}
               <button
-                onClick={() => setShowAddMaskMenu(false)}
+                onClick={() => {
+                  onCreateLinearGradient?.();
+                  setShowAddMaskMenu(false);
+                }}
                 className="flex w-full items-center gap-[6px] px-2 py-2 text-left hover:bg-white/10 rounded"
               >
                 <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -163,7 +170,10 @@ export function SliderPanel({
 
               {/* Radial Gradient */}
               <button
-                onClick={() => setShowAddMaskMenu(false)}
+                onClick={() => {
+                  onCreateRadialGradient?.();
+                  setShowAddMaskMenu(false);
+                }}
                 className="flex w-full items-center gap-[6px] px-2 py-2 text-left hover:bg-white/10 rounded"
               >
                 <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
