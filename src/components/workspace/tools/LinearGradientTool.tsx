@@ -17,6 +17,8 @@ interface LinearGradientToolProps {
     onUpdate: (updates: Partial<Region>) => void;
     onSelect?: (e: React.MouseEvent) => void;
     onDoubleClick?: (e: React.MouseEvent) => void;
+    onDrag?: (delta: { x: number, y: number }) => void;
+    onDragEnd?: () => void;
 }
 
 export function LinearGradientTool({
@@ -26,7 +28,9 @@ export function LinearGradientTool({
     isEditing,
     onUpdate,
     onSelect,
-    onDoubleClick
+    onDoubleClick,
+    onDrag,
+    onDragEnd
 }: LinearGradientToolProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -38,6 +42,7 @@ export function LinearGradientTool({
         isDragging: 'move-center' | 'rotate-start' | 'rotate-end' | 'rotate-pivot' | null;
         initialClickOffset?: { x: number; y: number }; // For relative move
         pivotRadius?: number; // For fixed-radius rotation
+        initialCenter?: { x: number, y: number }; // For calculating total delta
     } | null>(null);
 
     // Sync state with region prop
@@ -53,15 +58,19 @@ export function LinearGradientTool({
             y: region.gradient.end.y * imageTransform.height
         };
 
+        // Only sync if NOT dragging to avoid fighting local updates
         if (!dragState?.isDragging) {
             setDragState({ start, end, isDragging: null });
         }
-    }, [region.gradient, imageTransform?.width, imageTransform?.height, imageTransform?.x, imageTransform?.y]);
+    }, [region.gradient, imageTransform?.width, imageTransform?.height, imageTransform?.x, imageTransform?.y, dragState?.isDragging]);
 
     // Live Gradient Preview
     useEffect(() => {
         const canvas = canvasRef.current;
-        if (!canvas || !dragState || !imageTransform || (!isSelected && !isEditing)) return;
+        // Optimization: Render if dragging OR if selected/editing
+        if (!canvas || !dragState || !imageTransform) return;
+
+        if (!isSelected && !isEditing) return; // Optimization: Don't render active gradient if not selected
 
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
@@ -141,7 +150,8 @@ export function LinearGradientTool({
             ...dragState,
             isDragging: action,
             initialClickOffset,
-            pivotRadius
+            pivotRadius,
+            initialCenter: { ...center }
         });
     };
 
@@ -159,15 +169,31 @@ export function LinearGradientTool({
             const offset = dragState.initialClickOffset || { x: 0, y: 0 };
             const newCenterX = x - offset.x;
             const newCenterY = y - offset.y;
-            const oldCenter = getCenter();
-            const dx = newCenterX - oldCenter.x;
-            const dy = newCenterY - oldCenter.y;
+
+            // Calculate new positions based on center delta
+            const currentCenter = getCenter();
+            const dx = newCenterX - currentCenter.x;
+            const dy = newCenterY - currentCenter.y;
 
             setDragState({
                 ...dragState,
                 start: { x: dragState.start.x + dx, y: dragState.start.y + dy },
                 end: { x: dragState.end.x + dx, y: dragState.end.y + dy }
             });
+
+            // Propagate TOTAL delta for multi-select
+            if (onDrag && dragState.initialCenter) {
+                const totalDeltaX = newCenterX - dragState.initialCenter.x;
+                const totalDeltaY = newCenterY - dragState.initialCenter.y;
+                const scale = imageTransform.scale || 1;
+
+                onDrag({
+                    x: totalDeltaX / scale,
+                    y: totalDeltaY / scale
+                });
+            }
+            // NO onUpdate
+            return;
 
         } else if (dragState.isDragging === 'rotate-start' || dragState.isDragging === 'rotate-end') {
             const center = getCenter();
@@ -188,6 +214,8 @@ export function LinearGradientTool({
             }
 
             setDragState({ ...dragState, start: newStart, end: newEnd });
+            // NO onUpdate
+            return;
 
         } else if (dragState.isDragging === 'rotate-pivot') {
             const center = getCenter();
@@ -220,6 +248,8 @@ export function LinearGradientTool({
                 start: { x: center.x + finalDirX * spread, y: center.y + finalDirY * spread },
                 end: { x: center.x - finalDirX * spread, y: center.y - finalDirY * spread }
             });
+            // NO onUpdate
+            return;
         }
     };
 
@@ -268,6 +298,11 @@ export function LinearGradientTool({
                 maskData: data,
                 gradient: { start: normStart, end: normEnd }
             });
+
+            // Notify parent drag ended (to commit multi-select)
+            if (dragState.isDragging === 'move-center') {
+                onDragEnd?.();
+            }
         }
 
         setDragState({ ...dragState, isDragging: null });
@@ -287,6 +322,7 @@ export function LinearGradientTool({
     if (!isEditing) {
         return (
             <div
+                ref={containerRef}
                 className="absolute inset-0 z-40 pointer-events-none"
                 style={{
                     width: imageTransform.width,
@@ -348,12 +384,21 @@ export function LinearGradientTool({
                     className={cn(
                         "absolute w-4 h-4 rounded cursor-pointer transform -translate-x-1/2 -translate-y-1/2 border-2 pointer-events-auto shadow-md transition-colors",
                         isSelected
-                            ? "bg-blue-600 border-white hover:bg-blue-500" // Selected
+                            ? "bg-blue-600 border-white hover:bg-blue-500 cursor-move" // Selected
                             : "bg-gray-400 border-black/20 hover:bg-white" // Unselected
                     )}
                     style={{ left: center.x, top: center.y }}
+                    onPointerDown={(e) => {
+                        if (isSelected) handlePointerDown(e, 'move-center');
+                    }}
+                    onPointerMove={handlePointerMove}
+                    onPointerUp={handlePointerUp}
                     onClick={(e) => {
                         e.stopPropagation();
+                        // If we dragged, maybe don't toggle select? 
+                        // But pointer interactions prevent click usually if we capture?
+                        // Actually React might still fire click.
+                        // For now, keep simple.
                         onSelect?.(e);
                     }}
                     onDoubleClick={(e) => {

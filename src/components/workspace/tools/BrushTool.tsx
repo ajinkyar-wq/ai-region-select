@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Region } from '@/types/workspace';
+import { applyBrushStroke } from '@/lib/brush-engine';
 
 interface BrushToolProps {
     imageTransform: {
@@ -75,11 +76,11 @@ export function BrushTool({
 
         for (let i = 0; i < maskData.length; i++) {
             const alpha = maskData[i];
-            if (alpha > 10) {
+            if (alpha > 0) {
                 imageData.data[i * 4] = color[0];
                 imageData.data[i * 4 + 1] = color[1];
                 imageData.data[i * 4 + 2] = color[2];
-                imageData.data[i * 4 + 3] = 128; // Semi-transparent preview
+                imageData.data[i * 4 + 3] = Math.round(alpha * 0.6); // Scale alpha for comparison but keep visibility
             }
         }
 
@@ -96,39 +97,9 @@ export function BrushTool({
         ctx.restore();
     };
 
-    const processBrushStroke = (x: number, y: number) => {
-        if (!activeMask || !maskDataRef.current || !imageTransform) return;
 
-        // Transform screen coordinates (relative to image) to mask coordinates
-        const maskW = activeMask.maskWidth;
-        const maskH = activeMask.maskHeight;
 
-        const scaleX = maskW / imageTransform.width;
-        const scaleY = maskH / imageTransform.height;
-
-        const maskX = Math.floor(x * scaleX);
-        const maskY = Math.floor(y * scaleY);
-
-        // Match scaling logic from AIMaskEditor
-        const radius = Math.floor(brushSize * Math.max(scaleX, scaleY) / 2);
-
-        const value = brushMode === 'add' ? 255 : 0;
-        const data = maskDataRef.current;
-
-        for (let dy = -radius; dy <= radius; dy++) {
-            for (let dx = -radius; dx <= radius; dx++) {
-                if (dx * dx + dy * dy <= radius * radius) {
-                    const px = maskX + dx;
-                    const py = maskY + dy;
-
-                    if (px >= 0 && px < activeMask.maskWidth && py >= 0 && py < activeMask.maskHeight) {
-                        data[py * activeMask.maskWidth + px] = value;
-                    }
-                }
-            }
-        }
-        renderBrushOverlay();
-    };
+    const lastPosRef = useRef<{ x: number, y: number } | null>(null);
 
     const handlePointerDown = (e: React.PointerEvent) => {
         if (!imageTransform) return;
@@ -140,7 +111,25 @@ export function BrushTool({
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
 
-        processBrushStroke(x, y);
+        if (activeMask && maskDataRef.current) {
+            applyBrushStroke(
+                { x, y },
+                { x, y }, // Start == End for dot
+                maskDataRef.current,
+                activeMask.maskWidth,
+                activeMask.maskHeight,
+                imageTransform,
+                {
+                    radius: brushSize / 2, // Size is diameter
+                    softness: brushSoftness,
+                    opacity: brushOpacity,
+                    mode: brushMode
+                }
+            );
+            renderBrushOverlay();
+        }
+
+        lastPosRef.current = { x, y };
     };
 
     const handlePointerMove = (e: React.PointerEvent) => {
@@ -151,10 +140,23 @@ export function BrushTool({
         const y = e.clientY - rect.top;
         setCursorPos({ x, y });
 
-        if (isDrawing) {
-            // Simple interpolation to prevent gaps
-            // (Standard behavior for good brush feel, even if AIMaskEditor lacked it)
-            processBrushStroke(x, y);
+        if (isDrawing && activeMask && maskDataRef.current && lastPosRef.current) {
+            applyBrushStroke(
+                lastPosRef.current,
+                { x, y },
+                maskDataRef.current,
+                activeMask.maskWidth,
+                activeMask.maskHeight,
+                imageTransform,
+                {
+                    radius: brushSize / 2,
+                    softness: brushSoftness,
+                    opacity: brushOpacity,
+                    mode: brushMode
+                }
+            );
+            renderBrushOverlay();
+            lastPosRef.current = { x, y };
         }
     };
 

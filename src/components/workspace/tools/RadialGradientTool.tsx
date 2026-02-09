@@ -17,6 +17,8 @@ interface RadialGradientToolProps {
     onUpdate: (updates: Partial<Region>) => void;
     onSelect?: (e: React.MouseEvent) => void;
     onDoubleClick?: (e: React.MouseEvent) => void;
+    onDrag?: (delta: { x: number, y: number }) => void;
+    onDragEnd?: () => void;
 }
 
 export function RadialGradientTool({
@@ -26,7 +28,9 @@ export function RadialGradientTool({
     isEditing,
     onUpdate,
     onSelect,
-    onDoubleClick
+    onDoubleClick,
+    onDrag,
+    onDragEnd
 }: RadialGradientToolProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -39,6 +43,7 @@ export function RadialGradientTool({
         isDragging: 'move-center' | 'resize-outer-n' | 'resize-outer-s' | 'resize-outer-e' | 'resize-outer-w' | 'resize-inner-n' | 'resize-inner-s' | 'resize-inner-e' | 'resize-inner-w' | null;
         initialClickOffset?: { x: number; y: number }; // For relative move
         initialRadius?: { x: number, y: number };
+        initialCenter?: { x: number, y: number }; // For calculating total delta
     } | null>(null);
 
     // Sync state with region prop
@@ -54,6 +59,7 @@ export function RadialGradientTool({
             y: region.radialGradient.radius.y * imageTransform.height
         };
 
+        // Only sync if NOT dragging to avoid fighting local updates
         if (!dragState?.isDragging) {
             setDragState({
                 center,
@@ -62,12 +68,16 @@ export function RadialGradientTool({
                 isDragging: null
             });
         }
-    }, [region.radialGradient, imageTransform?.width, imageTransform?.height, imageTransform?.x, imageTransform?.y]);
+    }, [region.radialGradient, imageTransform?.width, imageTransform?.height, imageTransform?.x, imageTransform?.y, dragState?.isDragging]);
 
-    // Live Gradient Preview
+    // Live Gradient Preview (Uses Local State 'dragState')
     useEffect(() => {
         const canvas = canvasRef.current;
-        if (!canvas || !dragState || !imageTransform || (!isSelected && !isEditing)) return;
+        // Render if dragging OR if selected/editing. 
+        // We always want to render the gradient on the preview canvas if we are active.
+        if (!canvas || !dragState || !imageTransform) return;
+
+        if (!isSelected && !isEditing) return; // Optimization: Don't render if not active (ToolLayer handles inactive view)
 
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
@@ -153,6 +163,7 @@ export function RadialGradientTool({
             isDragging: action,
             initialClickOffset,
             initialRadius: { ...dragState.radius },
+            initialCenter: { ...dragState.center }
         });
     };
 
@@ -170,15 +181,29 @@ export function RadialGradientTool({
 
         let newRadius = { ...dragState.radius };
         let newFeather = dragState.feather;
-        const center = dragState.center;
 
         switch (dragState.isDragging) {
             case 'move-center':
                 const offset = dragState.initialClickOffset || { x: 0, y: 0 };
+                const newX = x - offset.x;
+                const newY = y - offset.y;
+
                 setDragState({
                     ...dragState,
-                    center: { x: x - offset.x, y: y - offset.y }
+                    center: { x: newX, y: newY }
                 });
+
+                // Propagate TOTAL delta in Image Pixels
+                if (onDrag && dragState.initialCenter) {
+                    const deltaScreenX = newX - dragState.initialCenter.x;
+                    const deltaScreenY = newY - dragState.initialCenter.y;
+                    const scale = imageTransform.scale || 1;
+
+                    onDrag({
+                        x: deltaScreenX / scale,
+                        y: deltaScreenY / scale
+                    });
+                }
                 return;
 
             // --- Outer Resizing (Radius) ---
@@ -192,15 +217,14 @@ export function RadialGradientTool({
                 break;
 
             // --- Inner Resizing (Feather) ---
-            // Feather is a ratio (0-1).
-            // We calculate the pointer's projection onto the relevant axis relative to radius.
             case 'resize-inner-e':
-            case 'resize-inner-w': // Keeping logic just in case, but handle removed
+            case 'resize-inner-w':
                 // Horizontal feather
                 newFeather = Math.min(1, Math.max(0, Math.abs(dx) / newRadius.x));
                 break;
         }
 
+        // JUST Update Local State (No onUpdate call here)
         setDragState({
             ...dragState,
             radius: newRadius,
@@ -246,6 +270,11 @@ export function RadialGradientTool({
                     invert: isInverted
                 }
             });
+
+            // Notify parent drag ended (to commit multi-select)
+            if (dragState.isDragging === 'move-center') {
+                onDragEnd?.();
+            }
         }
 
         setDragState({ ...dragState, isDragging: null });
@@ -290,6 +319,7 @@ export function RadialGradientTool({
     if (!isEditing) {
         return (
             <div
+                ref={containerRef}
                 className="absolute inset-0 z-40 pointer-events-none"
                 style={{ width: imageTransform.width, height: imageTransform.height }}
             >
@@ -304,15 +334,23 @@ export function RadialGradientTool({
                 {/* Center Handle for selection */}
                 <div
                     className={cn(
-                        "absolute w-5 h-5 rounded-full cursor-pointer pointer-events-auto transform -translate-x-1/2 -translate-y-1/2 transition-all shadow-[0_2px_5px_rgba(0,0,0,0.2)] flex items-center justify-center z-50",
+                        "absolute w-5 h-5 rounded-full pointer-events-auto transform -translate-x-1/2 -translate-y-1/2 shadow-[0_2px_5px_rgba(0,0,0,0.2)] flex items-center justify-center z-50",
+                        "transition-[transform,background-color,border-color,box-shadow]",
+                        isSelected ? "cursor-move" : "cursor-pointer",
                         // Selected State
                         isSelected
+
                             ? "bg-blue-600 border-2 border-white ring-4 ring-blue-600/20 scale-110"
                             : "bg-white border border-gray-300 ring-4 ring-black/5 hover:ring-black/10 hover:scale-110",
                         // Hover Interaction
                         isSelected && "hover:ring-blue-600/40 hover:scale-125"
                     )}
                     style={{ left: dragState.center.x, top: dragState.center.y }}
+                    onPointerDown={(e) => {
+                        if (isSelected) handlePointerDown(e, 'move-center');
+                    }}
+                    onPointerMove={handlePointerMove}
+                    onPointerUp={handlePointerUp}
                     onClick={(e) => { e.stopPropagation(); onSelect?.(e); }}
                     onDoubleClick={(e) => { e.stopPropagation(); onDoubleClick?.(e); }}
                 >
@@ -331,7 +369,8 @@ export function RadialGradientTool({
     const Handle = ({ x, y, cursor, onDown, isInner }: any) => (
         <div
             className={cn(
-                "absolute rounded-full transform -translate-x-1/2 -translate-y-1/2 transition-all z-50 flex items-center justify-center shadow-[0_2px_4px_rgba(0,0,0,0.2)]",
+                "absolute rounded-full transform -translate-x-1/2 -translate-y-1/2 z-50 flex items-center justify-center shadow-[0_2px_4px_rgba(0,0,0,0.2)]",
+                "transition-[transform,background-color,border-color,box-shadow]",
                 // Base size
                 "w-4 h-4",
                 // Colors & Rings
@@ -380,7 +419,8 @@ export function RadialGradientTool({
             {/* Center Handle */}
             <div
                 className={cn(
-                    "absolute w-5 h-5 bg-blue-500 rounded-full border-2 border-white shadow-[0_2px_5px_rgba(0,0,0,0.3)] cursor-move transform -translate-x-1/2 -translate-y-1/2 z-50 flex items-center justify-center transition-transform",
+                    "absolute w-5 h-5 bg-blue-500 rounded-full border-2 border-white shadow-[0_2px_5px_rgba(0,0,0,0.3)] cursor-move transform -translate-x-1/2 -translate-y-1/2 z-50 flex items-center justify-center",
+                    "transition-[transform,background-color,border-color,box-shadow]",
                     // Outer ring for "selected" feel
                     "ring-2 ring-blue-500/30",
                     dragState.isDragging === 'move-center' ? "scale-110 ring-4 ring-blue-500/50" : "hover:scale-110 hover:ring-4 hover:ring-blue-500/30"

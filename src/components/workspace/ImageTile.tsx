@@ -27,10 +27,15 @@ interface ImageViewProps {
 
   // Renamed for clarity: This activates the global brush tool
   onActivateBrush?: (regionId: string) => void;
+  // Generic activation (unified dispatcher)
+  onActivateRegion?: (regionId: string) => void;
 
   // New Drawing Props
   drawingTool?: 'linear-gradient' | 'radial-gradient' | null;
   onDrawComplete?: (start: { x: number, y: number }, end: { x: number, y: number }) => void;
+
+  // Edit Mode Notification (Local AI Mask Editing)
+  onEditingModeChange?: (isEditing: boolean) => void;
 }
 
 export function ImageTile({
@@ -46,10 +51,12 @@ export function ImageTile({
   brushSoftness,
   brushOpacity,
   onActivateBrush,
+  onActivateRegion,
   drawingTool,
   onDrawComplete,
   peopleEnabled = true,
   backgroundEnabled = true,
+  onEditingModeChange,
 }: ImageViewProps) {
   const mainCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -90,16 +97,31 @@ export function ImageTile({
         setEditingRegion(null);
       }
     }
-  }, [tile.regions, editingRegion]);
 
-  // Auto-Enter Edit Mode for Gradients (Creation / Active)
+    // Notify parent of local edit state change
+    if (onEditingModeChange) {
+      onEditingModeChange(!!editingRegion);
+    }
+  }, [tile.regions, editingRegion, onEditingModeChange]);
+
+  // Auto-Enter Edit Mode when activeMask changes (Activation)
   useEffect(() => {
     if (activeMask) {
-      if (activeMask.type === 'linear-gradient' || activeMask.type === 'radial-gradient') {
+      // Support all editable types: Gradients, Person, Background, People Group, etc
+      // Manual masks are handled globally via onActivateBrush, but we can also set editingRegion if needed for uniformity?
+      // Actually Manual masks use Global Brush, NOT local AIMaskEditor.
+      if (activeMask.type !== 'manual') {
         setEditingRegion(activeMask);
+      } else {
+        // If switching TO manual mask, clear local editor (so Gradient handles disappear)
+        setEditingRegion(null);
       }
+    } else {
+      // Active Mask Cleared -> Exit all local edit modes
+      setEditingRegion(null);
     }
   }, [activeMask]);
+
 
   const MIN_SCALE = 0.3;
   const MAX_SCALE = 4;
@@ -262,20 +284,27 @@ export function ImageTile({
   };
 
   // --- Edit Routing Logic (THE DISPATCHER) ---
+  // --- Edit Routing Logic (THE DISPATCHER) ---
   const handleEditRegion = (regionId: string) => {
     const region = tile.regions.find(r => r.id === regionId);
     if (!region) return;
 
-    if (region.type === 'manual') {
-      // Manual Mask -> Activate Global Brush Tool
-      if (onActivateBrush) onActivateBrush(regionId);
-    } else {
-      // Gradient OR AI Mask -> Enter Local Edit Mode (Modal or In-Place)
-      setEditingRegion(region);
+    // Dispatch activation to parent
+    if (onActivateRegion) {
+      onActivateRegion(regionId);
+    }
 
-      // If Brush was active, ensure we exit it to avoid conflict
-      // (Workspace should handle this via onBrushExit, but we can signal it if needed)
-      if (brushActive && onBrushExit) onBrushExit();
+    // Fallback? Ideally Workspace handles everything now. 
+    // Specifically for Manual masks, onActivateBrush was used, which was just an alias for activation really.
+    // If we unify this, we can deprecate onActivateBrush eventually.
+    // For now, let's keep onActivateBrush for manual if specifically needed, OR just use onActivateRegion for ALL.
+    // The plan said: "Update handleEditRegion to call onActivateRegion(regionId) instead of setEditingRegion".
+
+    if (region.type === 'manual') {
+      if (onActivateBrush) onActivateBrush(regionId);
+      else if (onActivateRegion) onActivateRegion(regionId);
+    } else {
+      if (onActivateRegion) onActivateRegion(regionId);
     }
   };
 
@@ -329,7 +358,7 @@ export function ImageTile({
             isEditing={!!editingRegion}
             onHoverChange={brushActive ? () => { } : setLocalHoveredRegion}
             onUpdateTile={onUpdateTile}
-            onEditRegion={setEditingRegion} // Direct update for AI masks
+            onEditRegion={(r) => handleEditRegion(r.id)} // Direct update for AI masks
           />
         )}
 

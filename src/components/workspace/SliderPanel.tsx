@@ -22,7 +22,10 @@ interface SliderPanelProps {
   onCreateRadialGradient?: () => void;
   onApplyEdits?: () => void;
   onSelectBatchRegions?: (ids: string[], multi: boolean) => void;
-  onMoveRegion?: (id: string, targetGroupId: string | undefined) => void;
+  onMoveRegion?: (id: string, targetGroupId: string | undefined, targetIndex?: number) => void;
+  onDeleteGroup?: (groupId: string) => void;
+  // New Prop for Activation (Double Click)
+  onActivateRegion?: (id: string) => void;
   showMaskImage: boolean;
 }
 
@@ -41,6 +44,8 @@ export function SliderPanel({
   onApplyEdits,
   onSelectBatchRegions,
   onMoveRegion,
+  onDeleteGroup,
+  onActivateRegion,
 }: SliderPanelProps) {
   const [activeTab, setActiveTab] = useState<'sliders' | 'crop' | 'masking'>('masking');
   const [showAddMaskMenu, setShowAddMaskMenu] = useState(false);
@@ -61,25 +66,41 @@ export function SliderPanel({
   // 1. Filter only regions that have edits (Manual masks have edits by default)
   const editedRegions = regions.filter(r => r.hasEdits);
 
-  // 2. Group by groupId
+  // 2. Build Render List respecting original order
+  // We want groups to appear at the position of their FIRST member.
   const topLevelItems: (Region | { type: 'group'; id: string; regions: Region[] })[] = [];
-  const groups: Record<string, Region[]> = {};
+  const processedGroupIds = new Set<string>();
+
+  // Pre-group regions for checks
+  const regionsByGroup: Record<string, Region[]> = {};
+  editedRegions.forEach(r => {
+    if (r.groupId) {
+      if (!regionsByGroup[r.groupId]) regionsByGroup[r.groupId] = [];
+      regionsByGroup[r.groupId].push(r);
+    }
+  });
 
   editedRegions.forEach(r => {
     if (r.groupId) {
-      if (!groups[r.groupId]) {
-        groups[r.groupId] = [];
+      // It's in a group
+      if (!processedGroupIds.has(r.groupId)) {
+        // First time encountering this group -> Render the Whole Group here
+        processedGroupIds.add(r.groupId);
+        topLevelItems.push({
+          type: 'group',
+          id: r.groupId,
+          regions: regionsByGroup[r.groupId] || []
+        });
       }
-      groups[r.groupId].push(r);
     } else {
+      // Root Item
       topLevelItems.push(r);
     }
   });
 
-  // 3. Insert Groups into topLevelItems
-  Object.entries(groups).forEach(([groupId, groupRegions]) => {
-    topLevelItems.push({ type: 'group', id: groupId, regions: groupRegions });
-  });
+  // Drag & Drop State
+  const [dropTarget, setDropTarget] = useState<{ id: string | null; position: 'top' | 'bottom' | 'inside' | null }>({ id: null, position: null });
+  const [lastSelectedId, setLastSelectedId] = useState<string | null>(null);
 
   // Helper for DnD
   const handleDragStart = (e: React.DragEvent, id: string) => {
@@ -87,17 +108,160 @@ export function SliderPanel({
     e.dataTransfer.effectAllowed = 'move';
   };
 
-  const handleDrop = (e: React.DragEvent, targetGroupId: string | undefined) => {
+  const handleDrop = (e: React.DragEvent, targetGroupId: string | undefined, targetIndex?: number) => {
     e.preventDefault();
     const id = e.dataTransfer.getData('text/plain');
     if (id) {
-      onMoveRegion?.(id, targetGroupId);
+      // If no targetIndex is provided, we default to the end? 
+      // Or handle logic in Workspace. 
+      onMoveRegion?.(id, targetGroupId, targetIndex);
     }
   };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
+  };
+
+  // Flatten items for Shift-Select range calculation
+  const getVisibleItems = () => {
+    const items: string[] = [];
+    topLevelItems.forEach(item => {
+      if ('type' in item && item.type === 'group') {
+        items.push(item.id); // Group Header
+        if (expandedGroups[item.id]) {
+          item.regions.forEach(r => items.push(r.id));
+        }
+      } else {
+        items.push((item as Region).id);
+      }
+    });
+    return items;
+  };
+
+  const handleSelectRegion = (id: string, multi: boolean, shift: boolean) => {
+    setLastSelectedId(id);
+
+    if (shift && lastSelectedId) {
+      // Find range
+      const visibleItems = getVisibleItems();
+      const lastIdx = visibleItems.indexOf(lastSelectedId);
+      const currIdx = visibleItems.indexOf(id);
+
+      if (lastIdx !== -1 && currIdx !== -1) {
+        const start = Math.min(lastIdx, currIdx);
+        const end = Math.max(lastIdx, currIdx);
+        const rangeIds = visibleItems.slice(start, end + 1);
+
+        // Filter out groups from selection if we only select regions
+        const regionsToSelect = rangeIds.filter(rid =>
+          !topLevelItems.find(i => 'type' in i && i.type === 'group' && i.id === rid)
+        );
+
+        onSelectBatchRegions?.(regionsToSelect, multi);
+        return;
+      }
+    }
+
+    onSelectRegion(id, multi);
+  };
+
+  const handleDragOverItem = (e: React.DragEvent, id: string, isGroup: boolean) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    const height = rect.height;
+
+    // Thresholds
+    const edgeThreshold = height * 0.25; // Top/Bottom 25%
+
+    if (isGroup) {
+      if (y < edgeThreshold) setDropTarget({ id, position: 'top' });
+      else if (y > height - edgeThreshold) setDropTarget({ id, position: 'bottom' });
+      else setDropTarget({ id, position: 'inside' });
+    } else {
+      if (y < edgeThreshold) setDropTarget({ id, position: 'top' });
+      else if (y > height - edgeThreshold) setDropTarget({ id, position: 'bottom' });
+      else setDropTarget({ id, position: 'inside' });
+    }
+  };
+
+  const handleDragLeave = () => {
+    setDropTarget({ id: null, position: null });
+  };
+
+  const handleDropItem = (e: React.DragEvent, targetId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const { position } = dropTarget;
+    setDropTarget({ id: null, position: null });
+
+    if (!position) return;
+
+    if (position === 'inside') {
+      // Grouping behavior requires no index, just ID
+      handleDrop(e, targetId);
+    } else {
+      // Moving next to an item
+      // We need to find the *index* of the target item in the *Original Regions List*?
+      // Or in the `topLevelItems` list?
+
+      // `Workspace` deals with the `regions` array.
+      // So we should try to find the index in `regions`. 
+      // BUT `SliderPanel` doesn't know the full `regions` array index easily if filtering happens.
+      // However, `editedRegions` is our list.
+
+      // Let's find index in `editedRegions` (which reflects the visual order we want).
+      // If we move Item A before Item B, we want A's index to become B's index.
+
+      // Let's find the target item in `editedRegions`.
+      // NOTE: `targetId` could be a GroupID (if we dropped on a header).
+      // If dropping on Group Header 'top', we want to insert before the group's first item.
+
+      let targetIndex = -1;
+
+      // Function to get absolute index of an item or start of a group in `editedRegions`
+      const getIndexInList = (tid: string): number => {
+        return editedRegions.findIndex(r => r.id === tid || r.groupId === tid);
+      };
+
+      targetIndex = getIndexInList(targetId);
+
+      if (targetIndex !== -1) {
+        // Adjust for bottom drop
+        if (position === 'bottom') {
+          // If it's a group, we need to skip *all* its members to find the "after" index.
+          const targetIsGroup = topLevelItems.find(i => 'type' in i && i.type === 'group' && i.id === targetId);
+          if (targetIsGroup) {
+            // Find the last member of this group in editedRegions
+            // simpler: find index of next item in topLevelItems?
+            // Or just add 1 to index of *last member*.
+            const groupMembers = editedRegions.filter(r => r.groupId === targetId);
+            targetIndex += groupMembers.length;
+          } else {
+            targetIndex += 1;
+          }
+        }
+      }
+
+      // Use logic to determine Parent Group
+      const targetIsGroupHeader = topLevelItems.some(i => 'type' in i && i.type === 'group' && i.id === targetId);
+      let newGroupId: string | undefined;
+
+      if (targetIsGroupHeader) {
+        // If we drop *next* to a group header (top/bottom), we are effectively moving to Root (or parent group).
+        newGroupId = undefined; // Assuming headers are top-level
+      } else {
+        // Dropped next to a region. Use its group ID.
+        const region = editedRegions.find(r => r.id === targetId);
+        newGroupId = region?.groupId;
+      }
+
+      handleDrop(e, newGroupId, targetIndex);
+    }
   };
 
   // Global index for striping across groups
@@ -239,11 +403,17 @@ export function SliderPanel({
 
         {/* OUTLINER CONTENT - Inset to match Figma */}
         <div className="flex flex-col w-full flex-1 px-4"
-          onDragOver={handleDragOver}
+          onDragOver={(e) => {
+            e.preventDefault();
+            // If dragging over empty space, show "Move to Root" intent?
+            // Maybe just clear specific target
+            // setDropTarget({ id: 'root', position: 'inside' }); // Could visualize panel border
+          }}
           onDrop={(e) => {
-            // Drop on empty space = root
+            // Drop on empty space = root, append to end
             e.stopPropagation();
-            handleDrop(e, undefined);
+            setDropTarget({ id: null, position: null });
+            handleDrop(e, undefined, editedRegions.length);
           }}
         >
           {/* UNIFIED LIST RENDERING */}
@@ -258,35 +428,54 @@ export function SliderPanel({
                   const groupId = item.id;
                   const isExpanded = expandedGroups[groupId];
                   const isAllVisible = groupRegions.every(r => r.visible);
+                  const isGroupSelected = groupRegions.length > 0 && groupRegions.every(r => r.selected);
 
                   // Consume index for the group header itself
                   const groupHeaderIndex = globalIndex++;
+                  const isDropTarget = dropTarget.id === groupId;
 
                   return (
                     <div
                       key={groupId}
-                      className="flex flex-col"
-                      onDragOver={handleDragOver}
-                      onDrop={(e) => {
-                        e.stopPropagation();
-                        handleDrop(e, groupId);
-                      }}
+                      className="flex flex-col relative"
                     >
+                      {/* Insertion Lines for Group */}
+                      {isDropTarget && dropTarget.position === 'top' && (
+                        <div className="absolute top-0 left-0 right-0 h-[2px] bg-blue-500 z-50" />
+                      )}
+
                       <div
                         className={`
                             group flex items-center justify-between
                             h-[35px] px-2 cursor-pointer select-none
-                            transition-colors
-                            ${groupHeaderIndex % 2 === 0 ? 'bg-[#222222]' : 'bg-[#272727]'}
-                            hover:bg-[#353535]
+                            transition-colors relative
+                            ${isGroupSelected ? 'bg-[#04395E] text-white' : (groupHeaderIndex % 2 === 0 ? 'bg-[#222222]' : 'bg-[#272727]')}
+                            ${!isGroupSelected && isDropTarget && dropTarget.position === 'inside' ? 'ring-2 ring-blue-500 ring-inset' : ''}
+                            ${!isGroupSelected && 'hover:bg-[#353535]'}
                           `}
+                        draggable={true}
+                        onDragStart={(e) => handleDragStart(e, groupId)}
+                        onDragOver={(e) => handleDragOverItem(e, groupId, true)}
+                        onDragLeave={handleDragLeave}
+                        onDrop={(e) => handleDropItem(e, groupId)}
                         onClick={(e) => {
                           const multi = e.metaKey || e.ctrlKey;
-                          // Batch select all items in group
-                          onSelectBatchRegions?.(groupRegions.map(r => r.id), multi);
+                          const shift = e.shiftKey;
+
+                          if (shift) {
+                            // Handle Shift Select for Groups??
+                            // Usually selects all items inside?
+                            // Let's implement simpler: select group = select all items
+                            onSelectBatchRegions?.(groupRegions.map(r => r.id), true);
+                          } else {
+                            onSelectBatchRegions?.(groupRegions.map(r => r.id), multi);
+                          }
                         }}
                       >
+                        {/* ... Header Content ... */}
                         <div className="flex items-center gap-2 overflow-hidden">
+                          {/* ... */}
+
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
@@ -310,53 +499,103 @@ export function SliderPanel({
                           <span className="text-[13px] text-[#E2E2E2] truncate">Mask Group</span>
                         </div>
 
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onToggleBatchVisibility(groupRegions.map(r => r.id), !isAllVisible);
-                          }}
-                          className={`p-1 hover:text-white ${!isAllVisible ? 'text-white/40' : 'text-[#ABABAB]'}`}
-                        >
-                          {isAllVisible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
-                        </button>
+                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              // Delete Group Icon - Updated to Grey
+                              onDeleteGroup?.(groupId);
+                            }}
+                            className="p-1 text-[#ABABAB] hover:text-white transition-colors"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onToggleBatchVisibility(groupRegions.map(r => r.id), !isAllVisible);
+                            }}
+                            className={`p-1 hover:text-white ${!isAllVisible ? 'text-white/40' : 'text-[#ABABAB]'}`}
+                          >
+                            {isAllVisible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+                          </button>
+                        </div>
                       </div>
 
                       {/* Group Children */}
-                      {isExpanded && (
-                        <div className="flex flex-col">
-                          {groupRegions.map((region) => {
-                            const itemIndex = globalIndex++;
-                            return (
-                              <OutlinerItem
-                                key={region.id}
-                                region={region}
-                                index={itemIndex}
-                                onSelect={(multi) => onSelectRegion(region.id, multi)}
-                                onToggleVis={() => onToggleVisibility(region.id)}
-                                onDelete={() => onDeleteRegion(region.id)}
-                                onDragStart={(e) => handleDragStart(e, region.id)}
-                                isChild={true}
-                              />
-                            );
-                          })}
-                        </div>
-                      )}
+                      {
+                        isExpanded && (
+                          <div className="flex flex-col">
+                            {groupRegions.map((region) => {
+                              const itemIndex = globalIndex++;
+                              return (
+                                <div key={region.id} className="relative">
+                                  {/* Insertion Lines logic for children needed? Yes if we want to reorder within group */}
+                                  {dropTarget.id === region.id && dropTarget.position === 'top' && (
+                                    <div className="absolute top-0 left-0 right-0 h-[2px] bg-blue-500 z-50" />
+                                  )}
+
+                                  <OutlinerItem
+                                    region={region}
+                                    index={itemIndex}
+                                    onSelect={(multi, shift) => handleSelectRegion(region.id, multi, shift!)}
+                                    onActivate={() => onActivateRegion?.(region.id)}
+                                    onToggleVis={() => onToggleVisibility(region.id)}
+                                    onDelete={() => onDeleteRegion(region.id)}
+                                    onDragStart={(e) => handleDragStart(e, region.id)}
+                                    onDragOver={(e) => handleDragOverItem(e, region.id, false)}
+                                    onDrop={(e) => handleDropItem(e, region.id)}
+                                    isChild={true}
+                                    dropTarget={dropTarget.id === region.id ? dropTarget.position : null}
+                                  />
+
+                                  {dropTarget.id === region.id && dropTarget.position === 'bottom' && (
+                                    <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-blue-500 z-50" />
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )
+                      }
+                      {/* Insertion Line Bottom */}
+                      {
+                        isDropTarget && dropTarget.position === 'bottom' && (
+                          <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-blue-500 z-50" />
+                        )
+                      }
                     </div>
                   );
                 } else {
                   // RENDER SINGLE ITEM
                   const region = item as Region;
                   const itemIndex = globalIndex++;
+                  const isDropTarget = dropTarget.id === region.id;
+
                   return (
-                    <OutlinerItem
-                      key={region.id}
-                      region={region}
-                      index={itemIndex}
-                      onSelect={(multi) => onSelectRegion(region.id, multi)}
-                      onToggleVis={() => onToggleVisibility(region.id)}
-                      onDelete={() => onDeleteRegion(region.id)}
-                      onDragStart={(e) => handleDragStart(e, region.id)}
-                    />
+                    <div key={region.id} className="relative">
+                      {isDropTarget && dropTarget.position === 'top' && (
+                        <div className="absolute top-0 left-0 right-0 h-[2px] bg-blue-500 z-50" />
+                      )}
+
+                      <OutlinerItem
+                        region={region}
+                        index={itemIndex}
+                        onSelect={(multi, shift) => handleSelectRegion(region.id, multi, shift!)}
+                        onActivate={() => onActivateRegion?.(region.id)}
+                        onToggleVis={() => onToggleVisibility(region.id)}
+                        onDelete={() => onDeleteRegion(region.id)}
+                        onDragStart={(e) => handleDragStart(e, region.id)}
+                        onDragOver={(e) => handleDragOverItem(e, region.id, false)}
+                        onDrop={(e) => handleDropItem(e, region.id)}
+                        dropTarget={isDropTarget ? dropTarget.position : null}
+                      />
+
+                      {isDropTarget && dropTarget.position === 'bottom' && (
+                        <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-blue-500 z-50" />
+                      )}
+                    </div>
                   );
                 }
               })
@@ -377,7 +616,7 @@ export function SliderPanel({
 
         {/* Line 238 - Divider */}
         <div className="h-[1px] w-[344px] bg-[#111111]" />
-      </div>
+      </div >
     </>
   );
 }
@@ -390,18 +629,26 @@ function OutlinerItem({
   region,
   index,
   onSelect,
+  onActivate,
   onToggleVis,
   onDelete,
   onDragStart,
-  isChild = false
+  onDrop,
+  isChild = false,
+  onDragOver,
+  dropTarget
 }: {
   region: Region;
   index: number;
-  onSelect: (multi: boolean) => void;
+  onSelect: (multi: boolean, shift?: boolean) => void;
+  onActivate?: () => void;
   onToggleVis: () => void;
   onDelete?: () => void;
   onDragStart?: (e: React.DragEvent) => void;
+  onDrop?: (e: React.DragEvent) => void;
+  onDragOver?: (e: React.DragEvent) => void;
   isChild?: boolean;
+  dropTarget?: 'top' | 'bottom' | 'inside' | null;
 }) {
   const Icon = getRegionIcon(region.type);
 
@@ -409,14 +656,29 @@ function OutlinerItem({
     <div
       draggable={!!onDragStart}
       onDragStart={onDragStart}
+      onDragOver={(e) => {
+        if (onDragOver) {
+          onDragOver(e);
+          return;
+        }
+        if (onDrop) {
+          e.preventDefault(); // Allow drop
+        }
+      }}
+      onDrop={onDrop}
       onClick={(e) => {
         // prevent triggering selection when clicking controls
-        onSelect(e.metaKey || e.ctrlKey);
+        onSelect(e.metaKey || e.ctrlKey, e.shiftKey);
+      }}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        onActivate?.();
       }}
       className={`
         group flex items-center justify-between
         h-[35px] px-2 cursor-pointer select-none
         transition-colors
+        ${dropTarget === 'inside' ? 'ring-2 ring-blue-500 ring-inset' : ''}
         ${region.selected ? 'bg-[#04395E] text-white' : index % 2 === 0 ? 'bg-[#222222]' : 'bg-[#272727]'}
         ${!region.selected && 'hover:bg-[#353535] text-[#ABABAB]'}
         ${isChild ? 'pl-6' : ''}

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Region } from '@/types/workspace';
+import { applyBrushStroke } from '@/lib/brush-engine';
 
 interface AIMaskEditorProps {
     region: Region;
@@ -30,6 +31,8 @@ export function AIMaskEditor({
     onMaskUpdate,
     mode = 'add',
     brushSize = 20,
+    softness = 0,
+    opacity = 100,
 }: AIMaskEditorProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [isDrawing, setIsDrawing] = useState(false);
@@ -72,11 +75,11 @@ export function AIMaskEditor({
 
         for (let i = 0; i < maskData.length; i++) {
             const alpha = maskData[i];
-            if (alpha > 10) {
+            if (alpha > 0) {
                 imageData.data[i * 4] = color[0];
                 imageData.data[i * 4 + 1] = color[1];
                 imageData.data[i * 4 + 2] = color[2];
-                imageData.data[i * 4 + 3] = 128; // Semi-transparent preview
+                imageData.data[i * 4 + 3] = Math.round(alpha * 0.6);
             }
         }
 
@@ -94,33 +97,7 @@ export function AIMaskEditor({
         renderEditorCanvas();
     }, [mode]);
 
-    // Paint into mask
-    const processEditorStroke = (x: number, y: number) => {
-        const scaleX = region.maskWidth / imageTransform.width;
-        const scaleY = region.maskHeight / imageTransform.height;
-
-        const maskX = Math.floor(x * scaleX);
-        const maskY = Math.floor(y * scaleY);
-        const radius = Math.floor(brushSize * Math.max(scaleX, scaleY) / 2);
-
-        const value = mode === 'add' ? 255 : 0;
-
-        for (let dy = -radius; dy <= radius; dy++) {
-            for (let dx = -radius; dx <= radius; dx++) {
-                if (dx * dx + dy * dy <= radius * radius) {
-                    const px = maskX + dx;
-                    const py = maskY + dy;
-
-                    if (px >= 0 && px < region.maskWidth && py >= 0 && py < region.maskHeight) {
-                        const idx = py * region.maskWidth + px;
-                        maskDataRef.current[idx] = value;
-                    }
-                }
-            }
-        }
-
-        renderEditorCanvas();
-    };
+    const lastPosRef = useRef<{ x: number, y: number } | null>(null);
 
     const handlePointerDown = (e: React.PointerEvent) => {
         setIsDrawing(true);
@@ -129,7 +106,27 @@ export function AIMaskEditor({
         const rect = e.currentTarget.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
-        processEditorStroke(x, y);
+
+        applyBrushStroke(
+            { x, y },
+            { x, y },
+            maskDataRef.current,
+            region.maskWidth,
+            region.maskHeight,
+            imageTransform, // { x, y, width, height, scale } - type mismatch? AIMaskEditor uses a subset but keys needed are width/height.
+            // Wait, AIMaskEditor props: imageTransform: { scale, x, y, width, height }
+            // brush-engine expects { scale, width, height } (scale not used? actually scaleX/scaleY derived from width/height).
+            // Let's check brush-engine interface. It needs transform: { width, height }.
+            // AIMaskEditor imageTransform HAS width/height.
+            {
+                radius: brushSize / 2,
+                softness,
+                opacity,
+                mode
+            }
+        );
+        renderEditorCanvas();
+        lastPosRef.current = { x, y };
     };
 
     const handlePointerMove = (e: React.PointerEvent) => {
@@ -139,8 +136,23 @@ export function AIMaskEditor({
 
         setCursorPos({ x, y });
 
-        if (isDrawing) {
-            processEditorStroke(x, y);
+        if (isDrawing && lastPosRef.current) {
+            applyBrushStroke(
+                lastPosRef.current,
+                { x, y },
+                maskDataRef.current,
+                region.maskWidth,
+                region.maskHeight,
+                imageTransform,
+                {
+                    radius: brushSize / 2,
+                    softness,
+                    opacity,
+                    mode
+                }
+            );
+            renderEditorCanvas();
+            lastPosRef.current = { x, y };
         }
     };
 

@@ -10,6 +10,8 @@ export interface Region {
   innerMaskData?: Uint8Array; // Eroded mask for inner selection zone
   maskWidth: number;
   maskHeight: number;
+  // Offset for manual masks
+  offset?: { x: number; y: number };
   // Gradient params
   gradient?: {
     start: { x: number; y: number };

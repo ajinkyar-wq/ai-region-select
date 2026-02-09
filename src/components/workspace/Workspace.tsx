@@ -23,6 +23,7 @@ export function Workspace() {
   const [backgroundEnabled, setBackgroundEnabled] = useState(true);
   const [activeMask, setActiveMask] = useState<Region | null>(null);
   const [brushActive, setBrushActive] = useState(false);
+  const [isLocalEditing, setIsLocalEditing] = useState(false); // For AI Mask Editor
   const [hoveredRegion, setHoveredRegion] = useState<'person' | 'background' | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -33,6 +34,9 @@ export function Workspace() {
 
   // New Drawing Mode State
   const [drawingTool, setDrawingTool] = useState<'linear-gradient' | 'radial-gradient' | null>(null);
+
+  // Clipboard State
+  const [clipboard, setClipboard] = useState<Region[]>([]);
 
   const showMaskImage = !!image?.regions.some(r => r.selected);
 
@@ -60,12 +64,19 @@ export function Workspace() {
     };
 
     setImage(prev =>
-      prev ? { ...prev, regions: [...prev.regions, newMask] } : prev
+      prev ? {
+        ...prev,
+        regions: [
+          ...prev.regions.map(r => ({ ...r, selected: false })),
+          newMask
+        ]
+      } : prev
     );
 
     setActiveMask(newMask);
     setBrushActive(true);
     setBrushMode('add'); // Default to add
+    setDrawingTool(null); // Clear any other tool
   };
 
   const handleApplyEdits = () => {
@@ -120,23 +131,195 @@ export function Workspace() {
     });
   };
 
-  const handleMoveRegion = (id: string, targetGroupId: string | undefined) => {
+  const handleMoveRegion = (id: string, targetGroupId: string | undefined, targetIndex?: number) => {
     if (!image) return;
-    setImage({
-      ...image,
-      regions: image.regions.map(r => r.id === id ? { ...r, groupId: targetGroupId } : r)
-    });
+
+    // Determine which regions to move
+    let movingRegionIds: string[] = [];
+
+    // Check if 'id' is a group ID first
+    const isGroup = image.regions.some(r => r.groupId === id);
+    // If it's a group header drag, 'id' will match a groupId but NOT a region ID (unless collision, unlikely)
+    // Actually, we need to be careful. region IDs are UUIDs. group IDs are too.
+
+    // Let's see if we find a region with this ID.
+    const draggedRegion = image.regions.find(r => r.id === id);
+
+    if (!draggedRegion) {
+      // Might be a Group ID
+      const regionsInGroup = image.regions.filter(r => r.groupId === id);
+      if (regionsInGroup.length > 0) {
+        movingRegionIds = regionsInGroup.map(r => r.id);
+      } else {
+        // Unknown ID
+        return;
+      }
+    } else {
+      // It's a region
+      movingRegionIds = (draggedRegion.selected)
+        ? image.regions.filter(r => r.selected).map(r => r.id)
+        : [id];
+    }
+
+    const targetIsRegion = image.regions.find(r => r.id === targetGroupId);
+
+    if (targetIsRegion) {
+      // CASE 1: Dropped onto another region -> Create NEW Group
+      const newGroupId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+
+      setImage(prev => {
+        if (!prev) return prev;
+
+        let newRegions = [...prev.regions];
+
+        // Find index of target region to insert source items there
+        // We want the group to form AT the target location.
+        // So we need to move movingRegions to be next to targetRegion.
+
+        // 1. Remove moving regions
+        // (Note: movingRegionIds might be multiple if multi-select merge? Assume yes)
+        const movingRegionsData = newRegions.filter(r => movingRegionIds.includes(r.id));
+        newRegions = newRegions.filter(r => !movingRegionIds.includes(r.id));
+
+        // 2. Find target index (in potentially modified array? No, target is not moving)
+        const targetIndex = newRegions.findIndex(r => r.id === targetGroupId);
+
+        // 3. Update all to new group
+        const updatedMoving = movingRegionsData.map(r => ({ ...r, groupId: newGroupId }));
+
+        // 4. Update target to new group too
+        if (targetIndex !== -1) {
+          newRegions[targetIndex] = { ...newRegions[targetIndex], groupId: newGroupId };
+
+          // Insert moving items AFTER target? or BEFORE?
+          // "Drop onto" usually implies they become siblings. 
+          // Let's insert AFTER for now.
+          newRegions.splice(targetIndex + 1, 0, ...updatedMoving);
+        } else {
+          // Fallback: just append (shouldn't happen if target found)
+          newRegions.push(...updatedMoving);
+        }
+
+        return { ...prev, regions: newRegions };
+      });
+    } else {
+      // CASE 2: Dropped into a Group OR Root
+      // targetGroupId is the new Group ID (or undefined for Root)
+      // targetIndex is the visual index in the list
+
+      setImage(prev => {
+        if (!prev) return prev;
+
+        let newRegions = [...prev.regions];
+        const movingRegions = newRegions.filter(r => movingRegionIds.includes(r.id));
+
+        // Remove moving regions from array
+        newRegions = newRegions.filter(r => !movingRegionIds.includes(r.id));
+
+        // Update groupId for moving regions
+        const updatedMovingRegions = movingRegions.map(r => {
+          // If we are dragging a Group Header (isGroup is true for the DRAG SOURCE),
+          // and we are simply reordering (not dropping into another group),
+          // we should PRESERVE the existing groupId.
+
+          // Logic:
+          // if isGroupDrag and targetGroupId is undefined (Root), keep current groupId.
+          // if isGroupDrag and targetGroupId is defined (Nested Group? Not supported yet), use target.
+
+          // We detected `isGroup` at the top of function based on `id`.
+
+          if (isGroup && targetGroupId === undefined) {
+            return { ...r }; // Keep existing groupId
+          }
+
+          return {
+            ...r,
+            groupId: targetGroupId
+          };
+        });
+
+        // Insert at targetIndex
+        if (typeof targetIndex === 'number') {
+          // Fix: targetIndex is based on "edited regions" (visible list), but regions contains everything.
+          // We need to find the "Anchor Region" in the full list that corresponds to targetIndex in the filtered list.
+
+          // 1. Get the list of regions that match the criteria used in SliderPanel (hasEdits)
+          // Note: We use 'prev.regions' (BEFORE removal) to find the anchor? 
+          // No, SliderPanel calculated index based on the list state *before* the drop? 
+          // Usually yes. But we need to insert into `newRegions` (AFTER removal).
+          // So we should find the anchor in `newRegions` (which currently lacks the moving items).
+
+          // SliderPanel's `editedRegions` includes the moving item. 
+          // If I drop at index 5, it means "I want to be at index 5".
+          // If I remove the item, index 5 might shift.
+
+          // Let's rely on finding the region that *should be after* our new position.
+          // In SliderPanel, `editedRegions` is the snapshot.
+          // `targetIndex` is where we want to insert.
+
+          // Let's filter `newRegions` (which has moving items removed) to get `remainingVisibleRegions`.
+          const remainingVisibleRegions = newRegions.filter(r => r.hasEdits);
+
+          let insertIndex = newRegions.length; // Default to end
+
+          if (targetIndex >= remainingVisibleRegions.length) {
+            // Append to end of visible regions (which effectively means end of list or after last visible)
+            if (remainingVisibleRegions.length > 0) {
+              const lastVisible = remainingVisibleRegions[remainingVisibleRegions.length - 1];
+              insertIndex = newRegions.findIndex(r => r.id === lastVisible.id) + 1;
+            }
+          } else {
+            // Insert before the item at targetIndex
+            const anchorRegion = remainingVisibleRegions[targetIndex];
+            if (anchorRegion) {
+              insertIndex = newRegions.findIndex(r => r.id === anchorRegion.id);
+            }
+          }
+
+          newRegions.splice(insertIndex, 0, ...updatedMovingRegions);
+        } else {
+          // formatting fallback: append
+          newRegions.push(...updatedMovingRegions);
+        }
+
+        return {
+          ...prev,
+          regions: newRegions
+        };
+      });
+    }
+  };
+
+  const handleDeleteGroup = (groupId: string) => {
+    if (!image) return;
+    setImage(prev => prev ? {
+      ...prev,
+      regions: prev.regions.filter(r => r.groupId !== groupId)
+    } : prev);
   };
 
   const handleEditManualMask = (regionId: string) => {
     if (!image) return;
+
+    // Deselect others
+    setImage(prev => prev ? {
+      ...prev,
+      regions: prev.regions.map(r => ({ ...r, selected: r.id === regionId }))
+    } : prev);
+
     const region = image.regions.find(r => r.id === regionId);
     if (region && region.type === 'manual') {
       setActiveMask(region);
       setBrushActive(true);
       setBrushMode('add');
+      setDrawingTool(null); // Clear any other tool
     }
   };
+
+  // Called when AI Mask Editor enters/exits in ImageTile
+  const handleLocalEditChange = useCallback((isEditing: boolean) => {
+    setIsLocalEditing(isEditing);
+  }, []);
 
   const handleFileDrop = useCallback((file: File) => {
     const imageUrl = URL.createObjectURL(file);
@@ -205,11 +388,129 @@ export function Workspace() {
           };
         });
       }
+
+      // Handle Escape Key (Exit Edit/Drawing Mode)
+      if (e.key === 'Escape') {
+        if (drawingTool) {
+          setDrawingTool(null);
+        }
+        if (brushActive) {
+          setBrushActive(false);
+        }
+        if (activeMask) {
+          setActiveMask(null);
+        }
+      }
+
+
+      // Handle Copy (Cmd+C)
+      if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
+        const selectedRegions = image.regions.filter(r => r.selected);
+        if (selectedRegions.length > 0) {
+          e.preventDefault();
+          // Deep copy
+          const toCopy = selectedRegions.map(r => {
+            // Clone Uint8Array
+            const maskData = new Uint8Array(r.maskData);
+            const originalMaskData = r.originalMaskData ? new Uint8Array(r.originalMaskData) : undefined;
+            const innerMaskData = r.innerMaskData ? new Uint8Array(r.innerMaskData) : undefined;
+            return { ...r, maskData, originalMaskData, innerMaskData };
+          });
+          setClipboard(toCopy);
+          return;
+        }
+      }
+
+      // Handle Paste (Cmd+V)
+      if ((e.metaKey || e.ctrlKey) && e.key === 'v') {
+        if (clipboard.length > 0) {
+          e.preventDefault();
+
+          // 1. Prepare new items (Generate IDs and Offsets first)
+          const newItems = clipboard.map(item => {
+            const newId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+            const offsetPx = 20;
+
+            // Clone Data
+            const maskData = new Uint8Array(item.maskData);
+            const originalMaskData = item.originalMaskData ? new Uint8Array(item.originalMaskData) : undefined;
+            const innerMaskData = item.innerMaskData ? new Uint8Array(item.innerMaskData) : undefined;
+
+            // Base Item
+            let newItem: Region = {
+              ...item,
+              id: newId,
+              selected: true,
+              maskData,
+              originalMaskData,
+              innerMaskData, // Preserved
+              visible: true,
+              groupId: undefined,
+            };
+
+            // Apply Offsets based on Image Dimensions (using current state)
+            // We need access to 'image' state here.
+            // 'image' is in scope (closure).
+            const w = image?.width ?? 640;
+            const h = image?.height ?? 640;
+            const dx = offsetPx / w;
+            const dy = offsetPx / h;
+
+            if (item.type === 'linear-gradient' && item.gradient) {
+              newItem.gradient = {
+                start: { x: item.gradient.start.x + dx, y: item.gradient.start.y + dy },
+                end: { x: item.gradient.end.x + dx, y: item.gradient.end.y + dy }
+              };
+            } else if (item.type === 'radial-gradient' && item.radialGradient) {
+              newItem.radialGradient = {
+                ...item.radialGradient,
+                center: { x: item.radialGradient.center.x + dx, y: item.radialGradient.center.y + dy }
+              };
+            } else if (item.type === 'manual') {
+              newItem.offset = {
+                x: (item.offset?.x || 0) + offsetPx,
+                y: (item.offset?.y || 0) + offsetPx
+              };
+            }
+
+            return newItem;
+          });
+
+          // 2. Update Image State
+          setImage(prev => {
+            if (!prev) return prev;
+            // Deselect existing
+            const existingRegions = prev.regions.map(r => ({ ...r, selected: false }));
+            return {
+              ...prev,
+              regions: [...existingRegions, ...newItems]
+            };
+          });
+
+          // 3. Auto-Enter Edit Mode if Single Item
+          if (newItems.length === 1) {
+            const newItem = newItems[0];
+            setActiveMask(newItem);
+
+            if (newItem.type === 'manual') {
+              setBrushActive(true);
+              setDrawingTool(null);
+            } else {
+              setBrushActive(false);
+              setDrawingTool(null);
+            }
+          } else {
+            // Multi-paste: Just clear active mask to avoid confusion
+            setActiveMask(null);
+            setBrushActive(false);
+          }
+        }
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [image, activeMask]);
+  }, [image, activeMask, brushActive, drawingTool]);
 
   const selectRegionByType = (
     type: 'person' | 'background' | null,
@@ -237,6 +538,7 @@ export function Workspace() {
       // ✅ ENTER EDIT MODE
       setActiveMask(region);
       setBrushActive(true);
+      setDrawingTool(null);
       return;
     }
 
@@ -287,6 +589,7 @@ export function Workspace() {
       regions: prev.regions.map(r => ({ ...r, selected: false }))
     } : prev);
     setBrushActive(false);
+    setActiveMask(null);
   };
 
   const handleCreateRadialGradient = () => {
@@ -298,6 +601,7 @@ export function Workspace() {
       regions: prev.regions.map(r => ({ ...r, selected: false }))
     } : prev);
     setBrushActive(false);
+    setActiveMask(null);
   };
 
   // Callback when user finishes dragging to create gradient
@@ -490,8 +794,9 @@ export function Workspace() {
                 </button>
               </div>
 
-              {/* Draggable Toolbar */}
-              {image && image.regions.some(r => r.selected && r.type !== 'linear-gradient' && r.type !== 'radial-gradient') && (
+              {/* DraggableToolbar: Only shows when explicitly ACTIVATED (Double Click / Edit Mode) 
+                  AND it's a Brush-based tool (Manual or AI Mask). Gradients use on-canvas handles. */}
+              {image && (brushActive || (isLocalEditing && activeMask && activeMask.type !== 'linear-gradient' && activeMask.type !== 'radial-gradient')) && (
                 <DraggableToolbar
                   containerRef={containerRef}
                   activeId={brushActive ? (brushMode === 'erase' ? 'eraser' : 'brush') : 'move'}
@@ -562,9 +867,49 @@ export function Workspace() {
                   peopleEnabled={peopleEnabled}
                   backgroundEnabled={backgroundEnabled}
                   onUpdateTile={(updates) => {
-                    setImage(prev => (prev ? { ...prev, ...updates } : prev));
+                    setImage(prev => {
+                      if (!prev) return prev;
+
+                      // Check if maskData changed for any region, if so regenerate preview
+                      let regions = prev.regions;
+                      if (updates.regions) {
+                        regions = updates.regions.map(updatedRegion => {
+                          const oldRegion = prev.regions.find(r => r.id === updatedRegion.id);
+                          if (oldRegion && updatedRegion.maskData && updatedRegion.maskData !== oldRegion.maskData) {
+                            // Mask changed, regenerate preview
+                            const previewUrl = generateMaskPreview(
+                              updatedRegion.maskData,
+                              updatedRegion.maskWidth,
+                              updatedRegion.maskHeight,
+                              updatedRegion.color
+                            );
+                            return { ...updatedRegion, previewUrl };
+                          }
+                          return updatedRegion;
+                        });
+                      }
+
+                      return { ...prev, ...updates, regions };
+                    });
                   }}
                   onActivateBrush={handleEditManualMask}
+                  onActivateRegion={(id) => {
+                    if (!image) return;
+                    const region = image.regions.find(r => r.id === id);
+                    if (region) {
+                      setActiveMask(region);
+
+                      // ONLY activate Brush Toolbar for Manual Masks
+                      if (region.type === 'manual') {
+                        setBrushActive(true);
+                        setBrushMode('add');
+                      } else {
+                        // For Gradients/AI, we do NOT want the brush toolbar
+                        setBrushActive(false);
+                      }
+                    }
+                  }}
+                  onEditingModeChange={handleLocalEditChange}
                 />
               </div>
 
@@ -587,13 +932,26 @@ export function Workspace() {
                   if (r.id === id) return { ...r, selected: true };
                   return multi ? r : { ...r, selected: false };
                 });
+                // Only update selection state
                 setImage({ ...image, regions: newRegions });
 
-                // Also set active mask if it's a manual/gradient type
-                const selected = newRegions.find(r => r.id === id);
-                if (selected && (selected.type === 'manual' || selected.type === 'linear-gradient' || selected.type === 'radial-gradient')) {
-                  setActiveMask(selected);
+                // NOTE: We NO LONGER set activeMask here. 
+                // Activation (Edit Mode) is now explicit via onActivateRegion (Double Click).
+              }}
+              onActivateRegion={(id) => {
+                if (!image) return;
+                const region = image.regions.find(r => r.id === id);
+                if (!region) return;
+
+                // Explicit Activation -> Edit Mode
+                setActiveMask(region);
+
+                // Specific behavior per type
+                if (region.type === 'manual') {
+                  setBrushActive(true);
+                  setBrushMode('add');
                 }
+                // For AI/Gradient, ImageTile's useEffect on activeMask will handle it
               }}
               onToggleVisibility={(id) => {
                 if (!image) return;
@@ -643,6 +1001,7 @@ export function Workspace() {
               onApplyEdits={handleApplyEdits}
               onSelectBatchRegions={handleSelectBatchRegions}
               onMoveRegion={handleMoveRegion}
+              onDeleteGroup={handleDeleteGroup}
             />
           </div>
         </div>

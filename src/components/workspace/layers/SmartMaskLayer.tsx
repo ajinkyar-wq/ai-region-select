@@ -91,13 +91,15 @@ export function SmartMaskLayer({
 
             // ---- PASS 1: NORMAL MASK RENDER (NO DISTORTION)
             for (let i = 0; i < mask.length; i++) {
-                if (mask[i] <= 0 || baseAlpha === 0) continue;
+                const maskVal = mask[i];
+                if (maskVal <= 0 || baseAlpha === 0) continue;
 
                 const idx = i * 4;
                 imageData.data[idx] = r;
                 imageData.data[idx + 1] = g;
                 imageData.data[idx + 2] = b;
-                imageData.data[idx + 3] = baseAlpha;
+                // Scale baseAlpha by mask value (maskVal / 255)
+                imageData.data[idx + 3] = Math.round((maskVal / 255) * baseAlpha);
             }
 
             // ---- PASS 2: INNER↔OUTER SEPARATION LINE (ONLY)
@@ -333,7 +335,7 @@ export function SmartMaskLayer({
     };
 
     const handleCanvasClick = (e: React.MouseEvent) => {
-        const isMultiToggle = e.ctrlKey || e.metaKey;
+        const isMultiToggle = e.ctrlKey || e.metaKey || e.shiftKey;
         if (isEditing) {
             // Should probably not happen due to layer ordering or logic, but safety first
             return;
