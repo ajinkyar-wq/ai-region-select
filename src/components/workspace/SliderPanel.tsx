@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { SliderPanelContent } from './SliderPanelContent';
 import {
   SlidersHorizontal, Crop, ChevronDown, ChevronRight, Plus, PlusCircle,
   Brush,
@@ -402,7 +403,7 @@ export function SliderPanel({
         </div>
 
         {/* OUTLINER CONTENT - Inset to match Figma */}
-        <div className="flex flex-col w-full flex-1 px-4"
+        <div className="flex flex-col w-full px-4"
           onDragOver={(e) => {
             e.preventDefault();
             // If dragging over empty space, show "Move to Root" intent?
@@ -603,20 +604,16 @@ export function SliderPanel({
           </div>
         </div>
 
+
         {showMaskImage && (
-          <div className="mt-4">
-            <img
-              src="/slider-panel.png"
-              alt="Mask adjustment preview"
-              className="w-full border-t border-b border-[#2A2A2A] cursor-pointer active:scale-[0.99] transition-transform"
-              onClick={() => onApplyEdits?.()}
-            />
+          <div className="mt-4 pb-10">
+            <SliderPanelContent onApplyEdits={onApplyEdits} />
           </div>
         )}
 
         {/* Line 238 - Divider */}
         <div className="h-[1px] w-[344px] bg-[#111111]" />
-      </div >
+      </div>
     </>
   );
 }
