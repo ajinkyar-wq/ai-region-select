@@ -32,6 +32,7 @@ export interface Region {
   hasEdits?: boolean;
   groupId?: string;
   previewUrl?: string;
+  adjustments?: RegionAdjustments;
 }
 
 export interface ImageTileData {
@@ -44,6 +45,55 @@ export interface ImageTileData {
   width?: number;
   height?: number;
 }
+
+export interface RegionAdjustments {
+  // White Balance
+  temp: number;
+  tint: number;
+  // Light
+  exposure: number;
+  contrast: number;
+  highlights: number;
+  shadows: number;
+  whites: number;
+  blacks: number;
+  // Presence
+  texture: number;
+  clarity: number;
+  dehaze: number;
+  vibrance: number;
+  saturation: number;
+  // Detail
+  sharpening: number;
+  radius: number;
+  detail: number;
+  masking: number;
+  // Noise
+  luminance: number;
+  color: number;
+}
+
+export const DEFAULT_ADJUSTMENTS: RegionAdjustments = {
+  temp: 0,
+  tint: 0,
+  exposure: 0,
+  contrast: 0,
+  highlights: 0,
+  shadows: 0,
+  whites: 0,
+  blacks: 0,
+  texture: 0,
+  clarity: 0,
+  dehaze: 0,
+  vibrance: 0,
+  saturation: 0,
+  sharpening: 0,
+  radius: 1.0,
+  detail: 25,
+  masking: 0,
+  luminance: 0,
+  color: 0
+};
 
 export const REGION_COLORS: Record<string, string> = {
   person: '#FF5050',

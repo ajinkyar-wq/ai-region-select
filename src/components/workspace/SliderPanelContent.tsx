@@ -1,11 +1,19 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { AdjustmentSlider } from './AdjustmentSlider';
-import { ChevronDown, ChevronRight, RotateCcw, Eye, EyeOff } from 'lucide-react';
+import { ChevronDown, ChevronRight, RotateCcw, Eye } from 'lucide-react';
+import { Region, RegionAdjustments, DEFAULT_ADJUSTMENTS } from '@/types/workspace';
 
-export function SliderPanelContent({ onApplyEdits }: { onApplyEdits?: () => void }) {
+interface SliderPanelContentProps {
+    regions: Region[];
+    onUpdateAdjustments: (adjustments: RegionAdjustments) => void;
+    onApplyEdits?: () => void;
+}
+
+export function SliderPanelContent({ regions, onUpdateAdjustments, onApplyEdits }: SliderPanelContentProps) {
+
     // --- STATE ---
-    // In a real app, these would come from the active Region's properties.
-    // Using local state for UI demonstration.
+    // Initialize from the first selected region, or defaults
+    // We use local state for smooth sliding, then commit on change
 
     const [expanded, setExpanded] = useState({
         whiteBalance: true,
@@ -15,37 +23,26 @@ export function SliderPanelContent({ onApplyEdits }: { onApplyEdits?: () => void
         noise: false,
     });
 
-    const [values, setValues] = useState({
-        // White Balance
-        temp: 7000,
-        tint: 0,
-        // Light
-        exposure: 0,
-        contrast: 0,
-        highlights: 0,
-        shadows: 0,
-        whites: 0,
-        blacks: 0,
-        // Presence
-        texture: 0,
-        clarity: 0,
-        dehaze: 0,
-        vibrance: 0,
-        saturation: 0,
-        // Detail
-        sharpening: 0,
-        radius: 1.0,
-        detail: 25,
-        masking: 0,
-        // Noise
-        luminance: 0,
-        color: 0
-    });
+    const [values, setValues] = useState<RegionAdjustments>(DEFAULT_ADJUSTMENTS);
 
-    const handleChange = (key: keyof typeof values, val: number) => {
-        // onApplyEdits?.(); // Call on change as well? Maybe interaction start is enough. 
-        // User asked "moving the slider... should add said mask as a group".
-        setValues(prev => ({ ...prev, [key]: val }));
+    // Sync state with selection
+    useEffect(() => {
+        if (regions.length > 0) {
+            // Use the first region's adjustments as the baseline
+            // If multiple are selected with different values, this might jump, 
+            // but standard Lightroom behavior is often to show the "primary" selection or dashed.
+            // For simplicity, we show the first one.
+            const first = regions[0];
+            setValues(first.adjustments || DEFAULT_ADJUSTMENTS);
+        } else {
+            setValues(DEFAULT_ADJUSTMENTS);
+        }
+    }, [regions]); // Re-run when selection changes
+
+    const handleChange = (key: keyof RegionAdjustments, val: number) => {
+        const newValues = { ...values, [key]: val };
+        setValues(newValues);
+        onUpdateAdjustments(newValues);
     };
 
     const toggleSection = (key: keyof typeof expanded) => {
@@ -102,8 +99,8 @@ export function SliderPanelContent({ onApplyEdits }: { onApplyEdits?: () => void
                         <AdjustmentSlider
                             label="Temp"
                             value={values.temp}
-                            min={2000}
-                            max={50000}
+                            min={-100}
+                            max={100}
                             onChange={(v) => handleChange('temp', v)}
                             gradient="linear-gradient(90deg, #4A6E99 0%, #E6E19C 100%)"
                             onInteractionStart={onApplyEdits}

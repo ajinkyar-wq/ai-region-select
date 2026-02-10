@@ -4,6 +4,7 @@ import { ScanAnimation } from './ScanAnimation';
 import { AIMaskEditor } from './tools/AIMaskEditor';
 import { SmartMaskLayer } from './layers/SmartMaskLayer';
 import { ToolLayer } from './layers/ToolLayer';
+import { AdjustmentLayer } from './layers/AdjustmentLayer';
 import { BrushTool } from './tools/BrushTool';
 import { segmentImage } from '@/lib/segmentation';
 import type { ImageTileData, Region } from '@/types/workspace';
@@ -344,6 +345,16 @@ export function ImageTile({
       >
         {/* LAYER 1: Base Image */}
         <canvas ref={mainCanvasRef} className="absolute inset-0 z-0" />
+
+        {/* LAYER 1.5: Image Adjustments */}
+        {imageTransform && (
+          <AdjustmentLayer
+            tile={tile}
+            imageTransform={imageTransform}
+            width={viewDimensions?.width ?? 0}
+            height={viewDimensions?.height ?? 0}
+          />
+        )}
 
         {/* LAYER 2: Smart AI Masks */}
         {viewDimensions && !brushActive && !drawingTool && (

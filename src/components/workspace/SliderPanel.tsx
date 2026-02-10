@@ -8,7 +8,7 @@ import {
   Trash2,
   Layers
 } from 'lucide-react';
-import type { Region } from '@/types/workspace';
+import type { Region, RegionAdjustments } from '@/types/workspace';
 
 interface SliderPanelProps {
   isOpen?: boolean;
@@ -28,6 +28,7 @@ interface SliderPanelProps {
   // New Prop for Activation (Double Click)
   onActivateRegion?: (id: string) => void;
   showMaskImage: boolean;
+  onUpdateAdjustments?: (adjustments: RegionAdjustments) => void;
 }
 
 export function SliderPanel({
@@ -47,6 +48,7 @@ export function SliderPanel({
   onMoveRegion,
   onDeleteGroup,
   onActivateRegion,
+  onUpdateAdjustments,
 }: SliderPanelProps) {
   const [activeTab, setActiveTab] = useState<'sliders' | 'crop' | 'masking'>('masking');
   const [showAddMaskMenu, setShowAddMaskMenu] = useState(false);
@@ -607,7 +609,11 @@ export function SliderPanel({
 
         {showMaskImage && (
           <div className="mt-4 pb-10">
-            <SliderPanelContent onApplyEdits={onApplyEdits} />
+            <SliderPanelContent
+              regions={regions.filter(r => r.selected)}
+              onUpdateAdjustments={(adjustments) => onUpdateAdjustments?.(adjustments)}
+              onApplyEdits={onApplyEdits}
+            />
           </div>
         )}
 

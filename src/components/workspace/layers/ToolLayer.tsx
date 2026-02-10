@@ -140,7 +140,7 @@ export function ToolLayer({
         // Actually, Gradient Tools render themselves.
 
         const manualRegions = effectiveRegions.filter(r => // Use effective regions!
-            (r.type === 'manual' || ((r.type === 'linear-gradient' || r.type === 'radial-gradient') && !r.selected)) &&
+            (r.type === 'manual' || r.type === 'linear-gradient' || r.type === 'radial-gradient') &&
             r.visible &&
             r.id !== excludedRegionId
         );

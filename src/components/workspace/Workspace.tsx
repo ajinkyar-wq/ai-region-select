@@ -8,7 +8,7 @@ import { Filmstrip } from './Filmstrip';
 import { BottomBar } from './BottomBar';
 import { SliderPanel } from './SliderPanel';
 import { DraggableToolbar } from './DraggableToolbar';
-import type { ImageTileData, Region } from '@/types/workspace';
+import type { ImageTileData, Region, RegionAdjustments } from '@/types/workspace';
 import { REGION_COLORS } from '@/types/workspace';
 import { Columns2, Paintbrush, Eraser } from 'lucide-react';
 import { generateRadialGradientMask } from '@/lib/mask-analysis';
@@ -602,6 +602,20 @@ export function Workspace() {
     } : prev);
     setBrushActive(false);
     setActiveMask(null);
+  };
+
+  const handleUpdateAdjustments = (adjustments: RegionAdjustments) => {
+    if (!image) return;
+    setImage(prev => {
+      if (!prev) return prev;
+      const newRegions = prev.regions.map(r => {
+        if (r.selected) {
+          return { ...r, adjustments, hasEdits: true };
+        }
+        return r;
+      });
+      return { ...prev, regions: newRegions };
+    });
   };
 
   // Callback when user finishes dragging to create gradient
