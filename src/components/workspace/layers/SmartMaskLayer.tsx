@@ -18,6 +18,7 @@ interface SmartMaskLayerProps {
     onHoverChange: (id: string | null) => void;
     onUpdateTile: (updates: Partial<ImageTileData>) => void;
     onEditRegion: (region: Region) => void;
+    onEnterLocalEdit?: (region: Region) => void; // New prop for explicit edit mode
 }
 
 export function SmartMaskLayer({
@@ -32,8 +33,11 @@ export function SmartMaskLayer({
     onHoverChange,
     onUpdateTile,
     onEditRegion,
+    onEnterLocalEdit
 }: SmartMaskLayerProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
+
+
 
     // Render masks to overlay canvas
     useEffect(() => {
@@ -336,10 +340,6 @@ export function SmartMaskLayer({
 
     const handleCanvasClick = (e: React.MouseEvent) => {
         const isMultiToggle = e.ctrlKey || e.metaKey || e.shiftKey;
-        if (isEditing) {
-            // Should probably not happen due to layer ordering or logic, but safety first
-            return;
-        }
 
         const canvas = canvasRef.current;
         if (!canvas || !imageTransform) return;
@@ -399,6 +399,7 @@ export function SmartMaskLayer({
         }
 
         if (clickedRegion) {
+            e.stopPropagation(); // Prevent bubble to ImageTile background handler
             const updatedRegions = tile.regions.map(r => {
                 // ⌘ / Ctrl + click → toggle ONLY this region
                 if (isMultiToggle) {
@@ -416,6 +417,12 @@ export function SmartMaskLayer({
             });
 
             onUpdateTile({ regions: updatedRegions });
+
+            // Activate the region (make it red/active) UNLESS we just deselected it via toggle
+            const isDeselecting = isMultiToggle && clickedRegion.selected;
+            if (!isDeselecting) {
+                onEditRegion(clickedRegion);
+            }
         } else {
             // Clicked empty space → clear selection (ONLY if not multi-toggle)
             if (!isMultiToggle) {
@@ -450,7 +457,11 @@ export function SmartMaskLayer({
                 if (!hit) continue;
 
                 if (hit === 'inner') {
-                    onEditRegion(region);
+                    if (onEnterLocalEdit) {
+                        onEnterLocalEdit(region);
+                    } else {
+                        onEditRegion(region);
+                    }
                 } else {
                     const group = tile.regions.find(r => r.type === 'people-group');
                     if (group) onEditRegion(group);
@@ -464,7 +475,11 @@ export function SmartMaskLayer({
                 const idx = Math.floor(y * scaleY) * bg.maskWidth + Math.floor(x * scaleX);
 
                 if (idx >= 0 && idx < bg.maskData.length && bg.maskData[idx] > 128) {
-                    onEditRegion(bg);
+                    if (onEnterLocalEdit) {
+                        onEnterLocalEdit(bg);
+                    } else {
+                        onEditRegion(bg);
+                    }
                     return;
                 }
             }

@@ -18,7 +18,7 @@ interface LinearGradientToolProps {
     onSelect?: (e: React.MouseEvent) => void;
     onDoubleClick?: (e: React.MouseEvent) => void;
     onDrag?: (delta: { x: number, y: number }) => void;
-    onDragEnd?: () => void;
+    onDragEnd?: (sourceUpdates?: Partial<Region>) => void;
 }
 
 export function LinearGradientTool({
@@ -70,7 +70,11 @@ export function LinearGradientTool({
         // Optimization: Render if dragging OR if selected/editing
         if (!canvas || !dragState || !imageTransform) return;
 
-        if (!isSelected && !isEditing) return; // Optimization: Don't render active gradient if not selected
+        // Optimization: Render if dragging OR if selected/editing
+        if (!canvas || !dragState || !imageTransform) return;
+
+        // Active Render Only: If not editing/dragging, ToolLayer handles the static overlay.
+        if (!isEditing && !dragState.isDragging) return;
 
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
@@ -294,14 +298,16 @@ export function LinearGradientTool({
                 }
             }
 
-            onUpdate({
+            const sourceUpdates = {
                 maskData: data,
                 gradient: { start: normStart, end: normEnd }
-            });
+            };
 
-            // Notify parent drag ended (to commit multi-select)
+            // For move-center: pass updates through onDragEnd to avoid duplicate onUpdateTile calls
             if (dragState.isDragging === 'move-center') {
-                onDragEnd?.();
+                onDragEnd?.(sourceUpdates);
+            } else {
+                onUpdate(sourceUpdates);
             }
         }
 
@@ -329,56 +335,9 @@ export function LinearGradientTool({
                     height: imageTransform.height,
                 }}
             >
-                {isSelected && (
-                    <canvas
-                        ref={canvasRef}
-                        width={imageTransform.width}
-                        height={imageTransform.height}
-                        className="absolute inset-0 pointer-events-none"
-                    />
-                )}
+                {/* Canvas removed: ToolLayer renders the static overlay */}
 
-                {/* Rotation Indicator Line - Tapered Style */}
-                <svg className="absolute inset-0 w-full h-full visible overflow-visible pointer-events-none">
-                    <defs>
-                        <filter id="shadow">
-                            <feDropShadow dx="0" dy="1" stdDeviation="1" floodOpacity="0.3" />
-                        </filter>
-                    </defs>
-                    <path
-                        d={(() => {
-                            // Geometry for tapered line
-                            const p1 = { x: rotateIndicator.x1, y: rotateIndicator.y1 };
-                            const p2 = { x: rotateIndicator.x2, y: rotateIndicator.y2 };
-                            const cx = center.x;
-                            const cy = center.y;
 
-                            // Gradient Axis Vector (Thickness Direction)
-                            const dx = dragState.end.x - dragState.start.x;
-                            const dy = dragState.end.y - dragState.start.y;
-                            const length = Math.sqrt(dx * dx + dy * dy);
-
-                            if (length < 0.001) return `M ${p1.x} ${p1.y} L ${p2.x} ${p2.y}`;
-
-                            // Normalized direction vector
-                            const ux = dx / length;
-                            const uy = dy / length;
-
-                            // Max thickness at center (Total 5px => 2.5px each side)
-                            const thick = 2.5;
-
-                            // Center Top/Bottom points
-                            const cTop = { x: cx + ux * thick, y: cy + uy * thick };
-                            const cBot = { x: cx - ux * thick, y: cy - uy * thick };
-
-                            // Draw Diamond/Kite shape
-                            return `M ${p1.x} ${p1.y} L ${cTop.x} ${cTop.y} L ${p2.x} ${p2.y} L ${cBot.x} ${cBot.y} Z`;
-                        })()}
-                        fill={isSelected ? "#2563EB" : "#9CA3AF"}
-                        stroke="none"
-                        style={{ filter: "url(#shadow)" }}
-                    />
-                </svg>
 
                 <div
                     className={cn(
@@ -415,7 +374,7 @@ export function LinearGradientTool({
     return (
         <div
             ref={containerRef}
-            className="absolute inset-0 z-50 pointer-events-auto"
+            className={`absolute inset-0 z-50 ${dragState?.isDragging ? 'pointer-events-auto' : 'pointer-events-none'}`}
             style={{
                 width: imageTransform.width,
                 height: imageTransform.height,
@@ -423,7 +382,6 @@ export function LinearGradientTool({
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
             onPointerLeave={handlePointerUp}
-            onClick={(e) => e.stopPropagation()} // Stop propagation
         >
             {/* Live Preview Canvas */}
             <canvas
@@ -448,6 +406,7 @@ export function LinearGradientTool({
                     stroke="rgba(200,200,200,0.8)" strokeWidth="1"
                     className="cursor-move pointer-events-auto hover:stroke-white"
                     onPointerDown={(e) => handlePointerDown(e, 'rotate-start')}
+                    onClick={(e) => e.stopPropagation()}
                 />
 
                 {/* Center Line */}
@@ -458,6 +417,7 @@ export function LinearGradientTool({
                     className="cursor-refresh pointer-events-auto"
                     style={{ cursor: "url('data:image/svg+xml;utf8,<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"white\" stroke-width=\"2\"><path d=\"M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8\"/><path d=\"M21 3v5h-5\"/></svg>') 10 10, auto" }}
                     onPointerDown={(e) => handlePointerDown(e, 'rotate-pivot')}
+                    onClick={(e) => e.stopPropagation()}
                 />
                 <line
                     x1={centerLine.x1} y1={centerLine.y1}
@@ -473,24 +433,27 @@ export function LinearGradientTool({
                     stroke="rgba(200,200,200,0.8)" strokeWidth="1"
                     className="cursor-move pointer-events-auto hover:stroke-white"
                     onPointerDown={(e) => handlePointerDown(e, 'rotate-end')}
+                    onClick={(e) => e.stopPropagation()}
                 />
             </svg>
 
             <div
-                className="absolute w-8 h-8 rounded-full cursor-grab active:cursor-grabbing transform -translate-x-1/2 -translate-y-1/2 hover:bg-white/10"
+                className="absolute w-8 h-8 rounded-full cursor-grab active:cursor-grabbing transform -translate-x-1/2 -translate-y-1/2 hover:bg-white/10 pointer-events-auto"
                 style={{ left: dragState.start.x, top: dragState.start.y }}
                 onPointerDown={(e) => handlePointerDown(e, 'rotate-start')}
+                onClick={(e) => e.stopPropagation()}
             />
 
             <div
-                className="absolute w-8 h-8 rounded-full cursor-grab active:cursor-grabbing transform -translate-x-1/2 -translate-y-1/2 hover:bg-white/10"
+                className="absolute w-8 h-8 rounded-full cursor-grab active:cursor-grabbing transform -translate-x-1/2 -translate-y-1/2 hover:bg-white/10 pointer-events-auto"
                 style={{ left: dragState.end.x, top: dragState.end.y }}
                 onPointerDown={(e) => handlePointerDown(e, 'rotate-end')}
+                onClick={(e) => e.stopPropagation()}
             />
 
             <div
                 className={cn(
-                    "absolute w-4 h-4 bg-[#3B82F6] rounded-sm border-2 border-white shadow-sm cursor-move transform -translate-x-1/2 -translate-y-1/2 hover:scale-110 transition-transform z-50",
+                    "absolute w-4 h-4 bg-[#3B82F6] rounded-sm border-2 border-white shadow-sm cursor-move transform -translate-x-1/2 -translate-y-1/2 hover:scale-110 transition-transform z-50 pointer-events-auto",
                     dragState.isDragging === 'move-center' && "scale-110"
                 )}
                 style={{
@@ -498,6 +461,7 @@ export function LinearGradientTool({
                     top: center.y
                 }}
                 onPointerDown={(e) => handlePointerDown(e, 'move-center')}
+                onClick={(e) => e.stopPropagation()}
             />
 
         </div>

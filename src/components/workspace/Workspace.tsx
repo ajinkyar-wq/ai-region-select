@@ -400,6 +400,13 @@ export function Workspace() {
         if (activeMask) {
           setActiveMask(null);
         }
+        // Deselect all regions
+        if (image) {
+          setImage({
+            ...image,
+            regions: image.regions.map(r => ({ ...r, selected: false })),
+          });
+        }
       }
 
 
@@ -912,15 +919,9 @@ export function Workspace() {
                     const region = image.regions.find(r => r.id === id);
                     if (region) {
                       setActiveMask(region);
-
-                      // ONLY activate Brush Toolbar for Manual Masks
-                      if (region.type === 'manual') {
-                        setBrushActive(true);
-                        setBrushMode('add');
-                      } else {
-                        // For Gradients/AI, we do NOT want the brush toolbar
-                        setBrushActive(false);
-                      }
+                      // Single-click: Select only. NEVER activate brush here.
+                      // Brush is activated ONLY via double-click (onDoubleEditRegion).
+                      setBrushActive(false);
                     }
                   }}
                   onEditingModeChange={handleLocalEditChange}

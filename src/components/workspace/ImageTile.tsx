@@ -108,17 +108,17 @@ export function ImageTile({
   // Auto-Enter Edit Mode when activeMask changes (Activation)
   useEffect(() => {
     if (activeMask) {
-      // Support all editable types: Gradients, Person, Background, People Group, etc
-      // Manual masks are handled globally via onActivateBrush, but we can also set editingRegion if needed for uniformity?
-      // Actually Manual masks use Global Brush, NOT local AIMaskEditor.
-      if (activeMask.type !== 'manual') {
+      // For gradients, auto-enter edit mode (since they are always "live")
+      const isGradient = activeMask.type === 'linear-gradient' || activeMask.type === 'radial-gradient';
+      if (isGradient) {
         setEditingRegion(activeMask);
       } else {
-        // If switching TO manual mask, clear local editor (so Gradient handles disappear)
+        // For Person/Background (AI Masks):
+        // Active = Selected. Do NOT auto-enter refining mode.
+        // User must explicitly double-click to refine mask.
         setEditingRegion(null);
       }
     } else {
-      // Active Mask Cleared -> Exit all local edit modes
       setEditingRegion(null);
     }
   }, [activeMask]);
@@ -290,25 +290,20 @@ export function ImageTile({
     const region = tile.regions.find(r => r.id === regionId);
     if (!region) return;
 
-    // Dispatch activation to parent
+    // Single-click path: Select + Set Active. NO brush activation.
+    // Brush activation is ONLY via double-click (onDoubleEditRegion -> onActivateBrush).
     if (onActivateRegion) {
       onActivateRegion(regionId);
     }
-
-    // Fallback? Ideally Workspace handles everything now. 
-    // Specifically for Manual masks, onActivateBrush was used, which was just an alias for activation really.
-    // If we unify this, we can deprecate onActivateBrush eventually.
-    // For now, let's keep onActivateBrush for manual if specifically needed, OR just use onActivateRegion for ALL.
-    // The plan said: "Update handleEditRegion to call onActivateRegion(regionId) instead of setEditingRegion".
-
-    if (region.type === 'manual') {
-      if (onActivateBrush) onActivateBrush(regionId);
-      else if (onActivateRegion) onActivateRegion(regionId);
-    } else {
-      if (onActivateRegion) onActivateRegion(regionId);
-    }
   };
 
+
+  // Determine if SmartMaskLayer should be hidden (only if editing an AI mask/Person)
+  // Gradients do NOT hide the smart layer.
+  const isEditingAIMask = !!editingRegion &&
+    editingRegion.type !== 'linear-gradient' &&
+    editingRegion.type !== 'radial-gradient' &&
+    editingRegion.type !== 'manual';
 
   return (
     <div
@@ -320,13 +315,20 @@ export function ImageTile({
         if (drawingTool) return;
 
         if (editingRegion) {
+          const isGradient = editingRegion.type === 'linear-gradient' || editingRegion.type === 'radial-gradient';
           setEditingRegion(null);
-          // Restore selection state visual
           onUpdateTile({
             regions: tile.regions.map(r => ({
               ...r,
-              selected: r.id === editingRegion.id, // Keep selected
+              // Gradients: fully deselect on background click (no intermediate state)
+              // Other types (AI masks): keep selected when exiting edit
+              selected: isGradient ? false : r.id === editingRegion.id,
             })),
+          });
+        } else {
+          // No editing region: Deselect ALL on background click
+          onUpdateTile({
+            regions: tile.regions.map(r => ({ ...r, selected: false })),
           });
         }
 
@@ -357,7 +359,7 @@ export function ImageTile({
         )}
 
         {/* LAYER 2: Smart AI Masks */}
-        {viewDimensions && !brushActive && !drawingTool && (
+        {viewDimensions && (
           <SmartMaskLayer
             tile={tile}
             imageTransform={imageTransform}
@@ -366,10 +368,14 @@ export function ImageTile({
             peopleEnabled={peopleEnabled}
             backgroundEnabled={backgroundEnabled}
             hoveredRegionId={brushActive ? null : hoveredRegionId}
-            isEditing={!!editingRegion}
+            isEditing={isEditingAIMask}
             onHoverChange={brushActive ? () => { } : setLocalHoveredRegion}
             onUpdateTile={onUpdateTile}
-            onEditRegion={(r) => handleEditRegion(r.id)} // Direct update for AI masks
+            onEditRegion={(r) => handleEditRegion(r.id)} // Single Click: Activate
+            onEnterLocalEdit={(r) => { // Double Click: Enter Edit Mode
+              handleEditRegion(r.id);
+              setEditingRegion(r);
+            }}
           />
         )}
 
@@ -383,8 +389,10 @@ export function ImageTile({
             regions={tile.regions}
             excludedRegionId={brushActive && activeMask ? activeMask.id : undefined}
             editingRegionId={editingRegion?.id}
+            activeRegionId={activeMask?.id}
             onUpdateTile={onUpdateTile}
             onEditRegion={handleEditRegion} // Route edits through our dispatcher
+            onDoubleEditRegion={onActivateBrush} // Handle Double Click (Enable Brush Toolbar)
           />
         )}
 

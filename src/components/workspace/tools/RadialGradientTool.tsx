@@ -18,7 +18,7 @@ interface RadialGradientToolProps {
     onSelect?: (e: React.MouseEvent) => void;
     onDoubleClick?: (e: React.MouseEvent) => void;
     onDrag?: (delta: { x: number, y: number }) => void;
-    onDragEnd?: () => void;
+    onDragEnd?: (sourceUpdates?: Partial<Region>) => void;
 }
 
 export function RadialGradientTool({
@@ -77,7 +77,8 @@ export function RadialGradientTool({
         // We always want to render the gradient on the preview canvas if we are active.
         if (!canvas || !dragState || !imageTransform) return;
 
-        if (!isSelected && !isEditing) return; // Optimization: Don't render if not active (ToolLayer handles inactive view)
+        // Active Render Only: If not editing/dragging, ToolLayer handles the static overlay.
+        if (!isEditing && !dragState.isDragging) return;
 
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
@@ -261,7 +262,7 @@ export function RadialGradientTool({
                 isInverted
             );
 
-            onUpdate({
+            const sourceUpdates = {
                 maskData,
                 radialGradient: {
                     center: normCenter,
@@ -269,11 +270,13 @@ export function RadialGradientTool({
                     feather: dragState.feather,
                     invert: isInverted
                 }
-            });
+            };
 
-            // Notify parent drag ended (to commit multi-select)
+            // For move-center: pass updates through onDragEnd to avoid duplicate onUpdateTile calls
             if (dragState.isDragging === 'move-center') {
-                onDragEnd?.();
+                onDragEnd?.(sourceUpdates);
+            } else {
+                onUpdate(sourceUpdates);
             }
         }
 
@@ -323,14 +326,7 @@ export function RadialGradientTool({
                 className="absolute inset-0 z-40 pointer-events-none"
                 style={{ width: imageTransform.width, height: imageTransform.height }}
             >
-                {isSelected && (
-                    <canvas
-                        ref={canvasRef}
-                        width={imageTransform.width}
-                        height={imageTransform.height}
-                        className="absolute inset-0 pointer-events-none"
-                    />
-                )}
+                {/* Canvas removed: ToolLayer renders the static overlay */}
                 {/* Center Handle for selection */}
                 <div
                     className={cn(
@@ -369,7 +365,7 @@ export function RadialGradientTool({
     const Handle = ({ x, y, cursor, onDown, isInner }: any) => (
         <div
             className={cn(
-                "absolute rounded-full transform -translate-x-1/2 -translate-y-1/2 z-50 flex items-center justify-center shadow-[0_2px_4px_rgba(0,0,0,0.2)]",
+                "absolute rounded-full transform -translate-x-1/2 -translate-y-1/2 z-50 flex items-center justify-center shadow-[0_2px_4px_rgba(0,0,0,0.2)] pointer-events-auto",
                 "transition-[transform,background-color,border-color,box-shadow]",
                 // Base size
                 "w-4 h-4",
@@ -383,6 +379,7 @@ export function RadialGradientTool({
             )}
             style={{ left: x, top: y, cursor }}
             onPointerDown={onDown}
+            onClick={(e) => e.stopPropagation()}
         >
             {/* Center dot for precision feel */}
             <div className={cn("w-1 h-1 rounded-full", isInner ? "bg-blue-400" : "bg-gray-400")} />
@@ -392,12 +389,11 @@ export function RadialGradientTool({
     return (
         <div
             ref={containerRef}
-            className="absolute inset-0 z-50 pointer-events-auto"
+            className={`absolute inset-0 z-50 ${dragState?.isDragging ? 'pointer-events-auto' : 'pointer-events-none'}`}
             style={{ width: imageTransform.width, height: imageTransform.height }}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
             onPointerLeave={handlePointerUp}
-            onClick={(e) => e.stopPropagation()}
         >
             <canvas ref={canvasRef} width={imageTransform.width} height={imageTransform.height} className="absolute inset-0 pointer-events-none" />
 
@@ -419,7 +415,7 @@ export function RadialGradientTool({
             {/* Center Handle */}
             <div
                 className={cn(
-                    "absolute w-5 h-5 bg-blue-500 rounded-full border-2 border-white shadow-[0_2px_5px_rgba(0,0,0,0.3)] cursor-move transform -translate-x-1/2 -translate-y-1/2 z-50 flex items-center justify-center",
+                    "absolute w-5 h-5 bg-blue-500 rounded-full border-2 border-white shadow-[0_2px_5px_rgba(0,0,0,0.3)] cursor-move transform -translate-x-1/2 -translate-y-1/2 z-50 flex items-center justify-center pointer-events-auto",
                     "transition-[transform,background-color,border-color,box-shadow]",
                     // Outer ring for "selected" feel
                     "ring-2 ring-blue-500/30",
@@ -427,6 +423,7 @@ export function RadialGradientTool({
                 )}
                 style={{ left: dragState.center.x, top: dragState.center.y }}
                 onPointerDown={(e) => handlePointerDown(e, 'move-center')}
+                onClick={(e) => e.stopPropagation()}
             >
                 <div className="w-1.5 h-1.5 bg-white rounded-full" />
             </div>

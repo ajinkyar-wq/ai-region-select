@@ -21,8 +21,10 @@ interface ToolLayerProps {
     regions: Region[];
     excludedRegionId?: string | null;
     editingRegionId?: string | null;
+    activeRegionId?: string | null;
     onUpdateTile?: (updates: Partial<ImageTileData>) => void;
     onEditRegion?: (regionId: string) => void;
+    onDoubleEditRegion?: (regionId: string) => void;
 }
 
 export function ToolLayer({
@@ -32,10 +34,13 @@ export function ToolLayer({
     regions,
     excludedRegionId,
     editingRegionId,
+    activeRegionId,
     onUpdateTile,
     onEditRegion,
+    onDoubleEditRegion,
 }: ToolLayerProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const isDraggingRef = useRef(false); // Track if a drag occurred to prevent click-deselection
 
     // Drag State for Manual Masks (Single)
     const [dragState, setDragState] = useState<{
@@ -132,6 +137,7 @@ export function ToolLayer({
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
 
+        // Use standard clearRect
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
         // Filter for manual & gradient masks
@@ -139,11 +145,28 @@ export function ToolLayer({
         // UNLESS they are being multi-dragged by someone else?
         // Actually, Gradient Tools render themselves.
 
-        const manualRegions = effectiveRegions.filter(r => // Use effective regions!
-            (r.type === 'manual' || r.type === 'linear-gradient' || r.type === 'radial-gradient') &&
-            r.visible &&
-            r.id !== excludedRegionId
-        );
+        const manualRegions = effectiveRegions.filter(r => {
+            // Base checks
+            if (!r.visible || r.id === excludedRegionId) return false;
+
+
+
+            // Gradients: Render NEVER in ToolLayer.
+            // - Active: Renders itself in Tool (Live Preview).
+            // - Other Selected: User wants NO Overlay (Handle Only).
+            if (r.type === 'linear-gradient' || r.type === 'radial-gradient') {
+                return false;
+            }
+
+            // Manual: Render ONLY if Selected AND Active (Last Selected)
+            // Unselected = no overlay. Selected but not active = no overlay (icon only).
+            if (r.type === 'manual') {
+                if (r.selected && r.id === activeRegionId) return true;
+                return false;
+            }
+
+            return false;
+        });
 
         manualRegions.forEach(region => {
             const imageData = new ImageData(region.maskWidth, region.maskHeight);
@@ -197,7 +220,7 @@ export function ToolLayer({
             ctx.restore();
         });
 
-    }, [regions, width, height, excludedRegionId, dragState]); // Added dragState to dependencies
+    }, [regions, width, height, excludedRegionId, dragState, multiDragState, activeRegionId]); // Added activeRegionId
 
     if (!imageTransform) return null;
 
@@ -218,32 +241,22 @@ export function ToolLayer({
     };
 
     // Called by Gradient Tools when they end drag
-    const handleChildDragEnd = () => {
-        if (!multiDragState || !onUpdateTile || !imageTransform) {
+    const handleChildDragEnd = (sourceId: string, sourceUpdates?: Partial<Region>) => {
+        if (!onUpdateTile || !imageTransform) {
             setMultiDragState(null);
             return;
         }
 
-        // Get list of OTHER selected regions (not the source)
-        const otherSelectedRegions = regions.filter(r =>
-            r.selected && r.id !== multiDragState.sourceId
-        );
-
-        // If there are no other selected regions, just clear state and return
-        // The source already updated itself via onUpdate
-        if (otherSelectedRegions.length === 0) {
-            setMultiDragState(null);
-            return;
-        }
-
-        // Commit changes for OTHER selected regions by applying the delta
+        // Build final regions: apply source updates + multi-drag delta to others
         const finalRegions = regions.map(existing => {
-            // Don't touch the source - it already updated itself
-            if (existing.id === multiDragState.sourceId) return existing;
+            // Source: apply source updates
+            if (existing.id === sourceId && sourceUpdates) {
+                return { ...existing, ...sourceUpdates };
+            }
 
-            // Update other selected regions with the delta
-            if (existing.selected) {
-                // Apply delta based on type
+            // Other selected: apply multi-drag delta
+            if (multiDragState && existing.selected && existing.id !== sourceId) {
+                // Apply same logic as getEffectiveRegions but finalize it
                 if (existing.type === 'manual') {
                     const currentOff = existing.offset || { x: 0, y: 0 };
                     return {
@@ -277,13 +290,11 @@ export function ToolLayer({
                     const dxNorm = multiDragState.delta.x / imageTransform.width;
                     const dyNorm = multiDragState.delta.y / imageTransform.height;
 
-                    // Calculate new center
                     const newCenter = {
                         x: existing.radialGradient.center.x + dxNorm,
                         y: existing.radialGradient.center.y + dyNorm
                     };
 
-                    // Regenerate mask with new center
                     const maskData = generateRadialGradientMask(
                         Math.floor(existing.maskWidth),
                         Math.floor(existing.maskHeight),
@@ -313,18 +324,47 @@ export function ToolLayer({
 
     // --- Manual Mask Handlers ---
 
+    const handleIconDoubleClick = (e: React.MouseEvent, region: Region) => {
+        e.stopPropagation();
+        // Don't enter edit mode during multi-select (shift/ctrl held)
+        if (e.ctrlKey || e.metaKey || e.shiftKey) return;
+        if (region.type === 'manual') {
+            onDoubleEditRegion?.(region.id);
+        }
+    };
     const handleIconClick = (e: React.MouseEvent, region: Region) => {
         e.stopPropagation(); // prevent background deselect
         if (!onUpdateTile) return;
 
-        // If drag happened, don't select toggle
-        // But this is onClick. Drag is handled by pointer events.
-        // We rely on standard click.
+        // If drag happened, don't perform selection toggle
+        if (isDraggingRef.current) {
+            // But Ensure it is Active (so HUD shows up), without clearing selection
+            if (onEditRegion) {
+                onEditRegion(region.id);
+            }
+            isDraggingRef.current = false;
+            return;
+        }
 
-        // Should we ignore click if we just dragged?
         if (multiDragState) return;
 
         const isMultiToggle = e.ctrlKey || e.metaKey || e.shiftKey;
+
+        // For gradients: if already selected (single-click, no modifier), deselect immediately
+        if (!isMultiToggle && region.selected && (region.type === 'linear-gradient' || region.type === 'radial-gradient')) {
+            const updatedRegions = regions.map(r => ({
+                ...r,
+                selected: false
+            }));
+            onUpdateTile({ regions: updatedRegions });
+            return;
+        }
+
+        // Always set as Active Region if we are interacting with it (SINGLE or MULTI)
+        // This ensures the "Most Recently Selected" item gets the Red Overlay + Controls.
+        if (onEditRegion) {
+            onEditRegion(region.id);
+        }
 
         const updatedRegions = regions.map(r => { // Use original regions for selection logic
             if (isMultiToggle) {
@@ -351,6 +391,8 @@ export function ToolLayer({
         e.stopPropagation();
         e.currentTarget.setPointerCapture(e.pointerId);
 
+        isDraggingRef.current = false; // Reset drag flag
+
         setDragState({
             regionId: region.id,
             startX: e.clientX,
@@ -368,6 +410,11 @@ export function ToolLayer({
 
         const dx = e.clientX - dragState.startX;
         const dy = e.clientY - dragState.startY;
+
+        // Threshold to count as drag
+        if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+            isDraggingRef.current = true;
+        }
 
         // Convert View Pixels -> Image Pixels
         // scale = viewPixels / imagePixels
@@ -487,10 +534,7 @@ export function ToolLayer({
                                 top: cy,
                             }}
                             onClick={(e) => handleIconClick(e, region)}
-                            onDoubleClick={(e) => {
-                                e.stopPropagation();
-                                onEditRegion?.(region.id);
-                            }}
+                            onDoubleClick={(e) => handleIconDoubleClick(e, region)}
                             onPointerDown={(e) => handlePointerDown(e, region)}
                             onPointerMove={handlePointerMove}
                             onPointerUp={handlePointerUp}
@@ -520,12 +564,8 @@ export function ToolLayer({
                                     onUpdateTile({ regions: updatedRegions });
                                 }}
                                 onDrag={(delta) => handleChildDrag(region.id, delta)}
-                                onDragEnd={handleChildDragEnd}
+                                onDragEnd={(sourceUpdates) => handleChildDragEnd(region.id, sourceUpdates)}
                                 onSelect={(e) => handleIconClick(e, region)}
-                                onDoubleClick={(e) => {
-                                    e.stopPropagation();
-                                    onEditRegion?.(region.id);
-                                }}
                             />
                         );
                     }
@@ -545,15 +585,10 @@ export function ToolLayer({
                                 onUpdateTile({ regions: updatedRegions });
                             }}
                             onDrag={(delta) => handleChildDrag(region.id, delta)}
-                            onDragEnd={handleChildDragEnd}
+                            onDragEnd={(sourceUpdates) => handleChildDragEnd(region.id, sourceUpdates)}
                             onSelect={(e) => {
                                 // Use common handle logic
                                 handleIconClick(e, region);
-                            }}
-                            onDoubleClick={(e) => {
-                                // Enter Edit Mode (Double Click)
-                                e.stopPropagation();
-                                onEditRegion?.(region.id);
                             }}
                         />
                     )
