@@ -452,6 +452,7 @@ export function ToolLayer({
 
     const handlePointerUp = (e: React.PointerEvent) => {
         if (!dragState) return;
+        e.preventDefault(); // Prevent click event generation after drag
         e.currentTarget.releasePointerCapture(e.pointerId);
 
         // Commit to Parent State

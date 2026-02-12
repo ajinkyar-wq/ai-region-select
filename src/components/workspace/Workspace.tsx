@@ -517,7 +517,7 @@ export function Workspace() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [image, activeMask, brushActive, drawingTool]);
+  }, [image, activeMask, brushActive, drawingTool, clipboard]);
 
   const selectRegionByType = (
     type: 'person' | 'background' | null,

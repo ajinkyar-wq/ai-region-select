@@ -261,6 +261,7 @@ export function LinearGradientTool({
     const handlePointerUp = (e: React.PointerEvent) => {
         if (!dragState?.isDragging) return;
         e.stopPropagation();
+        e.preventDefault(); // Prevent click event generation after drag
         e.currentTarget.releasePointerCapture(e.pointerId);
 
         if (imageTransform) {
