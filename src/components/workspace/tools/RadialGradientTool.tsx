@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Region } from '@/types/workspace';
 import { cn } from '@/lib/utils';
 import { generateRadialGradientMask } from '@/lib/mask-analysis';
+import { GlassCard } from 'react-glass-ui';
 
 interface RadialGradientToolProps {
     imageTransform: {
@@ -328,31 +329,51 @@ export function RadialGradientTool({
             >
                 {/* Canvas removed: ToolLayer renders the static overlay */}
                 {/* Center Handle for selection */}
-                <div
-                    className={cn(
-                        "absolute w-5 h-5 rounded-full pointer-events-auto transform -translate-x-1/2 -translate-y-1/2 shadow-[0_2px_5px_rgba(0,0,0,0.2)] flex items-center justify-center z-50",
-                        "transition-[transform,background-color,border-color,box-shadow]",
-                        isSelected ? "cursor-move" : "cursor-pointer",
-                        // Selected State
-                        isSelected
-
-                            ? "bg-blue-600 border-2 border-white ring-4 ring-blue-600/20 scale-110"
-                            : "bg-white border border-gray-300 ring-4 ring-black/5 hover:ring-black/10 hover:scale-110",
-                        // Hover Interaction
-                        isSelected && "hover:ring-blue-600/40 hover:scale-125"
-                    )}
-                    style={{ left: dragState.center.x, top: dragState.center.y }}
-                    onPointerDown={(e) => {
-                        if (isSelected) handlePointerDown(e, 'move-center');
-                    }}
-                    onPointerMove={handlePointerMove}
-                    onPointerUp={handlePointerUp}
-                    onClick={(e) => { e.stopPropagation(); onSelect?.(e); }}
-                    onDoubleClick={(e) => { e.stopPropagation(); onDoubleClick?.(e); }}
-                >
-                    {/* Inner Dot */}
-                    <div className={cn("w-1.5 h-1.5 rounded-full", isSelected ? "bg-white" : "bg-gray-400")} />
-                </div>
+                {isSelected ? (
+                    <div
+                        className={cn(
+                            "absolute w-5 h-5 rounded-full pointer-events-auto transform -translate-x-1/2 -translate-y-1/2 shadow-[0_2px_5px_rgba(0,0,0,0.2)] flex items-center justify-center z-50",
+                            "transition-[transform,background-color,border-color,box-shadow]",
+                            "cursor-move",
+                            "bg-blue-600 border-2 border-white ring-4 ring-blue-600/20 scale-110",
+                            "hover:ring-blue-600/40 hover:scale-125"
+                        )}
+                        style={{ left: dragState.center.x, top: dragState.center.y }}
+                        onPointerDown={(e) => handlePointerDown(e, 'move-center')}
+                        onPointerMove={handlePointerMove}
+                        onPointerUp={handlePointerUp}
+                        onClick={(e) => { e.stopPropagation(); onSelect?.(e); }}
+                        onDoubleClick={(e) => { e.stopPropagation(); onDoubleClick?.(e); }}
+                    >
+                        {/* Inner Dot */}
+                        <div className="w-1.5 h-1.5 rounded-full bg-white" />
+                    </div>
+                ) : (
+                    <div
+                        className="absolute transform -translate-x-1/2 -translate-y-1/2 z-40 pointer-events-auto transition-transform hover:scale-110"
+                        style={{ left: dragState.center.x, top: dragState.center.y }}
+                        onClick={(e) => { e.stopPropagation(); onSelect?.(e); }}
+                        onDoubleClick={(e) => { e.stopPropagation(); onDoubleClick?.(e); }}
+                    >
+                        <GlassCard
+                            width={20}
+                            height={20}
+                            borderRadius={50}
+                            blur={6}
+                            distortion={12}
+                            chromaticAberration={0}
+                            borderOpacity={0.3}
+                            borderColor="#000000"
+                            backgroundOpacity={0.1}
+                            outerLightBlur={10}
+                            outerLightOpacity={0.4}
+                            outerLightColor="#000000"
+                            contentClassName="flex items-center justify-center w-full h-full"
+                            className="cursor-pointer"
+                            flexibility={0}
+                        />
+                    </div>
+                )}
             </div>
         );
     }

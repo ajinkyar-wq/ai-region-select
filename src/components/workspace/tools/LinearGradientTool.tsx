@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Region } from '@/types/workspace';
 import { cn } from '@/lib/utils';
+import { GlassCard } from 'react-glass-ui';
 
 interface LinearGradientToolProps {
     imageTransform: {
@@ -337,35 +338,57 @@ export function LinearGradientTool({
             >
                 {/* Canvas removed: ToolLayer renders the static overlay */}
 
-
-
-                <div
-                    className={cn(
-                        "absolute w-4 h-4 rounded cursor-pointer transform -translate-x-1/2 -translate-y-1/2 border-2 pointer-events-auto shadow-md transition-colors",
-                        isSelected
-                            ? "bg-blue-600 border-white hover:bg-blue-500 cursor-move" // Selected
-                            : "bg-gray-400 border-black/20 hover:bg-white" // Unselected
-                    )}
-                    style={{ left: center.x, top: center.y }}
-                    onPointerDown={(e) => {
-                        if (isSelected) handlePointerDown(e, 'move-center');
-                    }}
-                    onPointerMove={handlePointerMove}
-                    onPointerUp={handlePointerUp}
-                    onClick={(e) => {
-                        e.stopPropagation();
-                        // If we dragged, maybe don't toggle select? 
-                        // But pointer interactions prevent click usually if we capture?
-                        // Actually React might still fire click.
-                        // For now, keep simple.
-                        onSelect?.(e);
-                    }}
-                    onDoubleClick={(e) => {
-                        e.stopPropagation();
-                        // Trigger edit
-                        onDoubleClick?.(e);
-                    }}
-                />
+                {isSelected ? (
+                    <div
+                        className={cn(
+                            "absolute w-4 h-4 rounded cursor-pointer transform -translate-x-1/2 -translate-y-1/2 border-2 pointer-events-auto shadow-md transition-colors",
+                            "bg-blue-600 border-white hover:bg-blue-500 cursor-move" // Selected
+                        )}
+                        style={{ left: center.x, top: center.y }}
+                        onPointerDown={(e) => handlePointerDown(e, 'move-center')}
+                        onPointerMove={handlePointerMove}
+                        onPointerUp={handlePointerUp}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onSelect?.(e);
+                        }}
+                        onDoubleClick={(e) => {
+                            e.stopPropagation();
+                            onDoubleClick?.(e);
+                        }}
+                    />
+                ) : (
+                    <div
+                        className="absolute transform -translate-x-1/2 -translate-y-1/2 z-40 pointer-events-auto transition-transform hover:scale-110"
+                        style={{ left: center.x, top: center.y }}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onSelect?.(e);
+                        }}
+                        onDoubleClick={(e) => {
+                            e.stopPropagation();
+                            onDoubleClick?.(e);
+                        }}
+                    >
+                        <GlassCard
+                            width={16}
+                            height={16}
+                            borderRadius={4}
+                            blur={6}
+                            distortion={12}
+                            chromaticAberration={0}
+                            borderOpacity={0.3}
+                            borderColor="#000000"
+                            backgroundOpacity={0.1}
+                            outerLightBlur={10}
+                            outerLightOpacity={0.4}
+                            outerLightColor="#000000"
+                            contentClassName="flex items-center justify-center w-full h-full"
+                            className="cursor-pointer"
+                            flexibility={0}
+                        />
+                    </div>
+                )}
             </div>
         );
     }

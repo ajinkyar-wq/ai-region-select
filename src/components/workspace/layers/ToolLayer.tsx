@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 import { LinearGradientTool } from '../tools/LinearGradientTool';
 import { RadialGradientTool } from '../tools/RadialGradientTool';
 import { generateRadialGradientMask } from '@/lib/mask-analysis';
+import { GlassCard } from 'react-glass-ui';
 
 interface ToolLayerProps {
     width: number;
@@ -519,28 +520,56 @@ export function ToolLayer({
                     const isEditing = editingRegionId === region.id;
 
                     return (
-                        <div
-                            key={region.id}
-                            className={cn(
-                                "absolute pointer-events-auto rounded-full transform -translate-x-1/2 -translate-y-1/2 flex items-center justify-center",
-                                "transition-[transform,background-color,border-color,box-shadow]",
-                                region.selected
-                                    ? "bg-blue-600 text-white ring-2 ring-white shadow-lg z-50"
-                                    : "bg-black/60 text-white/80 hover:bg-black/80 hover:text-white z-40",
-                                (isEditing || region.selected) ? "cursor-move p-2 scale-110" : "cursor-pointer p-1.5 hover:scale-110"
-                            )}
-                            style={{
-                                left: cx,
-                                top: cy,
-                            }}
-                            onClick={(e) => handleIconClick(e, region)}
-                            onDoubleClick={(e) => handleIconDoubleClick(e, region)}
-                            onPointerDown={(e) => handlePointerDown(e, region)}
-                            onPointerMove={handlePointerMove}
-                            onPointerUp={handlePointerUp}
-                        >
-                            <Brush className="w-4 h-4" />
-                        </div>
+                        region.selected ? (
+                            <div
+                                key={region.id}
+                                className={cn(
+                                    "absolute pointer-events-auto rounded-full transform -translate-x-1/2 -translate-y-1/2 flex items-center justify-center",
+                                    "transition-[transform,background-color,border-color,box-shadow]",
+                                    "bg-blue-600 text-white ring-2 ring-white shadow-lg z-50",
+                                    (isEditing || region.selected) ? "cursor-move p-2 scale-110" : "cursor-pointer p-1.5 hover:scale-110"
+                                )}
+                                style={{
+                                    left: cx,
+                                    top: cy,
+                                }}
+                                onClick={(e) => handleIconClick(e, region)}
+                                onDoubleClick={(e) => handleIconDoubleClick(e, region)}
+                                onPointerDown={(e) => handlePointerDown(e, region)}
+                                onPointerMove={handlePointerMove}
+                                onPointerUp={handlePointerUp}
+                            >
+                                <Brush className="w-4 h-4" />
+                            </div>
+                        ) : (
+                            <div
+                                key={region.id}
+                                className="absolute transform -translate-x-1/2 -translate-y-1/2 z-40 pointer-events-auto transition-transform hover:scale-110"
+                                style={{ left: cx, top: cy }}
+                                onClick={(e) => handleIconClick(e, region)}
+                                onDoubleClick={(e) => handleIconDoubleClick(e, region)}
+                            >
+                                <GlassCard
+                                    width={32}
+                                    height={32}
+                                    borderRadius={50}
+                                    blur={6}
+                                    distortion={12}
+                                    chromaticAberration={0}
+                                    borderOpacity={0.3}
+                                    borderColor="#000000"
+                                    backgroundOpacity={0.1}
+                                    outerLightBlur={10}
+                                    outerLightOpacity={0.4}
+                                    outerLightColor="#000000"
+                                    contentClassName="flex items-center justify-center w-full h-full text-white"
+                                    className="cursor-pointer"
+                                    flexibility={0}
+                                >
+                                    <Brush className="w-3.5 h-3.5" />
+                                </GlassCard>
+                            </div>
+                        )
                     );
                 })}
 
