@@ -362,7 +362,7 @@ export function RadialGradientTool({
                             blur={6}
                             distortion={12}
                             chromaticAberration={0}
-                            borderOpacity={0.3}
+                            borderOpacity={0}
                             borderColor="#000000"
                             backgroundOpacity={0.1}
                             outerLightBlur={10}
