@@ -464,7 +464,13 @@ export function SmartMaskLayer({
                     }
                 } else {
                     const group = tile.regions.find(r => r.type === 'people-group');
-                    if (group) onEditRegion(group);
+                    if (group) {
+                        if (onEnterLocalEdit) {
+                            onEnterLocalEdit(group);
+                        } else {
+                            onEditRegion(group);
+                        }
+                    }
                 }
                 return;
             }

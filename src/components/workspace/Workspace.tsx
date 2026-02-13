@@ -117,7 +117,7 @@ export function Workspace() {
     });
   };
 
-  const handleSelectBatchRegions = (ids: string[], multi: boolean) => {
+  const handleSelectBatchRegions = (ids: string[], multi: boolean, activeId?: string) => {
     if (!image) return;
     setImage({
       ...image,
@@ -129,6 +129,24 @@ export function Workspace() {
         return multi ? r : { ...r, selected: false };
       })
     });
+
+    // Sync Activation if activeId is provided (e.g. from Shift-Click)
+    if (activeId) {
+      const region = image.regions.find(r => r.id === activeId);
+      if (region) {
+        setActiveMask(region);
+
+        if (region.type === 'manual') {
+          setBrushActive(true);
+          setBrushMode('add');
+        } else {
+          setBrushActive(false);
+        }
+
+        // Clear drawing tool if switching masks
+        setDrawingTool(null);
+      }
+    }
   };
 
   const handleMoveRegion = (id: string, targetGroupId: string | undefined, targetIndex?: number) => {
@@ -888,6 +906,15 @@ export function Workspace() {
                   peopleEnabled={peopleEnabled}
                   backgroundEnabled={backgroundEnabled}
                   onUpdateTile={(updates) => {
+                    // Sync activeMask state if regions are being deselected
+                    if (activeMask && updates.regions) {
+                      const updatedActiveRegion = updates.regions.find(r => r.id === activeMask.id);
+                      if (updatedActiveRegion && !updatedActiveRegion.selected) {
+                        setActiveMask(null);
+                        setBrushActive(false);
+                      }
+                    }
+
                     setImage(prev => {
                       if (!prev) return prev;
 
@@ -950,8 +977,22 @@ export function Workspace() {
                 // Only update selection state
                 setImage({ ...image, regions: newRegions });
 
-                // NOTE: We NO LONGER set activeMask here. 
-                // Activation (Edit Mode) is now explicit via onActivateRegion (Double Click).
+                // Sync Activation (Parity with Canvas)
+                // When selecting in panel, we treat it as an explicit activation of that mask
+                const region = image.regions.find(r => r.id === id);
+                if (region) {
+                  setActiveMask(region);
+
+                  if (region.type === 'manual') {
+                    setBrushActive(true);
+                    setBrushMode('add');
+                  } else {
+                    setBrushActive(false);
+                  }
+
+                  // Clear drawing tool if switching masks
+                  setDrawingTool(null);
+                }
               }}
               onActivateRegion={(id) => {
                 if (!image) return;

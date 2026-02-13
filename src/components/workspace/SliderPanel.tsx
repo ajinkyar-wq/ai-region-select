@@ -22,7 +22,7 @@ interface SliderPanelProps {
   onCreateLinearGradient?: () => void;
   onCreateRadialGradient?: () => void;
   onApplyEdits?: () => void;
-  onSelectBatchRegions?: (ids: string[], multi: boolean) => void;
+  onSelectBatchRegions?: (ids: string[], multi: boolean, activeId?: string) => void;
   onMoveRegion?: (id: string, targetGroupId: string | undefined, targetIndex?: number) => void;
   onDeleteGroup?: (groupId: string) => void;
   // New Prop for Activation (Double Click)
@@ -161,7 +161,7 @@ export function SliderPanel({
           !topLevelItems.find(i => 'type' in i && i.type === 'group' && i.id === rid)
         );
 
-        onSelectBatchRegions?.(regionsToSelect, multi);
+        onSelectBatchRegions?.(regionsToSelect, multi, id);
         return;
       }
     }

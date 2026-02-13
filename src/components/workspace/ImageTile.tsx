@@ -116,12 +116,20 @@ export function ImageTile({
         // For Person/Background (AI Masks):
         // Active = Selected. Do NOT auto-enter refining mode.
         // User must explicitly double-click to refine mask.
+
+        // Default behavior: Selecting an AI mask normally does NOT enter edit mode.
+        // HOWEVER: If we Just Double-Clicked (setEditingRegion(activeMask)), 
+        // we must NOT clear it here.
+        if (editingRegion?.id === activeMask.id) {
+          return;
+        }
+
         setEditingRegion(null);
       }
     } else {
       setEditingRegion(null);
     }
-  }, [activeMask]);
+  }, [activeMask, editingRegion]);
 
 
   const MIN_SCALE = 0.3;
