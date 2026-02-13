@@ -108,8 +108,12 @@ export function BrushTool({
         e.currentTarget.setPointerCapture(e.pointerId);
 
         const rect = e.currentTarget.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
+        // Calculate current CSS scale applied to container
+        // rect.width is Screen Pixels. imageTransform.width is Logical Pixels (at Scale=1).
+        const currentScale = rect.width / imageTransform.width;
+
+        const x = (e.clientX - rect.left) / currentScale;
+        const y = (e.clientY - rect.top) / currentScale;
 
         if (activeMask && maskDataRef.current) {
             applyBrushStroke(
@@ -136,8 +140,11 @@ export function BrushTool({
         if (!imageTransform) return;
 
         const rect = e.currentTarget.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
+        const currentScale = rect.width / imageTransform.width;
+
+        const x = (e.clientX - rect.left) / currentScale;
+        const y = (e.clientY - rect.top) / currentScale;
+
         setCursorPos({ x, y });
 
         if (isDrawing && activeMask && maskDataRef.current && lastPosRef.current) {

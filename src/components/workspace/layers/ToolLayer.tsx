@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Region, ImageTileData } from '@/types/workspace';
 import { getMaskCenter } from '@/lib/mask-analysis';
-import { Brush } from 'lucide-react';
+import { Brush, Component } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { LinearGradientTool } from '../tools/LinearGradientTool';
 import { RadialGradientTool } from '../tools/RadialGradientTool';
@@ -519,6 +519,8 @@ export function ToolLayer({
                     const cy = (region.center!.y + (activeOffset?.y || 0)) * scaleY;
 
                     const isEditing = editingRegionId === region.id;
+                    const isBackgroundOrInvert = region.label?.includes('Background') || region.label?.includes('Invert');
+                    const Icon = isBackgroundOrInvert ? Component : Brush;
 
                     return (
                         region.selected ? (
@@ -540,7 +542,7 @@ export function ToolLayer({
                                 onPointerMove={handlePointerMove}
                                 onPointerUp={handlePointerUp}
                             >
-                                <Brush className="w-4 h-4" />
+                                <Icon className="w-4 h-4" />
                             </div>
                         ) : (
                             <div
@@ -567,7 +569,7 @@ export function ToolLayer({
                                     className="cursor-pointer"
                                     flexibility={0}
                                 >
-                                    <Brush className="w-3.5 h-3.5" />
+                                    <Icon className="w-3.5 h-3.5" />
                                 </GlassCard>
                             </div>
                         )

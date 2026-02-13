@@ -235,3 +235,42 @@ export function generateUnionMask(
     }
     return newMaskData;
 }
+
+export function subtractMasks(
+    baseMask: Uint8Array,
+    masksToSubtract: MaskInput[],
+    width: number,
+    height: number
+): Uint8Array {
+    // Clone base mask to avoid mutation? Or can we mutate?
+    // Let's return a new one to be safe, or clone first.
+    const result = new Uint8Array(baseMask); // Clone
+
+    for (const mask of masksToSubtract) {
+        const offsetX = mask.offset?.x ?? 0;
+        const offsetY = mask.offset?.y ?? 0;
+        const maskW = mask.width;
+        const maskH = mask.height;
+        const maskData = mask.data;
+
+        // Optimization: iterate only the mask bounds clipped to target
+        const startX = Math.max(0, -offsetX);
+        const startY = Math.max(0, -offsetY);
+        const endX = Math.min(maskW, width - offsetX);
+        const endY = Math.min(maskH, height - offsetY);
+
+        for (let y = startY; y < endY; y++) {
+            for (let x = startX; x < endX; x++) {
+                const val = maskData[y * maskW + x];
+                // If subtract mask has value, clear the result pixel
+                if (val > 10) { // Threshold
+                    const targetX = x + offsetX;
+                    const targetY = y + offsetY;
+                    const targetIdx = targetY * width + targetX;
+                    result[targetIdx] = 0;
+                }
+            }
+        }
+    }
+    return result;
+}

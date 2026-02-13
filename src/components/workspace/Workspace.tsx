@@ -11,7 +11,7 @@ import { DraggableToolbar } from './DraggableToolbar';
 import type { ImageTileData, Region, RegionAdjustments } from '@/types/workspace';
 import { REGION_COLORS } from '@/types/workspace';
 import { Columns2, Paintbrush, Eraser } from 'lucide-react';
-import { generateRadialGradientMask, generateInvertedMask, generateUnionMask } from '@/lib/mask-analysis';
+import { generateRadialGradientMask, generateInvertedMask, generateUnionMask, subtractMasks } from '@/lib/mask-analysis';
 import { generateMaskPreview } from '@/lib/mask-preview';
 
 export function Workspace() {
@@ -44,8 +44,23 @@ export function Workspace() {
     if (!image) return;
 
     // Use image dimensions if available, else default
-    const width = image.width ?? 640;
-    const height = image.height ?? 640;
+    // Robust Dimension Logic (Parity with Invert)
+    const backgroundRegion = image.regions.find(r => r.type === 'background');
+    let width = image.width;
+    let height = image.height;
+
+    if (backgroundRegion) {
+      width = backgroundRegion.maskWidth;
+      height = backgroundRegion.maskHeight;
+    } else if (!width || !height) {
+      if (image.regions.length > 0) {
+        width = Math.max(...image.regions.map(r => r.maskWidth + (r.offset?.x || 0)));
+        height = Math.max(...image.regions.map(r => r.maskHeight + (r.offset?.y || 0)));
+      } else {
+        width = 640;
+        height = 640;
+      }
+    }
     const maskData = new Uint8Array(width * height);
 
     const newMask: Region = {
@@ -680,18 +695,18 @@ export function Workspace() {
     if (selectedRegions.length === 0) return;
 
     // Determine dimensions robustly
-    // 1. Try explicit image dimensions
-    // 2. Try to find max extent from existing regions (e.g. background mask usually covers full image)
+    // Prioritize existing AI masks (Background) as they represent the true segmentation resolution
+    const backgroundRegion = image.regions.find(r => r.type === 'background');
+
     let width = image.width;
     let height = image.height;
 
-    if (!width || !height) {
-      // Fallback: Find max dimensions from existing regions, prioritizing Background
-      const backgroundRegion = image.regions.find(r => r.type === 'background');
-      if (backgroundRegion) {
-        width = backgroundRegion.maskWidth;
-        height = backgroundRegion.maskHeight;
-      } else if (image.regions.length > 0) {
+    if (backgroundRegion) {
+      width = backgroundRegion.maskWidth;
+      height = backgroundRegion.maskHeight;
+    } else if (!width || !height) {
+      // Fallback: Find max dimensions from existing regions
+      if (image.regions.length > 0) {
         width = Math.max(...image.regions.map(r => r.maskWidth + (r.offset?.x || 0)));
         height = Math.max(...image.regions.map(r => r.maskHeight + (r.offset?.y || 0)));
       } else {
@@ -722,7 +737,18 @@ export function Workspace() {
       // Pure AI Logic -> Always produce a "Smart" mask (Red, No Brush)
 
       // Find the unselected AI masks
-      const selectedIds = new Set(selectedRegions.map(r => r.id));
+      // IMPORTANT: If a Group is selected, its children are strictly "Selected" too.
+      const selectedIds = new Set<string>();
+      selectedRegions.forEach(r => {
+        selectedIds.add(r.id);
+        if (r.type === 'people-group') {
+          // Find children of this group
+          image.regions.filter(child => child.groupId === r.groupId).forEach(c => selectedIds.add(c.id));
+          // Also, if the Group ITSELF is active, it might not track children via ID?
+          // Actually, `groupId` links them. All persons with `groupId === selectedRegion.groupId` are selected.
+        }
+      });
+
       const unselectedAIMasks = allAIMasks.filter(r => !selectedIds.has(r.id));
 
       if (unselectedAIMasks.length > 0) {
@@ -737,6 +763,7 @@ export function Workspace() {
         labelOverride = 'Background Mask (Generated)';
       } else {
         // Fallback: Invert Selected (e.g. Invert All People = Background)
+        // Even here, we use the "Smart" appearance
         const maskInputs = selectedRegions.map(r => ({
           data: r.maskData,
           width: r.maskWidth,
@@ -1172,17 +1199,11 @@ export function Workspace() {
                 setImage({ ...image, regions: newRegions });
 
                 // Sync Activation (Parity with Canvas)
-                // When selecting in panel, we treat it as an explicit activation of that mask
+                // When selecting in panel (Single Click), we set it as Active Mask but DO NOT enter edit mode (Brush).
                 const region = image.regions.find(r => r.id === id);
                 if (region) {
                   setActiveMask(region);
-
-                  if (region.type === 'manual') {
-                    setBrushActive(true);
-                    setBrushMode('add');
-                  } else {
-                    setBrushActive(false);
-                  }
+                  setBrushActive(false); // Single click = Select only
 
                   // Clear drawing tool if switching masks
                   setDrawingTool(null);

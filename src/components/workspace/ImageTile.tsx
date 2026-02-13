@@ -404,7 +404,7 @@ export function ImageTile({
           />
         )}
 
-        {/* TOOL: Interactive Brush (Global) */}
+        {/* TOOL: Interactive Brush (Global) - Now Inside Transform */}
         {brushActive && !editingRegion && imageTransform && activeMask && (
           <BrushTool
             imageTransform={imageTransform}
@@ -416,6 +416,8 @@ export function ImageTile({
             brushMode={brushMode}
           />
         )}
+
+
 
 
         {/* Modal Mask Editor (AI Masks Only - Modal Overlay) */}
