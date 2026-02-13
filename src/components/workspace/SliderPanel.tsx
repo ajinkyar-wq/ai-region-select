@@ -6,7 +6,8 @@ import {
   Eye,
   EyeOff,
   Trash2,
-  Layers
+  Layers,
+  Component, // Use Component icon for Invert
 } from 'lucide-react';
 import type { Region, RegionAdjustments } from '@/types/workspace';
 
@@ -21,6 +22,7 @@ interface SliderPanelProps {
   onCreateManualMask: () => void;
   onCreateLinearGradient?: () => void;
   onCreateRadialGradient?: () => void;
+  onInvertMask?: (id?: string) => void;
   onApplyEdits?: () => void;
   onSelectBatchRegions?: (ids: string[], multi: boolean, activeId?: string) => void;
   onMoveRegion?: (id: string, targetGroupId: string | undefined, targetIndex?: number) => void;
@@ -43,6 +45,7 @@ export function SliderPanel({
   onCreateManualMask,
   onCreateLinearGradient,
   onCreateRadialGradient,
+  onInvertMask,
   onApplyEdits,
   onSelectBatchRegions,
   onMoveRegion,
@@ -506,6 +509,17 @@ export function SliderPanel({
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
+                              onInvertMask?.(groupId);
+                            }}
+                            className="p-1 text-[#ABABAB] hover:text-white transition-colors"
+                            title="Invert Group"
+                          >
+                            <Component className="h-3.5 w-3.5" />
+                          </button>
+
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
                               // Delete Group Icon - Updated to Grey
                               onDeleteGroup?.(groupId);
                             }}
@@ -546,6 +560,7 @@ export function SliderPanel({
                                     onActivate={() => onActivateRegion?.(region.id)}
                                     onToggleVis={() => onToggleVisibility(region.id)}
                                     onDelete={() => onDeleteRegion(region.id)}
+                                    onInvert={() => onInvertMask?.(region.id)}
                                     onDragStart={(e) => handleDragStart(e, region.id)}
                                     onDragOver={(e) => handleDragOverItem(e, region.id, false)}
                                     onDrop={(e) => handleDropItem(e, region.id)}
@@ -589,6 +604,7 @@ export function SliderPanel({
                         onActivate={() => onActivateRegion?.(region.id)}
                         onToggleVis={() => onToggleVisibility(region.id)}
                         onDelete={() => onDeleteRegion(region.id)}
+                        onInvert={() => onInvertMask?.(region.id)}
                         onDragStart={(e) => handleDragStart(e, region.id)}
                         onDragOver={(e) => handleDragOverItem(e, region.id, false)}
                         onDrop={(e) => handleDropItem(e, region.id)}
@@ -635,6 +651,7 @@ function OutlinerItem({
   onActivate,
   onToggleVis,
   onDelete,
+  onInvert,
   onDragStart,
   onDrop,
   isChild = false,
@@ -647,6 +664,7 @@ function OutlinerItem({
   onActivate?: () => void;
   onToggleVis: () => void;
   onDelete?: () => void;
+  onInvert?: () => void;
   onDragStart?: (e: React.DragEvent) => void;
   onDrop?: (e: React.DragEvent) => void;
   onDragOver?: (e: React.DragEvent) => void;
@@ -700,6 +718,18 @@ function OutlinerItem({
       </div>
 
       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        {onInvert && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onInvert();
+            }}
+            className="p-1 text-[#ABABAB] hover:text-white transition-colors"
+            title="Invert Mask"
+          >
+            <Component className="h-3 w-3" />
+          </button>
+        )}
         {onDelete && (
           <button
             onClick={(e) => {

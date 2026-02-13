@@ -151,3 +151,87 @@ export function getMaskCenter(
 
     return bestPoint;
 }
+
+
+interface MaskInput {
+    data: Uint8Array;
+    width: number;
+    height: number;
+    offset?: { x: number; y: number };
+}
+
+export function generateInvertedMask(
+    masks: MaskInput[],
+    targetWidth: number,
+    targetHeight: number
+): Uint8Array {
+    const newMaskData = new Uint8Array(targetWidth * targetHeight);
+
+    for (let y = 0; y < targetHeight; y++) {
+        for (let x = 0; x < targetWidth; x++) {
+            let maxAlpha = 0;
+
+            for (const mask of masks) {
+                // Calculate local coordinates
+                const offsetX = mask.offset?.x ?? 0;
+                const offsetY = mask.offset?.y ?? 0;
+
+                const localX = x - offsetX;
+                const localY = y - offsetY;
+
+                // Check if within mask bounds
+                if (localX >= 0 && localX < mask.width && localY >= 0 && localY < mask.height) {
+                    const idx = localY * mask.width + localX;
+                    if (idx < mask.data.length) {
+                        const val = mask.data[idx];
+                        if (val > maxAlpha) maxAlpha = val;
+                    }
+                }
+
+                if (maxAlpha === 255) break;
+            }
+
+            const targetIdx = y * targetWidth + x;
+            newMaskData[targetIdx] = 255 - maxAlpha;
+        }
+    }
+    return newMaskData;
+}
+
+export function generateUnionMask(
+    masks: MaskInput[],
+    targetWidth: number,
+    targetHeight: number
+): Uint8Array {
+    const newMaskData = new Uint8Array(targetWidth * targetHeight);
+
+    for (let y = 0; y < targetHeight; y++) {
+        for (let x = 0; x < targetWidth; x++) {
+            let maxAlpha = 0;
+
+            for (const mask of masks) {
+                // Calculate local coordinates
+                const offsetX = mask.offset?.x ?? 0;
+                const offsetY = mask.offset?.y ?? 0;
+
+                const localX = x - offsetX;
+                const localY = y - offsetY;
+
+                // Check if within mask bounds
+                if (localX >= 0 && localX < mask.width && localY >= 0 && localY < mask.height) {
+                    const idx = localY * mask.width + localX;
+                    if (idx < mask.data.length) {
+                        const val = mask.data[idx];
+                        if (val > maxAlpha) maxAlpha = val;
+                    }
+                }
+
+                if (maxAlpha === 255) break;
+            }
+
+            const targetIdx = y * targetWidth + x;
+            newMaskData[targetIdx] = maxAlpha; // Union = Max Alpha (No Invert)
+        }
+    }
+    return newMaskData;
+}

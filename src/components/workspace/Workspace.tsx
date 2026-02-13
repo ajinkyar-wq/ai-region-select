@@ -11,7 +11,7 @@ import { DraggableToolbar } from './DraggableToolbar';
 import type { ImageTileData, Region, RegionAdjustments } from '@/types/workspace';
 import { REGION_COLORS } from '@/types/workspace';
 import { Columns2, Paintbrush, Eraser } from 'lucide-react';
-import { generateRadialGradientMask } from '@/lib/mask-analysis';
+import { generateRadialGradientMask, generateInvertedMask, generateUnionMask } from '@/lib/mask-analysis';
 import { generateMaskPreview } from '@/lib/mask-preview';
 
 export function Workspace() {
@@ -342,14 +342,21 @@ export function Workspace() {
   const handleFileDrop = useCallback((file: File) => {
     const imageUrl = URL.createObjectURL(file);
 
-    setImage({
-      id: 'single-image',
-      file,
-      imageUrl,
-      isProcessing: true,
-      regions: [],
-      selectedRegionId: null,
-    });
+    // Load image to get dimensions
+    const img = new Image();
+    img.onload = () => {
+      setImage({
+        id: 'single-image',
+        file,
+        imageUrl,
+        width: img.naturalWidth,
+        height: img.naturalHeight,
+        isProcessing: true,
+        regions: [],
+        selectedRegionId: null,
+      });
+    };
+    img.src = imageUrl;
   }, []);
 
   // Handle Delete Key
@@ -603,6 +610,193 @@ export function Workspace() {
         }),
       };
     });
+  };
+
+  const handleInvertMask = (targetId?: string) => {
+    if (!image) return;
+
+    let selectedRegions: Region[] = [];
+    let sourceLabel = 'Selection';
+    let insertionIndex = -1;
+    let targetGroupId: string | undefined = undefined;
+
+    if (targetId) {
+      // Check if it's a group
+      const groupRegions = image.regions.filter(r => r.groupId === targetId);
+      if (groupRegions.length > 0) {
+        selectedRegions = groupRegions;
+        sourceLabel = 'Group';
+        // Insert after the last member of the group
+        // And it should be OUTSIDE the group (sibling to the group)
+        let lastGroupIndex = -1;
+        for (let i = image.regions.length - 1; i >= 0; i--) {
+          if (image.regions[i].groupId === targetId) {
+            lastGroupIndex = i;
+            break;
+          }
+        }
+        insertionIndex = lastGroupIndex + 1;
+        targetGroupId = undefined; // Sibling to group = Root (or parent group? We only have 1 level for now)
+      } else {
+        // Check if it's a specific region
+        const region = image.regions.find(r => r.id === targetId);
+        if (region) {
+          selectedRegions = [region];
+          sourceLabel = region.label;
+          // Insert after this region
+          const idx = image.regions.findIndex(r => r.id === targetId);
+          insertionIndex = idx + 1;
+          // Sibling to region = Same Group
+          targetGroupId = region.groupId;
+        }
+      }
+    } else {
+      // Fallback to current selection
+      selectedRegions = image.regions.filter(r => r.selected);
+      if (selectedRegions.length === 1) {
+        sourceLabel = selectedRegions[0].label;
+        const idx = image.regions.findIndex(r => r.id === selectedRegions[0].id);
+        insertionIndex = idx + 1;
+        targetGroupId = selectedRegions[0].groupId;
+      }
+      else if (selectedRegions.length > 1) {
+        sourceLabel = `${selectedRegions.length} Masks`;
+        // Append to end of selection?
+        let lastIdx = -1;
+        for (let i = image.regions.length - 1; i >= 0; i--) {
+          if (image.regions[i].selected) {
+            lastIdx = i;
+            break;
+          }
+        }
+        insertionIndex = lastIdx + 1;
+        // If all selected are in same group, keep in group. Else root.
+        const firstGroup = selectedRegions[0].groupId;
+        const allSameGroup = selectedRegions.every(r => r.groupId === firstGroup);
+        targetGroupId = allSameGroup ? firstGroup : undefined;
+      }
+    }
+
+    if (selectedRegions.length === 0) return;
+
+    // Determine dimensions robustly
+    // 1. Try explicit image dimensions
+    // 2. Try to find max extent from existing regions (e.g. background mask usually covers full image)
+    let width = image.width;
+    let height = image.height;
+
+    if (!width || !height) {
+      // Fallback: Find max dimensions from existing regions, prioritizing Background
+      const backgroundRegion = image.regions.find(r => r.type === 'background');
+      if (backgroundRegion) {
+        width = backgroundRegion.maskWidth;
+        height = backgroundRegion.maskHeight;
+      } else if (image.regions.length > 0) {
+        width = Math.max(...image.regions.map(r => r.maskWidth + (r.offset?.x || 0)));
+        height = Math.max(...image.regions.map(r => r.maskHeight + (r.offset?.y || 0)));
+      } else {
+        width = 640;
+        height = 640;
+      }
+    }
+
+    let newMaskData: Uint8Array;
+    let labelOverride: string | undefined;
+
+    // Smart Union Strategy:
+    // If we are dealing with purely AI masks, the "Inverse" is effectively the UNION of all 
+    // the UNSELECTED AI masks. This preserves the high-quality AI boundaries.
+    const isPurelyAISelection = selectedRegions.every(r =>
+      r.type === 'person' ||
+      r.type === 'background' ||
+      r.type === 'people-group'
+    );
+
+    // Get all AI masks in the image
+    const allAIMasks = image.regions.filter(r =>
+      r.type === 'person' ||
+      r.type === 'background'
+    );
+
+    if (isPurelyAISelection) {
+      // Pure AI Logic -> Always produce a "Smart" mask (Red, No Brush)
+
+      // Find the unselected AI masks
+      const selectedIds = new Set(selectedRegions.map(r => r.id));
+      const unselectedAIMasks = allAIMasks.filter(r => !selectedIds.has(r.id));
+
+      if (unselectedAIMasks.length > 0) {
+        const maskInputs = unselectedAIMasks.map(r => ({
+          data: r.maskData,
+          width: r.maskWidth,
+          height: r.maskHeight,
+          offset: r.offset
+        }));
+        // Create a UNION of the unselected masks
+        newMaskData = generateUnionMask(maskInputs, width, height);
+        labelOverride = 'Background Mask (Generated)';
+      } else {
+        // Fallback: Invert Selected (e.g. Invert All People = Background)
+        const maskInputs = selectedRegions.map(r => ({
+          data: r.maskData,
+          width: r.maskWidth,
+          height: r.maskHeight,
+          offset: r.offset
+        }));
+        newMaskData = generateInvertedMask(maskInputs, width, height);
+        labelOverride = `Invert of ${sourceLabel}`;
+      }
+    } else {
+      // Standard Inversion (Pixel-based) for Mixed/Manual selections
+      const maskInputs = selectedRegions.map(r => ({
+        data: r.maskData,
+        width: r.maskWidth,
+        height: r.maskHeight,
+        offset: r.offset
+      }));
+      newMaskData = generateInvertedMask(maskInputs, width, height);
+    }
+
+    // Determine label
+    const finalLabel = labelOverride || `Invert of ${sourceLabel}`;
+
+    const newMask: Region = {
+      id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2),
+      type: 'manual',
+      label: finalLabel,
+      maskData: newMaskData,
+      maskWidth: width,
+      maskHeight: height,
+      // If it's a Smart Union (Background Mask), use a different color (e.g. Red/Group) to distinguish from Manual Green
+      color: labelOverride ? REGION_COLORS['people-group'] : REGION_COLORS.manual,
+      visible: true,
+      selected: true,
+      hovered: false,
+      hasEdits: true,
+      previewUrl: generateMaskPreview(newMaskData, width, height, labelOverride ? REGION_COLORS['people-group'] : REGION_COLORS.manual),
+      groupId: targetGroupId,
+    };
+
+    setImage(prev => {
+      if (!prev) return prev;
+
+      const newRegions = [...prev.regions.map(r => ({ ...r, selected: false }))];
+
+      if (insertionIndex !== -1 && insertionIndex <= newRegions.length) {
+        newRegions.splice(insertionIndex, 0, newMask);
+      } else {
+        newRegions.push(newMask);
+      }
+
+      return {
+        ...prev,
+        regions: newRegions
+      };
+    });
+
+    setActiveMask(newMask);
+    // Only activate brush if it was a standard manual invert, NOT a Smart Union
+    setBrushActive(!labelOverride);
   };
 
   const handleCreateLinearGradient = () => {
@@ -1058,6 +1252,7 @@ export function Workspace() {
               onSelectBatchRegions={handleSelectBatchRegions}
               onMoveRegion={handleMoveRegion}
               onDeleteGroup={handleDeleteGroup}
+              onInvertMask={handleInvertMask}
             />
           </div>
         </div>
