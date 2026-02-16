@@ -798,16 +798,12 @@ export function Workspace() {
     if (selectedRegions.length === 0) return;
 
     // Determine dimensions robustly
-    // Prioritize existing AI masks (Background) as they represent the true segmentation resolution
-    const backgroundRegion = image.regions.find(r => r.type === 'background');
-
+    // Always use the full image resolution to ensure high-fidelity inversions, especially for manual masks.
+    // The mask analysis functions now handle scaling if AI masks are lower resolution.
     let width = image.width;
     let height = image.height;
 
-    if (backgroundRegion) {
-      width = backgroundRegion.maskWidth;
-      height = backgroundRegion.maskHeight;
-    } else if (!width || !height) {
+    if (!width || !height) {
       // Fallback: Find max dimensions from existing regions
       if (image.regions.length > 0) {
         width = Math.max(...image.regions.map(r => r.maskWidth + (r.offset?.x || 0)));

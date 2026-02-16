@@ -172,12 +172,19 @@ export function generateInvertedMask(
             let maxAlpha = 0;
 
             for (const mask of masks) {
-                // Calculate local coordinates
+                // Calculate scale factors (to map Target -> Mask space)
+                // If mask covers full image conceptually, we scale.
+                // If mask has offset, we shift.
+                // Formula: maskX = (targetX * (maskW / targetW)) - offsetX
+
+                const scaleX = mask.width / targetWidth;
+                const scaleY = mask.height / targetHeight;
+
                 const offsetX = mask.offset?.x ?? 0;
                 const offsetY = mask.offset?.y ?? 0;
 
-                const localX = x - offsetX;
-                const localY = y - offsetY;
+                const localX = Math.floor(x * scaleX) - offsetX;
+                const localY = Math.floor(y * scaleY) - offsetY;
 
                 // Check if within mask bounds
                 if (localX >= 0 && localX < mask.width && localY >= 0 && localY < mask.height) {
@@ -210,12 +217,15 @@ export function generateUnionMask(
             let maxAlpha = 0;
 
             for (const mask of masks) {
-                // Calculate local coordinates
+                // Scale & Offset logic
+                const scaleX = mask.width / targetWidth;
+                const scaleY = mask.height / targetHeight;
+
                 const offsetX = mask.offset?.x ?? 0;
                 const offsetY = mask.offset?.y ?? 0;
 
-                const localX = x - offsetX;
-                const localY = y - offsetY;
+                const localX = Math.floor(x * scaleX) - offsetX;
+                const localY = Math.floor(y * scaleY) - offsetY;
 
                 // Check if within mask bounds
                 if (localX >= 0 && localX < mask.width && localY >= 0 && localY < mask.height) {
@@ -242,32 +252,34 @@ export function subtractMasks(
     width: number,
     height: number
 ): Uint8Array {
-    // Clone base mask to avoid mutation? Or can we mutate?
-    // Let's return a new one to be safe, or clone first.
-    const result = new Uint8Array(baseMask); // Clone
+    // Clone base mask
+    const result = new Uint8Array(baseMask);
 
-    for (const mask of masksToSubtract) {
-        const offsetX = mask.offset?.x ?? 0;
-        const offsetY = mask.offset?.y ?? 0;
-        const maskW = mask.width;
-        const maskH = mask.height;
-        const maskData = mask.data;
+    // We must iterate over every pixel of the RESULT (width x height)
+    // because mapping from Mask -> Result (inverse) is harder if scaling is involved.
+    // So we iterate x,y of Result, and check if it hits any mask.
 
-        // Optimization: iterate only the mask bounds clipped to target
-        const startX = Math.max(0, -offsetX);
-        const startY = Math.max(0, -offsetY);
-        const endX = Math.min(maskW, width - offsetX);
-        const endY = Math.min(maskH, height - offsetY);
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
 
-        for (let y = startY; y < endY; y++) {
-            for (let x = startX; x < endX; x++) {
-                const val = maskData[y * maskW + x];
-                // If subtract mask has value, clear the result pixel
-                if (val > 10) { // Threshold
-                    const targetX = x + offsetX;
-                    const targetY = y + offsetY;
-                    const targetIdx = targetY * width + targetX;
-                    result[targetIdx] = 0;
+            for (const mask of masksToSubtract) {
+                const scaleX = mask.width / width;
+                const scaleY = mask.height / height;
+
+                const offsetX = mask.offset?.x ?? 0;
+                const offsetY = mask.offset?.y ?? 0;
+
+                const localX = Math.floor(x * scaleX) - offsetX;
+                const localY = Math.floor(y * scaleY) - offsetY;
+
+                if (localX >= 0 && localX < mask.width && localY >= 0 && localY < mask.height) {
+                    const val = mask.data[localY * mask.width + localX];
+                    if (val > 10) {
+                        // Erase in result
+                        result[y * width + x] = 0;
+                        // Optimization: If erased, no need to check other masks for this pixel
+                        break;
+                    }
                 }
             }
         }
