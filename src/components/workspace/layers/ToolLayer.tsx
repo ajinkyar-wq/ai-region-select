@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Region, ImageTileData } from '@/types/workspace';
 import { getMaskCenter } from '@/lib/mask-analysis';
-import { Brush, Component } from 'lucide-react';
+import { Brush, Contrast } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { LinearGradientTool } from '../tools/LinearGradientTool';
 import { RadialGradientTool } from '../tools/RadialGradientTool';
@@ -520,7 +520,7 @@ export function ToolLayer({
 
                     const isEditing = editingRegionId === region.id;
                     const isBackgroundOrInvert = region.label?.includes('Background') || region.label?.includes('Invert');
-                    const Icon = isBackgroundOrInvert ? Component : Brush;
+                    const Icon = isBackgroundOrInvert ? Contrast : Brush;
 
                     return (
                         region.selected ? (

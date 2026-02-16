@@ -7,7 +7,7 @@ import {
   EyeOff,
   Trash2,
   Layers,
-  Component, // Use Component icon for Invert
+  Contrast, // Use Contrast icon for Invert
 } from 'lucide-react';
 import type { Region, RegionAdjustments } from '@/types/workspace';
 
@@ -514,7 +514,7 @@ export function SliderPanel({
                             className="p-1 text-[#ABABAB] hover:text-white transition-colors"
                             title="Invert Group"
                           >
-                            <Component className="h-3.5 w-3.5" />
+                            <Contrast className="h-3.5 w-3.5" />
                           </button>
 
                           <button
@@ -727,7 +727,7 @@ function OutlinerItem({
             className="p-1 text-[#ABABAB] hover:text-white transition-colors"
             title="Invert Mask"
           >
-            <Component className="h-3 w-3" />
+            <Contrast className="h-3 w-3" />
           </button>
         )}
         {onDelete && (

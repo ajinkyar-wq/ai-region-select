@@ -325,10 +325,44 @@ export function Workspace() {
 
   const handleDeleteGroup = (groupId: string) => {
     if (!image) return;
-    setImage(prev => prev ? {
-      ...prev,
-      regions: prev.regions.filter(r => r.groupId !== groupId)
-    } : prev);
+
+    setImage(prev => {
+      if (!prev) return prev;
+
+      // Identify masks in this group
+      const groupRegions = prev.regions.filter(r => r.groupId === groupId);
+
+      // Separate into types
+      const manualToDelete = groupRegions.filter(r =>
+        r.type === 'manual' || r.type === 'linear-gradient' || r.type === 'radial-gradient'
+      );
+
+      const aiToReset = groupRegions.filter(r =>
+        !manualToDelete.includes(r)
+      );
+
+      // 1. Remove Manual Masks (Hard Delete)
+      let newRegions = prev.regions.filter(r => !manualToDelete.includes(r));
+
+      // 2. Reset AI Masks (Soft Delete: Ungroup, Remove Edits, Deselect)
+      newRegions = newRegions.map(r => {
+        if (aiToReset.some(reset => reset.id === r.id)) {
+          return {
+            ...r,
+            groupId: undefined, // Ungroup
+            hasEdits: false,    // Remove from List
+            selected: false,    // Deselect
+            visible: true       // Keep on canvas
+          };
+        }
+        return r;
+      });
+
+      return {
+        ...prev,
+        regions: newRegions
+      };
+    });
   };
 
   const handleEditManualMask = (regionId: string) => {
@@ -636,36 +670,65 @@ export function Workspace() {
     let targetGroupId: string | undefined = undefined;
 
     if (targetId) {
-      // Check if it's a group
-      const groupRegions = image.regions.filter(r => r.groupId === targetId);
-      if (groupRegions.length > 0) {
-        selectedRegions = groupRegions;
-        sourceLabel = 'Group';
-        // Insert after the last member of the group
-        // And it should be OUTSIDE the group (sibling to the group)
-        let lastGroupIndex = -1;
-        for (let i = image.regions.length - 1; i >= 0; i--) {
-          if (image.regions[i].groupId === targetId) {
-            lastGroupIndex = i;
-            break;
+      // Logic Update: Check if the targetId is part of the CURRENT selection.
+      // If it is, we should respect the selection context and invert the WHOLE selection,
+      // rather than isolating the clicked item.
+      const isTargetSelected = image.regions.some(r => r.id === targetId && r.selected);
+      // Also check if target is a group header that is "selected"?
+      // Usually groups aren't "selected" in the region list property (children are).
+      // But let's check if ALL children of the group are selected?
+      // Actually, standard behavior: If I click "Invert" on a row that is SELECTED, I expect the SELECTION to be inverted.
+      // If I click "Invert" on a row that is NOT selected, I expect JUST THAT ROW to be inverted.
+
+      if (isTargetSelected) {
+        // Fallback to extraction from 'selected' logic below
+        selectedRegions = image.regions.filter(r => r.selected);
+        // ... But we need to set sourceLabel etc.
+        // Let the 'else' block handle it?
+        // We can just skip this 'if (targetId)' block if it's selected.
+        // But we need to be careful about `targetGroupId`.
+        // If we use selection logic, `targetGroupId` is derived from selection.
+        // If I click on Item A (Group X), and Item B (Group Y) is also selected.
+        // Target Group? Undefined (Root).
+        // This matches `else` block logic.
+      } else {
+        // Target is NOT selected -> Isolate it (Existing Logic)
+
+        // Check if it's a group
+        const groupRegions = image.regions.filter(r => r.groupId === targetId);
+        if (groupRegions.length > 0) {
+          selectedRegions = groupRegions;
+          sourceLabel = 'Group';
+          // Insert after the last member of the group
+          // And it should be OUTSIDE the group (sibling to the group)
+          let lastGroupIndex = -1;
+          for (let i = image.regions.length - 1; i >= 0; i--) {
+            if (image.regions[i].groupId === targetId) {
+              lastGroupIndex = i;
+              break;
+            }
+          }
+          insertionIndex = lastGroupIndex + 1;
+          targetGroupId = undefined; // Sibling to group = Root (or parent group? We only have 1 level for now)
+        } else {
+          // Check if it's a specific region
+          const region = image.regions.find(r => r.id === targetId);
+          if (region) {
+            selectedRegions = [region];
+            sourceLabel = region.label;
+            // Insert after this region
+            const idx = image.regions.findIndex(r => r.id === targetId);
+            insertionIndex = idx + 1;
+            // Sibling to region = Same Group
+            targetGroupId = region.groupId;
           }
         }
-        insertionIndex = lastGroupIndex + 1;
-        targetGroupId = undefined; // Sibling to group = Root (or parent group? We only have 1 level for now)
-      } else {
-        // Check if it's a specific region
-        const region = image.regions.find(r => r.id === targetId);
-        if (region) {
-          selectedRegions = [region];
-          sourceLabel = region.label;
-          // Insert after this region
-          const idx = image.regions.findIndex(r => r.id === targetId);
-          insertionIndex = idx + 1;
-          // Sibling to region = Same Group
-          targetGroupId = region.groupId;
-        }
       }
-    } else {
+    }
+
+    // specific check: if we skipped the block above because isTargetSelected was true,
+    // selectedRegions is empty. We need to fill it using standard selection logic.
+    if (selectedRegions.length === 0) {
       // Fallback to current selection
       selectedRegions = image.regions.filter(r => r.selected);
       if (selectedRegions.length === 1) {
