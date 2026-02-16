@@ -368,18 +368,49 @@ export function Workspace() {
   const handleEditManualMask = (regionId: string) => {
     if (!image) return;
 
-    // Deselect others
-    setImage(prev => prev ? {
-      ...prev,
-      regions: prev.regions.map(r => ({ ...r, selected: r.id === regionId }))
-    } : prev);
+    const targetRegion = image.regions.find(r => r.id === regionId);
+    if (!targetRegion) return;
 
-    const region = image.regions.find(r => r.id === regionId);
-    if (region && region.type === 'manual') {
-      setActiveMask(region);
+    const isAI = targetRegion.type === 'person' || targetRegion.type === 'background' || targetRegion.type === 'people-group';
+
+    // Smart Selection Logic:
+    // If AI Mask -> Preserve other SELECTED AI masks (Multi-Edit)
+    // If Manual -> Enforce Single Selection (Strict Separation)
+
+    setImage(prev => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        regions: prev.regions.map(r => {
+          // If match, ensure selected
+          if (r.id === regionId) return { ...r, selected: true };
+
+          // If we are editing AI, and 'r' is also AI and WAS selected -> Keep it.
+          if (isAI) {
+            const rIsAI = r.type === 'person' || r.type === 'background' || r.type === 'people-group';
+            if (rIsAI && r.selected) return r;
+          }
+
+          // Otherwise deselect (Manual vs AI, or Manual vs Manual)
+          return { ...r, selected: false };
+        })
+      };
+    });
+
+    if (targetRegion.type === 'manual') {
+      setActiveMask(targetRegion);
       setBrushActive(true);
       setBrushMode('add');
-      setDrawingTool(null); // Clear any other tool
+      setDrawingTool(null);
+    } else {
+      // AI Mask / Gradient
+      setActiveMask(targetRegion);
+      // We DON'T toggle brush here for AI, ImageTile handles the editor overlay based on `activeMask` + Selection.
+      // Actually `ImageTile` uses `onEnterLocalEdit` to set `editingRegion`.
+      // `onDoubleEditRegion` calls this. 
+      // We rely on `ImageTile` witnessing the selection update.
+      setBrushActive(false);
+      setDrawingTool(null);
     }
   };
 
@@ -603,15 +634,24 @@ export function Workspace() {
       const region = image.regions.find(r => r.type === type);
       if (!region) return;
 
-      // ✅ CLEAR ALL SELECTIONS
+      const isAI = type === 'person' || type === 'background';
+
+      // ✅ SMART SELECTION: Preserve AI Multi-Select
       setImage(prev =>
         prev
           ? {
             ...prev,
-            regions: prev.regions.map(r => ({
-              ...r,
-              selected: false,
-            })),
+            regions: prev.regions.map(r => {
+              // If we are editing AI, and 'r' is also AI/Group and WAS selected -> Keep it.
+              if (isAI) {
+                const rIsAI = r.type === 'person' || r.type === 'background' || r.type === 'people-group';
+                if (rIsAI && r.selected) return r;
+              }
+              return {
+                ...r,
+                selected: false,
+              };
+            }),
           }
           : prev
       );

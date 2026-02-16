@@ -338,6 +338,8 @@ export function SmartMaskLayer({
         onHoverChange(null);
     };
 
+    const clickTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
     const handleCanvasClick = (e: React.MouseEvent) => {
         const isMultiToggle = e.ctrlKey || e.metaKey || e.shiftKey;
 
@@ -400,23 +402,39 @@ export function SmartMaskLayer({
 
         if (clickedRegion) {
             e.stopPropagation(); // Prevent bubble to ImageTile background handler
-            const updatedRegions = tile.regions.map(r => {
-                // ⌘ / Ctrl + click → toggle ONLY this region
-                if (isMultiToggle) {
-                    if (r.id === clickedRegion!.id) {
-                        return { ...r, selected: !r.selected };
+
+            const performSelectionUpdate = () => {
+                const updatedRegions = tile.regions.map(r => {
+                    // ⌘ / Ctrl + click → toggle ONLY this region
+                    if (isMultiToggle) {
+                        if (r.id === clickedRegion!.id) {
+                            return { ...r, selected: !r.selected };
+                        }
+                        return r; // ← DO NOT TOUCH OTHERS
                     }
-                    return r; // ← DO NOT TOUCH OTHERS
-                }
 
-                // Normal click → single select
-                return {
-                    ...r,
-                    selected: r.id === clickedRegion!.id,
-                };
-            });
+                    // Normal click → single select
+                    return {
+                        ...r,
+                        selected: r.id === clickedRegion!.id,
+                    };
+                });
+                onUpdateTile({ regions: updatedRegions });
+            };
 
-            onUpdateTile({ regions: updatedRegions });
+            // Double Click Handling Strategy:
+            // If we click an ALREADY selected region (without modifiers),
+            // we delay the "Deselect Others" action to wait for a potential Double Click.
+            // If Double Click happens, we cancel this update, preserving the multi-selection for the Editor.
+            if (!isMultiToggle && clickedRegion.selected) {
+                if (clickTimeoutRef.current) clearTimeout(clickTimeoutRef.current);
+                clickTimeoutRef.current = setTimeout(() => {
+                    performSelectionUpdate();
+                }, 250); // 250ms delay to allow double-click
+            } else {
+                // Immediate update for explicit toggle OR new selection
+                performSelectionUpdate();
+            }
 
             // Activate the region (make it red/active) UNLESS we just deselected it via toggle
             const isDeselecting = isMultiToggle && clickedRegion.selected;
@@ -434,6 +452,8 @@ export function SmartMaskLayer({
     };
 
     const handleCanvasDoubleClick = (e: React.MouseEvent) => {
+        // CANCEL pending single-select update (Preserve Multi-Selection)
+        if (clickTimeoutRef.current) clearTimeout(clickTimeoutRef.current);
         const canvas = canvasRef.current;
         if (!canvas || !imageTransform) return;
 

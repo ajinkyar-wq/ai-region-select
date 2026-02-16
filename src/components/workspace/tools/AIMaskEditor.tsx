@@ -3,7 +3,8 @@ import type { Region } from '@/types/workspace';
 import { applyBrushStroke } from '@/lib/brush-engine';
 
 interface AIMaskEditorProps {
-    region: Region;
+    activeRegions: Region[]; // explicit selection
+    dependencyRegions?: Region[]; // related masks (Background, Group, Children)
     imageTransform: {
         scale: number;
         x: number;
@@ -13,10 +14,9 @@ interface AIMaskEditorProps {
     };
     canvasWidth: number;
     canvasHeight: number;
-    onMaskUpdate: (newMaskData: Uint8Array) => void;
+    onMasksUpdate: (updates: { id: string; maskData: Uint8Array }[]) => void;
     onExit: () => void;
 
-    // Controlled props
     mode?: 'add' | 'erase';
     brushSize?: number;
     softness?: number;
@@ -24,11 +24,12 @@ interface AIMaskEditorProps {
 }
 
 export function AIMaskEditor({
-    region,
+    activeRegions,
+    dependencyRegions = [],
     imageTransform,
     canvasWidth,
     canvasHeight,
-    onMaskUpdate,
+    onMasksUpdate,
     mode = 'add',
     brushSize = 20,
     softness = 0,
@@ -38,26 +39,34 @@ export function AIMaskEditor({
     const [isDrawing, setIsDrawing] = useState(false);
     const [cursorPos, setCursorPos] = useState({ x: 0, y: 0 });
 
-    const maskDataRef = useRef<Uint8Array>(new Uint8Array(region.maskData));
+    // Store mask data for ALL involved regions (Active + Dependencies)
+    // Map<RegionId, Uint8Array>
+    const maskDataRefs = useRef<Map<string, Uint8Array>>(new Map());
 
-    // Initialize canvas
+    // Initialize/Sync Mask Data
     useEffect(() => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
+        const allRegions = [...activeRegions, ...dependencyRegions];
+        // Only update if missing or region changed (optimization chk?)
+        // For safety, let's refresh if IDs change.
 
-        canvas.width = imageTransform.width;
-        canvas.height = imageTransform.height;
+        // Simple sync:
+        allRegions.forEach(r => {
+            // Always update to match props (handling Un/Redo, Reset, or self-update)
+            maskDataRefs.current.set(r.id, new Uint8Array(r.maskData));
+        });
+
+        // Cleanup old
+        const currentIds = new Set(allRegions.map(r => r.id));
+        for (const id of maskDataRefs.current.keys()) {
+            if (!currentIds.has(id)) {
+                maskDataRefs.current.delete(id);
+            }
+        }
 
         renderEditorCanvas();
-    }, [canvasWidth, canvasHeight]);
+    }, [activeRegions, dependencyRegions]);
 
-    // Sync with external mask changes (e.g. Reset)
-    useEffect(() => {
-        maskDataRef.current = new Uint8Array(region.maskData);
-        renderEditorCanvas();
-    }, [region.maskData, region.id]);
 
-    // Render current mask state
     const renderEditorCanvas = () => {
         const canvas = canvasRef.current;
         if (!canvas) return;
@@ -67,37 +76,167 @@ export function AIMaskEditor({
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        // Create ImageData from mask
-        const imageData = new ImageData(region.maskWidth, region.maskHeight);
-        const maskData = maskDataRef.current;
+        // Render Dependencies first (faintly?)
+        // Actually, user wants to see what they are editing.
+        // Let's render ACTIVE regions clearly.
+        // What about Dependencies? If I edit Person, and Background is being erased, do I see Background update?
+        // Ideally yes.
+        // Let's render ALL known regions in the editor? 
+        // Or just the Active ones?
+        // User said "Edit multiple masks...".
+        // If I implicitly edit Background, seeing it change is good.
+        // But rendering *everything* might be chaotic if not selected.
+        // Strategy: Render Active Regions Highlighted. Render Dependencies Normal?
+        // Or just Render Active.
+        // Let's render Active Regions for now to keep focus. The "Smart" effect is backend logic.
+        // ...Actually, looking at `ImageTile`, the `ToolLayer` is hidden/below? 
+        // No, `AIMaskEditor` is on top.
+        // If we don't render dependencies, the user won't see the "exclusion" happening live.
+        // But maybe that's fine.
 
+        // Color coding: Erase = Red, Add = Green.
         const color = mode === 'erase' ? [255, 80, 80] : [34, 197, 94];
 
-        for (let i = 0; i < maskData.length; i++) {
-            const alpha = maskData[i];
-            if (alpha > 0) {
-                imageData.data[i * 4] = color[0];
-                imageData.data[i * 4 + 1] = color[1];
-                imageData.data[i * 4 + 2] = color[2];
-                imageData.data[i * 4 + 3] = Math.round(alpha * 0.6);
+        // Composite ACTIVE masks
+        // We create a single buffer for preview? Or draw each?
+        // Drawing each is easier.
+
+        activeRegions.forEach(region => {
+            const data = maskDataRefs.current.get(region.id);
+            if (!data) return;
+
+            const imageData = new ImageData(region.maskWidth, region.maskHeight);
+
+            for (let i = 0; i < data.length; i++) {
+                const alpha = data[i];
+                if (alpha > 0) {
+                    imageData.data[i * 4] = color[0];
+                    imageData.data[i * 4 + 1] = color[1];
+                    imageData.data[i * 4 + 2] = color[2];
+                    imageData.data[i * 4 + 3] = Math.round(alpha * 0.6);
+                }
             }
-        }
 
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = region.maskWidth;
-        tempCanvas.height = region.maskHeight;
-        const tempCtx = tempCanvas.getContext('2d')!;
-        tempCtx.putImageData(imageData, 0, 0);
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = region.maskWidth;
+            tempCanvas.height = region.maskHeight;
+            const tempCtx = tempCanvas.getContext('2d')!;
+            tempCtx.putImageData(imageData, 0, 0);
 
-        ctx.drawImage(tempCanvas, 0, 0, canvas.width, canvas.height);
+            // Draw to main canvas (which is screen size/transform matched)
+            // `imageTransform` provided is for the VIEW.
+            // But `canvas` is sized to `imageTransform`?
+            // In original code: `canvas.width = imageTransform.width`.
+            // And `ctx.drawImage` draws full size.
+
+            ctx.drawImage(tempCanvas, 0, 0, canvas.width, canvas.height);
+        });
     };
 
-    // Re-render when mode changes to update preview color
+    // Re-init canvas size
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        canvas.width = imageTransform.width;
+        canvas.height = imageTransform.height;
+        renderEditorCanvas();
+    }, [canvasWidth, canvasHeight, imageTransform]);
+
+    // Update preview on color change
     useEffect(() => {
         renderEditorCanvas();
     }, [mode]);
 
     const lastPosRef = useRef<{ x: number, y: number } | null>(null);
+
+    const performbrushStroke = (start: { x: number, y: number }, end: { x: number, y: number }) => {
+        const commonBrushOptions = {
+            radius: brushSize / 2,
+            softness,
+            opacity,
+            mode
+        };
+
+        // 1. ITERATE ACTIVE REGIONS (Explicit User Targets)
+        activeRegions.forEach(activeRegion => {
+            const activeData = maskDataRefs.current.get(activeRegion.id);
+            if (!activeData) return;
+
+            // Apply to Active
+            applyBrushStroke(
+                start,
+                end,
+                activeData,
+                activeRegion.maskWidth,
+                activeRegion.maskHeight,
+                imageTransform,
+                commonBrushOptions
+            );
+
+            // 2. SMART LOGIC: DEPENDENCIES
+            // Determine relationships for this Active Region
+
+            const isPerson = activeRegion.type === 'person';
+            const isBackground = activeRegion.type === 'background';
+            const isGroup = activeRegion.type === 'people-group';
+
+            dependencyRegions.forEach(depRegion => {
+                const depData = maskDataRefs.current.get(depRegion.id);
+                if (!depData) return;
+
+                // Mutually Exclusive Interaction (Person vs Background)
+                // If Adding to Person -> Erase from Background
+                // If Adding to Background -> Erase from Person
+
+                // Note: We only check 'add' mode for exclusion usually. 
+                // Erasing a person doesn't typically "restore" background (it becomes void).
+
+                if (mode === 'add') {
+                    let shouldEraseDep = false;
+
+                    if ((isPerson || isGroup) && depRegion.type === 'background') {
+                        shouldEraseDep = true;
+                    } else if (isBackground && (depRegion.type === 'person' || depRegion.type === 'people-group')) {
+                        shouldEraseDep = true;
+                    }
+
+                    if (shouldEraseDep) {
+                        applyBrushStroke(
+                            start, end, depData,
+                            depRegion.maskWidth, depRegion.maskHeight,
+                            imageTransform,
+                            { ...commonBrushOptions, mode: 'erase', opacity: 100 } // Hard erase or shared opacity? 100 ensures cleanup.
+                        );
+                    }
+                }
+
+                // Group Synchronization (Bidirectional)
+                // 1. Group -> Child
+                // If Active is Group, and Dep is Child of that Group -> Apply SAME stroke
+                if (isGroup && depRegion.type === 'person' && depRegion.groupId === activeRegion.id) {
+                    applyBrushStroke(
+                        start, end, depData,
+                        depRegion.maskWidth, depRegion.maskHeight,
+                        imageTransform,
+                        commonBrushOptions // Same mode, same opacity
+                    );
+                }
+
+                // 2. Child -> Group
+                // If Active is Child, and Dep is GroupID matches -> Apply SAME stroke
+                if (isPerson && depRegion.type === 'people-group' && activeRegion.groupId === depRegion.id) {
+                    applyBrushStroke(
+                        start, end, depData,
+                        depRegion.maskWidth, depRegion.maskHeight,
+                        imageTransform,
+                        commonBrushOptions
+                    );
+                }
+            });
+        });
+
+        renderEditorCanvas();
+    };
 
     const handlePointerDown = (e: React.PointerEvent) => {
         setIsDrawing(true);
@@ -107,26 +246,9 @@ export function AIMaskEditor({
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
 
-        applyBrushStroke(
-            { x, y },
-            { x, y },
-            maskDataRef.current,
-            region.maskWidth,
-            region.maskHeight,
-            imageTransform, // { x, y, width, height, scale } - type mismatch? AIMaskEditor uses a subset but keys needed are width/height.
-            // Wait, AIMaskEditor props: imageTransform: { scale, x, y, width, height }
-            // brush-engine expects { scale, width, height } (scale not used? actually scaleX/scaleY derived from width/height).
-            // Let's check brush-engine interface. It needs transform: { width, height }.
-            // AIMaskEditor imageTransform HAS width/height.
-            {
-                radius: brushSize / 2,
-                softness,
-                opacity,
-                mode
-            }
-        );
-        renderEditorCanvas();
-        lastPosRef.current = { x, y };
+        const point = { x, y };
+        performbrushStroke(point, point);
+        lastPosRef.current = point;
     };
 
     const handlePointerMove = (e: React.PointerEvent) => {
@@ -137,21 +259,7 @@ export function AIMaskEditor({
         setCursorPos({ x, y });
 
         if (isDrawing && lastPosRef.current) {
-            applyBrushStroke(
-                lastPosRef.current,
-                { x, y },
-                maskDataRef.current,
-                region.maskWidth,
-                region.maskHeight,
-                imageTransform,
-                {
-                    radius: brushSize / 2,
-                    softness,
-                    opacity,
-                    mode
-                }
-            );
-            renderEditorCanvas();
+            performbrushStroke(lastPosRef.current, { x, y });
             lastPosRef.current = { x, y };
         }
     };
@@ -160,13 +268,23 @@ export function AIMaskEditor({
         if (isDrawing) {
             setIsDrawing(false);
             e.currentTarget.releasePointerCapture(e.pointerId);
-            onMaskUpdate(new Uint8Array(maskDataRef.current));
+
+            // Commit Updates
+            const updates: { id: string; maskData: Uint8Array }[] = [];
+            maskDataRefs.current.forEach((data, id) => {
+                // Determine if changed? 
+                // Optimization: Track "dirty" refs.
+                // For now, commit all involved seems safer to ensure sync.
+                // Or just active + dependencies.
+                updates.push({ id, maskData: new Uint8Array(data) });
+            });
+
+            onMasksUpdate(updates);
         }
     };
 
     return (
         <>
-            {/* Brush canvas */}
             <div
                 className="absolute z-20 pointer-events-auto cursor-none"
                 style={{
@@ -174,20 +292,19 @@ export function AIMaskEditor({
                     top: imageTransform.y,
                     width: imageTransform.width,
                     height: imageTransform.height,
-                    overflow: 'hidden', // Contain the cursor within image bounds
+                    overflow: 'hidden',
                 }}
                 onPointerDown={handlePointerDown}
                 onPointerMove={handlePointerMove}
                 onPointerUp={handlePointerUp}
                 onPointerLeave={handlePointerUp}
-                onClick={(e) => e.stopPropagation()} // Prevent click from bubbling to backdrop (closing editor)
+                onClick={(e) => e.stopPropagation()}
             >
                 <canvas
                     ref={canvasRef}
                     className="absolute inset-0"
                 />
 
-                {/* Cursor - now inside the container to be clipped and positioned relatively */}
                 <div
                     className="absolute pointer-events-none z-30 transform -translate-x-1/2 -translate-y-1/2"
                     style={{
