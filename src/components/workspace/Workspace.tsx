@@ -38,6 +38,9 @@ export function Workspace() {
   // Clipboard State
   const [clipboard, setClipboard] = useState<Region[]>([]);
 
+  // Selection Snapshot for Async Tools (Gradients)
+  const selectionSnapshotRef = useRef<string[]>([]);
+
   const showMaskImage = !!image?.regions.some(r => r.selected);
 
   const handleCreateManualMask = () => {
@@ -63,6 +66,36 @@ export function Workspace() {
     }
     const maskData = new Uint8Array(width * height);
 
+    // Grouping Logic
+    const selectedRegions = image.regions.filter(r => r.selected);
+    let targetGroupId: string | undefined;
+    const regionsToGroup: string[] = [];
+
+    if (selectedRegions.length === 1) {
+      // Single Item Selected
+      if (selectedRegions[0].groupId) {
+        // Add to existing group
+        targetGroupId = selectedRegions[0].groupId;
+      } else {
+        // Create NEW group for this item + new mask
+        targetGroupId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+        regionsToGroup.push(selectedRegions[0].id);
+      }
+    } else if (selectedRegions.length > 1) {
+      // Multiple items selected
+      const firstGroup = selectedRegions[0].groupId;
+      const allSameGroup = selectedRegions.every(r => r.groupId === firstGroup);
+
+      if (firstGroup && allSameGroup) {
+        // All in same group -> Add to that group
+        targetGroupId = firstGroup;
+      } else {
+        // Mixed or no group -> Create NEW group for all
+        targetGroupId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+        selectedRegions.forEach(r => regionsToGroup.push(r.id));
+      }
+    }
+
     const newMask: Region = {
       id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2),
       type: 'manual',
@@ -76,13 +109,20 @@ export function Workspace() {
       hovered: false,
       hasEdits: true, // Manual masks always listed
       previewUrl: generateMaskPreview(maskData, width, height, REGION_COLORS.manual),
+      groupId: targetGroupId,
     };
 
     setImage(prev =>
       prev ? {
         ...prev,
         regions: [
-          ...prev.regions.map(r => ({ ...r, selected: false })),
+          ...prev.regions.map(r => {
+            // Apply new Group ID to existing items if needed
+            if (regionsToGroup.includes(r.id)) {
+              return { ...r, groupId: targetGroupId, selected: false };
+            }
+            return { ...r, selected: false };
+          }),
           newMask
         ]
       } : prev
@@ -927,6 +967,10 @@ export function Workspace() {
 
   const handleCreateLinearGradient = () => {
     if (!image) return;
+
+    // Snapshot Selection
+    selectionSnapshotRef.current = image.regions.filter(r => r.selected).map(r => r.id);
+
     setDrawingTool('linear-gradient');
     // Clear selections while drawing
     setImage(prev => prev ? {
@@ -939,6 +983,10 @@ export function Workspace() {
 
   const handleCreateRadialGradient = () => {
     if (!image) return;
+
+    // Snapshot Selection
+    selectionSnapshotRef.current = image.regions.filter(r => r.selected).map(r => r.id);
+
     setDrawingTool('radial-gradient');
     // Clear selections while drawing
     setImage(prev => prev ? {
@@ -971,6 +1019,36 @@ export function Workspace() {
 
     const width = image.width ?? 640;
     const height = image.height ?? 640;
+
+    // Determine Grouping using Snapshot
+    const snapshotIds = selectionSnapshotRef.current;
+    const selectedRegions = snapshotIds.length > 0
+      ? image.regions.filter(r => snapshotIds.includes(r.id))
+      : []; // Only use snapshot for gradients as we cleared selection
+
+    let targetGroupId: string | undefined;
+    const regionsToGroup: string[] = [];
+
+    if (selectedRegions.length === 1) {
+      if (selectedRegions[0].groupId) {
+        targetGroupId = selectedRegions[0].groupId;
+      } else {
+        targetGroupId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+        regionsToGroup.push(selectedRegions[0].id);
+      }
+    } else if (selectedRegions.length > 1) {
+      const firstGroup = selectedRegions[0].groupId;
+      const allSameGroup = selectedRegions.every(r => r.groupId === firstGroup);
+      if (firstGroup && allSameGroup) {
+        targetGroupId = firstGroup;
+      } else {
+        targetGroupId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+        selectedRegions.forEach(r => regionsToGroup.push(r.id));
+      }
+    }
+
+    // Clear snapshot after use
+    selectionSnapshotRef.current = [];
 
     if (tool === 'radial-gradient') {
       // Create Radial Gradient Region (Elliptical)
@@ -1017,10 +1095,22 @@ export function Workspace() {
         hovered: false,
         hasEdits: true,
         previewUrl: generateMaskPreview(maskData, width, height, REGION_COLORS.manual),
+        groupId: targetGroupId,
       };
 
       setImage(prev =>
-        prev ? { ...prev, regions: [...prev.regions, newMask] } : prev
+        prev ? {
+          ...prev,
+          regions: [
+            ...prev.regions.map(r => {
+              if (regionsToGroup.includes(r.id)) {
+                return { ...r, groupId: targetGroupId };
+              }
+              return r;
+            }),
+            newMask
+          ]
+        } : prev
       );
       setActiveMask(newMask);
       return;
@@ -1101,10 +1191,22 @@ export function Workspace() {
         hovered: false,
         hasEdits: true,
         previewUrl: generateMaskPreview(maskData, width, height, REGION_COLORS.manual),
+        groupId: targetGroupId,
       };
 
       setImage(prev =>
-        prev ? { ...prev, regions: [...prev.regions, newMask] } : prev
+        prev ? {
+          ...prev,
+          regions: [
+            ...prev.regions.map(r => {
+              if (regionsToGroup.includes(r.id)) {
+                return { ...r, groupId: targetGroupId };
+              }
+              return r;
+            }),
+            newMask
+          ]
+        } : prev
       );
       setActiveMask(newMask);
     }
