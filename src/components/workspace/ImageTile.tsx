@@ -132,10 +132,21 @@ export function ImageTile({
   }, [activeMask, editingRegion]);
 
 
+
+
   const MIN_SCALE = 0.3;
   const MAX_SCALE = 4;
 
   const hoveredRegionId = hoveredRegionOverride ?? localHoveredRegion;
+
+  // DERIVE active editing region from props OR local state (Replaces useEffect sync)
+  const activeEditingRegion = editingRegion || (
+    brushActive && activeMask && (
+      activeMask.type === 'person' ||
+      activeMask.type === 'people-group' ||
+      activeMask.type === 'background'
+    ) ? activeMask : null
+  );
 
   // Prevent default wheel behavior
   // Keeping Zoom/Pan logic here (LAYER 1 Responsibility)
@@ -376,7 +387,7 @@ export function ImageTile({
             peopleEnabled={peopleEnabled}
             backgroundEnabled={backgroundEnabled}
             hoveredRegionId={brushActive ? null : hoveredRegionId}
-            isEditing={isEditingAIMask}
+            isEditing={!!activeEditingRegion && activeEditingRegion.type !== 'manual' && activeEditingRegion.type !== 'linear-gradient' && activeEditingRegion.type !== 'radial-gradient'}
             onHoverChange={brushActive ? () => { } : setLocalHoveredRegion}
             onUpdateTile={onUpdateTile}
             onEditRegion={(r) => handleEditRegion(r.id)} // Single Click: Activate
@@ -422,47 +433,37 @@ export function ImageTile({
 
         {/* Modal Mask Editor (AI Masks Only - Modal Overlay) */}
         {/* Gradients are handled "In-Place" by their respective tools receiving isEditing=true */}
-        {
-          editingRegion && editingRegion.type !== 'linear-gradient' && editingRegion.type !== 'radial-gradient' && editingRegion.type !== 'manual' && imageTransform && mainCanvasRef.current && (
-            <AIMaskEditor
-              // Pass ALL selected AI masks as active targets
-              activeRegions={tile.regions.filter(r => r.selected && (r.type === 'person' || r.type === 'background' || r.type === 'people-group'))}
-              // Pass all OTHER AI masks as dependencies (for Exclusion/Sync)
-              dependencyRegions={tile.regions.filter(r =>
-                (r.type === 'person' || r.type === 'background' || r.type === 'people-group') &&
-                !r.selected // Only if not already active
-              )}
-              imageTransform={imageTransform}
-              canvasWidth={mainCanvasRef.current.width}
-              canvasHeight={mainCanvasRef.current.height}
-              onMasksUpdate={(updates) => {
-                const newRegions = [...tile.regions];
-                updates.forEach(u => {
-                  const idx = newRegions.findIndex(r => r.id === u.id);
-                  if (idx !== -1) {
-                    newRegions[idx] = { ...newRegions[idx], maskData: u.maskData };
-                  }
-                });
-                onUpdateTile({ regions: newRegions });
-              }}
-              mode={brushMode}
-              brushSize={brushSize}
-              softness={brushSoftness}
-              opacity={brushOpacity}
+        {activeEditingRegion && activeEditingRegion.type !== 'linear-gradient' && activeEditingRegion.type !== 'radial-gradient' && activeEditingRegion.type !== 'manual' && imageTransform && mainCanvasRef.current && (
+          <AIMaskEditor
+            // Pass ALL selected AI masks as active targets
+            activeRegions={tile.regions.filter(r => r.selected && (r.type === 'person' || r.type === 'background' || r.type === 'people-group'))}
+            imageTransform={imageTransform}
+            canvasWidth={mainCanvasRef.current.width}
+            canvasHeight={mainCanvasRef.current.height}
+            onMasksUpdate={(updates) => {
+              const newRegions = [...tile.regions];
+              updates.forEach(u => {
+                const idx = newRegions.findIndex(r => r.id === u.id);
+                if (idx !== -1) {
+                  newRegions[idx] = { ...newRegions[idx], maskData: u.maskData };
+                }
+              });
+              onUpdateTile({ regions: newRegions });
+            }}
+            mode={brushMode}
+            brushSize={brushSize}
+            softness={brushSoftness}
+            opacity={brushOpacity}
 
-              onExit={() => {
-                setEditingRegion(null);
-                // On Exit, we should keep the selection state as is (User chose them).
-                // Existing logic re-selected 'editingRegion'.
-                // New logic: Just close editor.
-                // But we might want to ensure 'selected' state is consistent?
-                // If we don't touch 'selected', it stays set.
-                // But `handleEditRegion` in Workspace might have done something?
-                // Actually, `handleEditRegion` logic in `Workspace` determines selection state on ENTRY.
-                // On EXIT, we just stop rendering the overlay.
-              }}
-            />
-          )
+            onExit={() => {
+              setEditingRegion(null);
+              // Also exit global brush state if it was active
+              if (brushActive && onBrushExit) {
+                onBrushExit();
+              }
+            }}
+          />
+        )
         }
 
         {/* DRAWING OVERLAY */}

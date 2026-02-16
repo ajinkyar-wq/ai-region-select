@@ -4,7 +4,6 @@ import { applyBrushStroke } from '@/lib/brush-engine';
 
 interface AIMaskEditorProps {
     activeRegions: Region[]; // explicit selection
-    dependencyRegions?: Region[]; // related masks (Background, Group, Children)
     imageTransform: {
         scale: number;
         x: number;
@@ -25,7 +24,6 @@ interface AIMaskEditorProps {
 
 export function AIMaskEditor({
     activeRegions,
-    dependencyRegions = [],
     imageTransform,
     canvasWidth,
     canvasHeight,
@@ -45,7 +43,7 @@ export function AIMaskEditor({
 
     // Initialize/Sync Mask Data
     useEffect(() => {
-        const allRegions = [...activeRegions, ...dependencyRegions];
+        const allRegions = [...activeRegions];
         // Only update if missing or region changed (optimization chk?)
         // For safety, let's refresh if IDs change.
 
@@ -64,7 +62,7 @@ export function AIMaskEditor({
         }
 
         renderEditorCanvas();
-    }, [activeRegions, dependencyRegions]);
+    }, [activeRegions]);
 
 
     const renderEditorCanvas = () => {
@@ -172,67 +170,6 @@ export function AIMaskEditor({
                 imageTransform,
                 commonBrushOptions
             );
-
-            // 2. SMART LOGIC: DEPENDENCIES
-            // Determine relationships for this Active Region
-
-            const isPerson = activeRegion.type === 'person';
-            const isBackground = activeRegion.type === 'background';
-            const isGroup = activeRegion.type === 'people-group';
-
-            dependencyRegions.forEach(depRegion => {
-                const depData = maskDataRefs.current.get(depRegion.id);
-                if (!depData) return;
-
-                // Mutually Exclusive Interaction (Person vs Background)
-                // If Adding to Person -> Erase from Background
-                // If Adding to Background -> Erase from Person
-
-                // Note: We only check 'add' mode for exclusion usually. 
-                // Erasing a person doesn't typically "restore" background (it becomes void).
-
-                if (mode === 'add') {
-                    let shouldEraseDep = false;
-
-                    if ((isPerson || isGroup) && depRegion.type === 'background') {
-                        shouldEraseDep = true;
-                    } else if (isBackground && (depRegion.type === 'person' || depRegion.type === 'people-group')) {
-                        shouldEraseDep = true;
-                    }
-
-                    if (shouldEraseDep) {
-                        applyBrushStroke(
-                            start, end, depData,
-                            depRegion.maskWidth, depRegion.maskHeight,
-                            imageTransform,
-                            { ...commonBrushOptions, mode: 'erase', opacity: 100 } // Hard erase or shared opacity? 100 ensures cleanup.
-                        );
-                    }
-                }
-
-                // Group Synchronization (Bidirectional)
-                // 1. Group -> Child
-                // If Active is Group, and Dep is Child of that Group -> Apply SAME stroke
-                if (isGroup && depRegion.type === 'person' && depRegion.groupId === activeRegion.id) {
-                    applyBrushStroke(
-                        start, end, depData,
-                        depRegion.maskWidth, depRegion.maskHeight,
-                        imageTransform,
-                        commonBrushOptions // Same mode, same opacity
-                    );
-                }
-
-                // 2. Child -> Group
-                // If Active is Child, and Dep is GroupID matches -> Apply SAME stroke
-                if (isPerson && depRegion.type === 'people-group' && activeRegion.groupId === depRegion.id) {
-                    applyBrushStroke(
-                        start, end, depData,
-                        depRegion.maskWidth, depRegion.maskHeight,
-                        imageTransform,
-                        commonBrushOptions
-                    );
-                }
-            });
         });
 
         renderEditorCanvas();

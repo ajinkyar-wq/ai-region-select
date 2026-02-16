@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { SliderPanelContent } from './SliderPanelContent';
+import { generateMaskPreview } from '@/lib/mask-preview';
 import {
   SlidersHorizontal, Crop, ChevronDown, ChevronRight, Plus, PlusCircle,
   Brush,
@@ -69,8 +70,14 @@ export function SliderPanel({
   if (!isOpen) return null;
 
   // UNIFIED LIST LOGIC
-  // 1. Filter only regions that have edits (Manual masks have edits by default)
-  const editedRegions = regions.filter(r => r.hasEdits);
+  // 1. Filter regions: Show masks with edits OR default system masks (Background/People Group) - UNLESS hasEdits is explicitly false (deleted)
+  const editedRegions = regions.filter(r => {
+    // Standard masks: Must have edits
+    if (r.type !== 'people-group' && r.type !== 'background') return r.hasEdits;
+
+    // Default masks: Show if hasEdits is true OR undefined. Hide if explicitly false (Soft Deleted).
+    return r.hasEdits !== false;
+  });
 
   // 2. Build Render List respecting original order
   // We want groups to appear at the position of their FIRST member.
@@ -347,7 +354,7 @@ export function SliderPanel({
           </button>
 
           {showAddMaskMenu && (
-            <div className="absolute right-0 top-9 z-50 w-[132px] rounded-lg bg-[#242424] p-1 shadow-xl border border-[#5E5E5E]">
+            <div className="absolute right-4 top-8 z-50 w-[132px] rounded-lg bg-[#242424] p-1 shadow-xl border border-[#5E5E5E] mt-2">
               {/* Brush */}
               <button
                 onClick={() => {
@@ -708,11 +715,32 @@ function OutlinerItem({
       <div className="flex items-center gap-2 overflow-hidden">
         {/* Preview Thumbnail or Icon */}
         <div className="w-4 h-4 flex-shrink-0 flex items-center justify-center bg-black/20 rounded-sm">
-          {region.previewUrl ? (
-            <img src={region.previewUrl} className="w-full h-full object-contain" alt="" />
-          ) : (
-            Icon
-          )}
+          {(() => {
+            // Use existing preview if available
+            if (region.previewUrl) {
+              return <img src={region.previewUrl} className="w-full h-full object-contain" alt="" />;
+            }
+
+            // Generate on-the-fly for default masks (Background/People Group)
+            // They have maskData but no previewUrl initially
+            if (region.maskData && region.maskWidth && region.maskHeight) {
+              // We use a simple memoized generation here to avoid re-running every render
+              // but we can't really use useMemo inside a map loop easily if this component wasn't extracted.
+              // Fortunately OutlinerItem IS a component.
+              const generatedPreview = useMemo(() => {
+                return generateMaskPreview(
+                  region.maskData,
+                  region.maskWidth,
+                  region.maskHeight,
+                  region.color
+                );
+              }, [region.maskData, region.maskWidth, region.maskHeight, region.color]);
+
+              return <img src={generatedPreview} className="w-full h-full object-contain" alt="" />;
+            }
+
+            return Icon;
+          })()}
         </div>
         <span className="text-[13px] truncate">{region.label || formatType(region.type)}</span>
       </div>

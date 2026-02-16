@@ -1422,6 +1422,10 @@ export function Workspace() {
                 if (region.type === 'manual') {
                   setBrushActive(true);
                   setBrushMode('add');
+                } else if (region.type === 'person' || region.type === 'people-group' || region.type === 'background') {
+                  // AI Masks: Signal Intent to Edit (ImageTile will pick up brushActive + AI type -> Enter Local Editor)
+                  setBrushActive(true);
+                  setBrushMode('add');
                 }
                 // For AI/Gradient, ImageTile's useEffect on activeMask will handle it
               }}
@@ -1444,7 +1448,9 @@ export function Workspace() {
                 const region = image.regions.find(r => r.id === id);
                 if (!region) return;
 
-                const isManual = region.type === 'manual' || region.type === 'linear-gradient' || region.type === 'radial-gradient';
+                const isManual = region.type === 'manual' ||
+                  region.type === 'linear-gradient' ||
+                  region.type === 'radial-gradient';
 
                 setImage(prev => {
                   if (!prev) return prev;
