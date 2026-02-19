@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { SliderPanelContent } from './SliderPanelContent';
 import { generateMaskPreview } from '@/lib/mask-preview';
 import {
@@ -32,6 +32,8 @@ interface SliderPanelProps {
   onActivateRegion?: (id: string) => void;
   showMaskImage: boolean;
   onUpdateAdjustments?: (adjustments: RegionAdjustments) => void;
+  /** Called when a gradient is dropped onto a target mask/group to intersect with it */
+  onIntersectGradient?: (gradientId: string, targetId: string) => void;
 }
 
 export function SliderPanel({
@@ -53,6 +55,7 @@ export function SliderPanel({
   onDeleteGroup,
   onActivateRegion,
   onUpdateAdjustments,
+  onIntersectGradient,
 }: SliderPanelProps) {
   const [activeTab, setActiveTab] = useState<'sliders' | 'crop' | 'masking'>('masking');
   const [showAddMaskMenu, setShowAddMaskMenu] = useState(false);
@@ -115,9 +118,31 @@ export function SliderPanel({
   const [dropTarget, setDropTarget] = useState<{ id: string | null; position: 'top' | 'bottom' | 'inside' | null }>({ id: null, position: null });
   const [lastSelectedId, setLastSelectedId] = useState<string | null>(null);
 
+  // ── Intersect Drag State ──────────────────────────────────────────────────
+  // Tracks when a gradient is being dragged and hovering over a valid intersect target.
+  // After INTERSECT_HOLD_MS of hover, the row animates "ready to intersect".
+  const [intersectTarget, setIntersectTarget] = useState<string | null>(null);
+  const [draggingGradientId, setDraggingGradientId] = useState<string | null>(null);
+  const intersectHoldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const INTERSECT_HOLD_MS = 600;
+
+  const clearIntersectHold = () => {
+    if (intersectHoldTimerRef.current) {
+      clearTimeout(intersectHoldTimerRef.current);
+      intersectHoldTimerRef.current = null;
+    }
+  };
+
   // Helper for DnD
-  const handleDragStart = (e: React.DragEvent, id: string) => {
+  const handleDragStart = (e: React.DragEvent, id: string, regionType?: string) => {
     e.dataTransfer.setData('text/plain', id);
+    // Tag gradient drags so drop targets know what's coming
+    if (regionType === 'linear-gradient' || regionType === 'radial-gradient') {
+      e.dataTransfer.setData('gradient-intersect', id);
+      setDraggingGradientId(id);
+    } else {
+      setDraggingGradientId(null);
+    }
     e.dataTransfer.effectAllowed = 'move';
   };
 
@@ -179,9 +204,37 @@ export function SliderPanel({
     onSelectRegion(id, multi);
   };
 
-  const handleDragOverItem = (e: React.DragEvent, id: string, isGroup: boolean) => {
+  const handleDragOverItem = (e: React.DragEvent, id: string, isGroup: boolean, targetRegionType?: string) => {
     e.preventDefault();
     e.stopPropagation();
+
+    // ── Intersect Mode ────────────────────────────────────────────────────
+    // If a gradient is being dragged, check if the target is a non-gradient mask.
+    // If so, we enter intersect mode (slide-right animation) instead of group mode.
+    const isGradientDrag = !!draggingGradientId;
+    const isValidIntersectTarget = isGradientDrag &&
+      targetRegionType &&
+      targetRegionType !== 'linear-gradient' &&
+      targetRegionType !== 'radial-gradient';
+
+    if (isValidIntersectTarget) {
+      // Set drop target as 'inside' so normal group ring is suppressed (we draw our own)
+      setDropTarget({ id, position: 'inside' });
+
+      // Start hold timer to commit to intersect animation
+      if (intersectTarget !== id) {
+        clearIntersectHold();
+        setIntersectTarget(null);
+        intersectHoldTimerRef.current = setTimeout(() => {
+          setIntersectTarget(id);
+        }, INTERSECT_HOLD_MS);
+      }
+      return;
+    }
+
+    // Normal DnD positioning
+    clearIntersectHold();
+    if (intersectTarget) setIntersectTarget(null);
 
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const y = e.clientY - rect.top;
@@ -203,11 +256,50 @@ export function SliderPanel({
 
   const handleDragLeave = () => {
     setDropTarget({ id: null, position: null });
+    clearIntersectHold();
+    setIntersectTarget(null);
   };
 
-  const handleDropItem = (e: React.DragEvent, targetId: string) => {
+  // Called when the drag ends globally (so we can reset dragging gradient state)
+  const handleGlobalDragEnd = () => {
+    setDraggingGradientId(null);
+    clearIntersectHold();
+    setIntersectTarget(null);
+  };
+
+  const handleDropItem = (e: React.DragEvent, targetId: string, targetRegionType?: string) => {
     e.preventDefault();
     e.stopPropagation();
+
+    clearIntersectHold();
+    setDraggingGradientId(null);
+
+    // ── Intersect Drop ────────────────────────────────────────────────────
+    // If we were in intersect mode (gradient hovering over a valid mask), do the intersect.
+    if (intersectTarget === targetId && draggingGradientId === null) {
+      // draggingGradientId is already cleared above; read from dataTransfer instead
+      const gradId = e.dataTransfer.getData('gradient-intersect') || e.dataTransfer.getData('text/plain');
+      const isGradientType = targetRegionType &&
+        targetRegionType !== 'linear-gradient' &&
+        targetRegionType !== 'radial-gradient';
+      if (gradId && isGradientType) {
+        onIntersectGradient?.(gradId, targetId);
+        setIntersectTarget(null);
+        setDropTarget({ id: null, position: null });
+        return;
+      }
+    }
+
+    // Also handle the case where the gradient was dropped during hold (intersectTarget already set)
+    const gradId = e.dataTransfer.getData('gradient-intersect');
+    if (gradId && targetRegionType && targetRegionType !== 'linear-gradient' && targetRegionType !== 'radial-gradient') {
+      onIntersectGradient?.(gradId, targetId);
+      setIntersectTarget(null);
+      setDropTarget({ id: null, position: null });
+      return;
+    }
+
+    setIntersectTarget(null);
 
     const { position } = dropTarget;
     setDropTarget({ id: null, position: null });

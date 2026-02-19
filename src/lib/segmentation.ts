@@ -139,12 +139,15 @@ function hexToRgba(hex: string, alpha: number): number[] {
     : [0, 0, 0, alpha];
 }
 
+/**
+ * Winner-takes-all pixel ownership across person regions.
+ * Now works correctly with soft 0-255 alpha values instead of binary masks.
+ * The winning region keeps its value; all others are zeroed at that pixel.
+ */
 function enforcePixelOwnership(regions: Region[]) {
   if (regions.length <= 1) return regions;
 
-  const width = regions[0].maskWidth;
-  const height = regions[0].maskHeight;
-  const size = width * height;
+  const size = regions[0].maskWidth * regions[0].maskHeight;
 
   for (let i = 0; i < size; i++) {
     let bestRegion = -1;
@@ -164,7 +167,6 @@ function enforcePixelOwnership(regions: Region[]) {
       }
     }
   }
-
 }
 
 function unionPersonMasks(personRegions: Region[]): Uint8Array {
@@ -173,43 +175,15 @@ function unionPersonMasks(personRegions: Region[]): Uint8Array {
 
   for (const region of personRegions) {
     for (let i = 0; i < size; i++) {
-      if (region.maskData[i] > 0) {
-        out[i] = 255;
+      // Take max — preserves soft alpha values correctly
+      if (region.maskData[i] > out[i]) {
+        out[i] = region.maskData[i];
       }
     }
   }
 
   return out;
 }
-
-function erodeMask(
-  maskData: Uint8Array,
-  width: number,
-  height: number,
-  radius: number
-): Uint8Array {
-  const cv = (window as any).cv;
-
-  const src = cv.matFromArray(height, width, cv.CV_8UC1, maskData);
-  const dst = new cv.Mat();
-
-  const kernelSize = radius * 2 + 1;
-  const kernel = cv.getStructuringElement(
-    cv.MORPH_ELLIPSE,
-    new cv.Size(kernelSize, kernelSize)
-  );
-
-  cv.erode(src, dst, kernel);
-
-  const out = new Uint8Array(dst.data);
-
-  src.delete();
-  dst.delete();
-  kernel.delete();
-
-  return out;
-}
-
 
 export async function segmentImage(
   imageElement: HTMLImageElement,
@@ -290,90 +264,89 @@ export async function segmentImage(
         rawMask[i] = Math.min(255, Math.max(0, Number(alphaValue) || 0));
       }
 
+      // Step 1: Resize to display resolution using bilinear interpolation.
+      // INTER_LINEAR produces soft 0-255 values at edges — we preserve these.
       const srcMat = cv.matFromArray(mH, mW, cv.CV_8UC1, rawMask);
       const dstMat = new cv.Mat();
       cv.resize(srcMat, dstMat, new cv.Size(scaledWidth, scaledHeight), 0, 0, cv.INTER_LINEAR);
-      
-      const scaledMask = new Uint8Array(dstMat.data);
-      for (let i = 0; i < scaledMask.length; i++) {
-        scaledMask[i] = scaledMask[i] > 96 ? 255 : 0;
-      }
+
+      // Step 2: Gaussian blur to smooth jagged model output edges.
+      // 5x5 kernel, sigma 1.5 — softens without meaningfully shrinking the selection.
+      const blurMat = new cv.Mat();
+      cv.GaussianBlur(dstMat, blurMat, new cv.Size(5, 5), 1.5, 1.5, cv.BORDER_DEFAULT);
+
+      // Preserve the soft 0-255 alpha values — NO binary threshold.
+      const scaledMask = new Uint8Array(blurMat.data);
 
       srcMat.delete();
       dstMat.delete();
+      blurMat.delete();
 
-
-regions.push({
-  id: `person-${idx}-${Date.now()}`,
-  type: 'person',
-  label: `Person ${regions.filter(r => r.type === 'person').length + 1}`,
-  originalMaskData: new Uint8Array(scaledMask),
-  maskData: scaledMask,          // OUTER mask
-  maskWidth: scaledWidth,
-  maskHeight: scaledHeight,
-  color: REGION_COLORS.person,
-  visible: true,
-  selected: false,
-  hovered: false,
-});
+      regions.push({
+        id: `person-${idx}-${Date.now()}`,
+        type: 'person',
+        label: `Person ${regions.filter(r => r.type === 'person').length + 1}`,
+        originalMaskData: new Uint8Array(scaledMask),
+        maskData: scaledMask,
+        maskWidth: scaledWidth,
+        maskHeight: scaledHeight,
+        color: REGION_COLORS.person,
+        visible: true,
+        selected: false,
+        hovered: false,
+      });
     }
 
-const personRegions = regions.filter(r => r.type === 'person');
-enforcePixelOwnership(personRegions);
+    const personRegions = regions.filter(r => r.type === 'person');
 
-for (const region of personRegions) {
-  region.innerMaskData = erodeMask(
-    region.maskData,      // IMPORTANT: FINAL mask
-    region.maskWidth,
-    region.maskHeight,
-    12                    // same radius as before
-  );
-}
+    // Enforce pixel ownership — works correctly with soft values
+    enforcePixelOwnership(personRegions);
 
+    // Write back after ownership pass
+    for (let i = 0; i < regions.length; i++) {
+      if (regions[i].type === 'person') {
+        const updated = personRegions.find(p => p.id === regions[i].id);
+        if (updated) regions[i] = updated;
+      }
+    }
 
-// Write back explicitly to avoid relying on mutation side-effects
-for (let i = 0; i < regions.length; i++) {
-  if (regions[i].type === 'person') {
-    const updated = personRegions.find(p => p.id === regions[i].id);
-    if (updated) regions[i] = updated;
-  }
-}
+    // Build people-group region
+    let peopleGroupRegion: Region | null = null;
 
-let peopleGroupRegion: Region | null = null;
-
-if (personRegions.length > 0) {
-  peopleGroupRegion = {
-    id: `people-group-${Date.now()}`,
-    type: 'people-group',
-    label: 'All People',
-    maskData: unionPersonMasks(personRegions),
-    originalMaskData: unionPersonMasks(personRegions), 
-    maskWidth: personRegions[0].maskWidth,
-    maskHeight: personRegions[0].maskHeight,
-    color: REGION_COLORS['people-group'],
-    visible: true,
-    selected: false,
-    hovered: false,
-  };
-}
-
+    if (personRegions.length > 0) {
+      const unionMask = unionPersonMasks(personRegions);
+      peopleGroupRegion = {
+        id: `people-group-${Date.now()}`,
+        type: 'people-group',
+        label: 'All People',
+        maskData: unionMask,
+        originalMaskData: new Uint8Array(unionMask),
+        maskWidth: personRegions[0].maskWidth,
+        maskHeight: personRegions[0].maskHeight,
+        color: REGION_COLORS['people-group'],
+        visible: true,
+        selected: false,
+        hovered: false,
+      };
+    }
 
     input.delete();
 
-
-    // Create background mask
+    // Step 3: Build background mask as a proportional soft inverse of all person masks.
+    // bgMask[i] = 255 - max(personMasks[i]) so the background edge is the
+    // exact soft complement of the person edges — no hard seam.
     if (personRegions.length > 0) {
       const bgMask = new Uint8Array(scaledWidth * scaledHeight);
-      bgMask.fill(255);
 
-      personRegions.forEach((region) => {
-        const { maskData } = region;
-        for (let i = 0; i < maskData.length; i++) {
-          if (maskData[i] > 128) {
-            bgMask[i] = 0;
+      for (let i = 0; i < bgMask.length; i++) {
+        let maxPersonAlpha = 0;
+        for (const region of personRegions) {
+          if (region.maskData[i] > maxPersonAlpha) {
+            maxPersonAlpha = region.maskData[i];
           }
         }
-      });
+        bgMask[i] = 255 - maxPersonAlpha;
+      }
 
       regions.push({
         id: `background-${Date.now()}`,
@@ -390,21 +363,20 @@ if (personRegions.length > 0) {
       });
     }
 
-const orderedRegions: Region[] = [];
+    const orderedRegions: Region[] = [];
 
-if (peopleGroupRegion) orderedRegions.push(peopleGroupRegion);
+    if (peopleGroupRegion) orderedRegions.push(peopleGroupRegion);
+    orderedRegions.push(...personRegions);
 
-orderedRegions.push(...personRegions);
+    const backgroundRegion = regions.find(r => r.type === 'background');
+    if (backgroundRegion) orderedRegions.push(backgroundRegion);
 
-const backgroundRegion = regions.find(r => r.type === 'background');
-if (backgroundRegion) orderedRegions.push(backgroundRegion);
+    console.log(
+      'Created regions:',
+      orderedRegions.map(r => `${r.type}:${r.id}`)
+    );
 
-console.log(
-  'Created regions:',
-  orderedRegions.map(r => `${r.type}:${r.id}`)
-);
-
-return orderedRegions;
+    return orderedRegions;
   } catch (error) {
     console.error('Segmentation failed:', error);
     return [];

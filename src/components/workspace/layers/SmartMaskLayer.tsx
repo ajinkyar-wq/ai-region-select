@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import type { ImageTileData, Region } from '@/types/workspace';
 
 interface SmartMaskLayerProps {
@@ -18,8 +18,178 @@ interface SmartMaskLayerProps {
     onHoverChange: (id: string | null) => void;
     onUpdateTile: (updates: Partial<ImageTileData>) => void;
     onEditRegion: (region: Region) => void;
-    onEnterLocalEdit?: (region: Region) => void; // New prop for explicit edit mode
+    onEnterLocalEdit?: (region: Region) => void;
 }
+
+// ─── Erosion ──────────────────────────────────────────────────────────────────
+
+const ERODE_RADIUS = 12;
+
+function erodeMask(mask: Uint8Array, w: number, h: number, radius: number): Uint8Array {
+    const out = new Uint8Array(mask.length);
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            if (mask[y * w + x] <= 30) continue;
+            let eroded = false;
+            const y0 = Math.max(0, y - radius);
+            const y1 = Math.min(h - 1, y + radius);
+            const x0 = Math.max(0, x - radius);
+            const x1 = Math.min(w - 1, x + radius);
+            outer: for (let ny = y0; ny <= y1; ny++) {
+                for (let nx = x0; nx <= x1; nx++) {
+                    if (mask[ny * w + nx] <= 30) { eroded = true; break outer; }
+                }
+            }
+            if (!eroded) out[y * w + x] = mask[y * w + x];
+        }
+    }
+    return out;
+}
+
+// ─── Cache ────────────────────────────────────────────────────────────────────
+
+interface ErodedEntry {
+    eroded: Uint8Array;
+    // checksum to detect mask data changes within same region id
+    checksum: number;
+}
+
+/** Fast checksum — sum every 64th byte */
+function maskChecksum(mask: Uint8Array): number {
+    let s = 0;
+    for (let i = 0; i < mask.length; i += 64) s += mask[i];
+    return s;
+}
+
+function getOrBuildErodedEntry(
+    region: Region,
+    erodeCache: Map<string, ErodedEntry | null>,
+): ErodedEntry | null {
+    const cs = maskChecksum(region.maskData);
+    const existing = erodeCache.get(region.id);
+
+    // Rebuild if missing or mask has changed
+    if (!existing || existing.checksum !== cs) {
+        const { maskData: mask, maskWidth: w, maskHeight: h } = region;
+        const eroded = erodeMask(mask, w, h, ERODE_RADIUS);
+        const hasCore = eroded.some(v => v > 30);
+        if (!hasCore) {
+            erodeCache.set(region.id, null);
+            return null;
+        }
+        const entry: ErodedEntry = { eroded, checksum: cs };
+        erodeCache.set(region.id, entry);
+        return entry;
+    }
+
+    return existing;
+}
+
+// ─── Hit testing ──────────────────────────────────────────────────────────────
+
+function hitTestPerson(
+    x: number,
+    y: number,
+    region: Region,
+    transform: { width: number; height: number },
+    erodeCache: Map<string, ErodedEntry | null>,
+): 'inner' | 'outer' | null {
+    const scaleX = region.maskWidth / transform.width;
+    const scaleY = region.maskHeight / transform.height;
+    const mx = Math.floor(x * scaleX);
+    const my = Math.floor(y * scaleY);
+
+    if (mx < 0 || mx >= region.maskWidth || my < 0 || my >= region.maskHeight) return null;
+    if (region.maskData[my * region.maskWidth + mx] <= 30) return null;
+
+    const entry = getOrBuildErodedEntry(region, erodeCache);
+    if (!entry) return 'inner'; // mask too thin — all inner
+
+    return entry.eroded[my * region.maskWidth + mx] > 30 ? 'inner' : 'outer';
+}
+
+// ─── Rendering ────────────────────────────────────────────────────────────────
+
+function renderMask(
+    ctx: CanvasRenderingContext2D,
+    mask: Uint8Array,
+    w: number, h: number,
+    rC: number, gC: number, bC: number,
+    overlayAlpha: number,
+    destX: number, destY: number, destW: number, destH: number,
+) {
+    const scratch = document.createElement('canvas');
+    scratch.width = w; scratch.height = h;
+    const sctx = scratch.getContext('2d');
+    if (!sctx) return;
+
+    const img = sctx.createImageData(w, h);
+    for (let i = 0; i < mask.length; i++) {
+        const v = mask[i];
+        if (v > 0) {
+            const p = i * 4;
+            img.data[p] = rC;
+            img.data[p + 1] = gC;
+            img.data[p + 2] = bC;
+            img.data[p + 3] = Math.round((v / 255) * overlayAlpha * 255);
+        }
+    }
+    sctx.putImageData(img, 0, 0);
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(scratch, destX, destY, destW, destH);
+    ctx.restore();
+}
+
+// ─── Contour tracing ──────────────────────────────────────────────────────────
+
+/**
+ * Render the edge pixels of a mask directly as a pixel overlay.
+ * Edge = any ON pixel with at least one OFF 4-neighbor.
+ * Painted as solid colour at full opacity — same pipeline as renderMask.
+ * Cannot fail, cannot produce crossed lines, works on any shape.
+ */
+function renderContourStroke(
+    ctx: CanvasRenderingContext2D,
+    mask: Uint8Array,
+    w: number, h: number,
+    rC: number, gC: number, bC: number,
+    destX: number, destY: number, destW: number, destH: number,
+) {
+    const scratch = document.createElement('canvas');
+    scratch.width = w; scratch.height = h;
+    const sctx = scratch.getContext('2d')!;
+    const img = sctx.createImageData(w, h);
+
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            const v = mask[y * w + x];
+            if (v <= 30) continue;
+            const hasOffNeighbor =
+                (x === 0 || mask[y * w + (x - 1)] <= 30) ||
+                (x === w - 1 || mask[y * w + (x + 1)] <= 30) ||
+                (y === 0 || mask[(y - 1) * w + x] <= 30) ||
+                (y === h - 1 || mask[(y + 1) * w + x] <= 30);
+            if (!hasOffNeighbor) continue;
+            // Heavy dotted line: 4px ON, 2px OFF
+            if ((x + y) % 6 >= 4) continue;
+            const p = (y * w + x) * 4;
+            img.data[p] = rC;
+            img.data[p + 1] = gC;
+            img.data[p + 2] = bC;
+            img.data[p + 3] = 230; // near-full opacity, crisp line
+        }
+    }
+
+    sctx.putImageData(img, 0, 0);
+    ctx.save();
+    ctx.imageSmoothingEnabled = false; // pixel-perfect — no blur on the line
+    ctx.drawImage(scratch, destX, destY, destW, destH);
+    ctx.restore();
+}
+
+// ─── Component ────────────────────────────────────────────────────────────────
 
 export function SmartMaskLayer({
     tile,
@@ -33,483 +203,172 @@ export function SmartMaskLayer({
     onHoverChange,
     onUpdateTile,
     onEditRegion,
-    onEnterLocalEdit
+    onEnterLocalEdit,
 }: SmartMaskLayerProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    // Cache persists across renders; checksum-based invalidation handles mask edits
+    const erodeCache = useRef<Map<string, ErodedEntry | null>>(new Map());
 
-
-
-    // Render masks to overlay canvas
+    // ── Render ───────────────────────────────────────────────────────────────
     useEffect(() => {
         if (!canvasRef.current || !imageTransform) return;
-
         const canvas = canvasRef.current;
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
 
-        // Update canvas size matches props
         if (canvas.width !== width || canvas.height !== height) {
             canvas.width = width;
             canvas.height = height;
         }
 
-        // Clear canvas
         ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (isEditing) return;
 
-        // 🚫 DO NOT render ANY masks while editing
-        if (isEditing) {
-            return;
-        }
+        const { x: destX, y: destY, width: destW, height: destH } = imageTransform;
 
         const visibleRegions = tile.regions.filter(r => {
             if (r.type === 'person' && !peopleEnabled) return false;
             if (r.type === 'background' && !backgroundEnabled) return false;
-            // Manual masks are handled by Layer 3 (ToolLayer)
             if (r.type === 'manual' || r.type === 'linear-gradient' || r.type === 'radial-gradient') return false;
             return r.visible;
         });
 
         visibleRegions.forEach(region => {
-            const isHovered = region.id === hoveredRegionId;
-            const isSelected = region.selected;
+            if (!region.selected && region.id !== hoveredRegionId) return;
 
             const mask = region.maskData;
-            const inner = region.innerMaskData;
-
             const w = region.maskWidth;
             const h = region.maskHeight;
 
-            // Base fill (UNCHANGED SHAPE)
-            const imageData = new ImageData(w, h);
+            const cm = region.color.match(/#([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})/i);
+            const rC = cm ? parseInt(cm[1], 16) : 255;
+            const gC = cm ? parseInt(cm[2], 16) : 80;
+            const bC = cm ? parseInt(cm[3], 16) : 80;
 
-            const colorMatch = region.color.match(/#([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})/i);
-            const r = colorMatch ? parseInt(colorMatch[1], 16) : 255;
-            const g = colorMatch ? parseInt(colorMatch[2], 16) : 80;
-            const b = colorMatch ? parseInt(colorMatch[3], 16) : 80;
+            const overlayAlpha = region.selected ? 0.5 : 0.3;
 
-            const baseAlpha =
-                region.type === 'manual' ? 200 : // Always visible
-                    isSelected ? 110 :
-                        isHovered ? 75 :
-                            0;
+            // Pass 1 — rubylith wash over the full mask
+            renderMask(ctx, mask, w, h, rC, gC, bC, overlayAlpha, destX, destY, destW, destH);
 
-            // ---- PASS 1: NORMAL MASK RENDER (NO DISTORTION)
-            for (let i = 0; i < mask.length; i++) {
-                const maskVal = mask[i];
-                if (maskVal <= 0 || baseAlpha === 0) continue;
-
-                const idx = i * 4;
-                imageData.data[idx] = r;
-                imageData.data[idx + 1] = g;
-                imageData.data[idx + 2] = b;
-                // Scale baseAlpha by mask value (maskVal / 255)
-                imageData.data[idx + 3] = Math.round((maskVal / 255) * baseAlpha);
-            }
-
-            // ---- PASS 2: INNER↔OUTER SEPARATION LINE (ONLY)
-            if ((isHovered || isSelected) && inner) {
-                const lineAlpha = isSelected ? 220 : 170;
-
-                for (let y = 1; y < h - 1; y++) {
-                    for (let x = 1; x < w - 1; x++) {
-                        const i = y * w + x;
-
-                        // Must be OUTER pixel
-                        if (mask[i] <= 0 || inner[i] > 0) continue;
-
-                        // Check 4-neighbors for INNER
-                        if (
-                            inner[i - 1] > 0 ||
-                            inner[i + 1] > 0 ||
-                            inner[i - w] > 0 ||
-                            inner[i + w] > 0
-                        ) {
-                            const idx = i * 4;
-                            imageData.data[idx] = r;
-                            imageData.data[idx + 1] = g;
-                            imageData.data[idx + 2] = b;
-                            imageData.data[idx + 3] = lineAlpha;
-                        }
-                    }
-                }
-            }
-
-            // ---- DRAW
-            const tempCanvas = document.createElement('canvas');
-            tempCanvas.width = w;
-            tempCanvas.height = h;
-            tempCanvas.getContext('2d')!.putImageData(imageData, 0, 0);
-
-            // ---- PASS A: BASE TINT
-            ctx.save();
-            ctx.globalCompositeOperation = 'source-over';
-            ctx.imageSmoothingEnabled = true;
-            ctx.imageSmoothingQuality = 'high';
-
-            ctx.drawImage(
-                tempCanvas,
-                imageTransform.x,
-                imageTransform.y,
-                imageTransform.width,
-                imageTransform.height
-            );
-            ctx.restore();
-
-            // ---- PASS B: GLASS LIGHTING
-            if (isHovered || isSelected) {
-                ctx.save();
-                ctx.globalCompositeOperation = 'screen';
-                ctx.globalAlpha = 0.45;      // SAME AS GROUP
-                ctx.shadowColor = region.color;
-                ctx.shadowBlur = 16;         // SAME AS GROUP
-
-                ctx.drawImage(
-                    tempCanvas,
-                    imageTransform.x,
-                    imageTransform.y,
-                    imageTransform.width,
-                    imageTransform.height
-                );
-                ctx.restore();
+            // Pass 2 — dashed contour
+            // person:       contour traces the ERODED mask = inner zone boundary
+            // people-group: no contour on the group mask itself — instead draw
+            //               the eroded contour for each individual person region,
+            //               showing where each individual's inner zone sits
+            if (region.type === 'person') {
+                const entry = getOrBuildErodedEntry(region, erodeCache.current);
+                const contourMask = entry ? entry.eroded : mask;
+                renderContourStroke(ctx, contourMask, w, h, rC, gC, bC, destX, destY, destW, destH);
+            } else if (region.type === 'people-group') {
+                tile.regions.forEach(pr => {
+                    if (pr.type !== 'person' || !pr.visible || !peopleEnabled) return;
+                    const entry = getOrBuildErodedEntry(pr, erodeCache.current);
+                    const cm2 = pr.color.match(/#([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})/i);
+                    const r2 = cm2 ? parseInt(cm2[1], 16) : rC;
+                    const g2 = cm2 ? parseInt(cm2[2], 16) : gC;
+                    const b2 = cm2 ? parseInt(cm2[3], 16) : bC;
+                    renderContourStroke(
+                        ctx,
+                        entry ? entry.eroded : pr.maskData,
+                        pr.maskWidth, pr.maskHeight,
+                        r2, g2, b2,
+                        destX, destY, destW, destH,
+                    );
+                });
             }
         });
 
-        // ---- GROUP INNER CONTOURS (from individual people)
-        const isGroupActive = tile.regions.some(
-            r => r.type === 'people-group' &&
-                (r.id === hoveredRegionId || r.selected)
-        );
+    }, [tile.regions, imageTransform, hoveredRegionId, isEditing, peopleEnabled, backgroundEnabled, width, height]);
 
-        if (isGroupActive) {
-            const lineAlpha = 170;
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
-            tile.regions
-                .filter(r => r.type === 'person' && r.innerMaskData)
-                .forEach(person => {
-                    const w = person.maskWidth;
-                    const h = person.maskHeight;
-                    const mask = person.maskData;
-                    const inner = person.innerMaskData!;
-
-                    const imageData = new ImageData(w, h);
-
-                    const colorMatch = person.color.match(/#([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})/i);
-                    const r = colorMatch ? parseInt(colorMatch[1], 16) : 255;
-                    const g = colorMatch ? parseInt(colorMatch[2], 16) : 80;
-                    const b = colorMatch ? parseInt(colorMatch[3], 16) : 80;
-
-                    for (let y = 1; y < h - 1; y++) {
-                        for (let x = 1; x < w - 1; x++) {
-                            const i = y * w + x;
-
-                            if (mask[i] <= 0 || inner[i] > 0) continue;
-
-                            if (
-                                inner[i - 1] > 0 ||
-                                inner[i + 1] > 0 ||
-                                inner[i - w] > 0 ||
-                                inner[i + w] > 0
-                            ) {
-                                const idx = i * 4;
-                                imageData.data[idx] = r;
-                                imageData.data[idx + 1] = g;
-                                imageData.data[idx + 2] = b;
-                                imageData.data[idx + 3] = lineAlpha;
-                            }
-                        }
-                    }
-
-                    const temp = document.createElement('canvas');
-                    temp.width = w;
-                    temp.height = h;
-                    temp.getContext('2d')!.putImageData(imageData, 0, 0);
-
-                    ctx.drawImage(
-                        temp,
-                        imageTransform.x,
-                        imageTransform.y,
-                        imageTransform.width,
-                        imageTransform.height
-                    );
-                    ctx.save();
-                    ctx.globalCompositeOperation = 'screen';
-                    ctx.globalAlpha = 0.45;
-                    ctx.shadowColor = person.color;
-                    ctx.shadowBlur = 16;
-
-                    ctx.drawImage(
-                        temp,
-                        imageTransform.x,
-                        imageTransform.y,
-                        imageTransform.width,
-                        imageTransform.height
-                    );
-                    ctx.restore();
-
-                });
-        }
-
-    }, [
-        tile.regions,
-        imageTransform,
-        hoveredRegionId,
-        isEditing,
-        peopleEnabled,
-        backgroundEnabled,
-        width,
-        height
-    ]);
-
-    function hitTestPersonRegion(
-        x: number,
-        y: number,
-        region: Region,
-        imageTransform: {
-            width: number;
-            height: number;
-        }
-    ): 'inner' | 'outer' | null {
-        const scaleX = region.maskWidth / imageTransform.width;
-        const scaleY = region.maskHeight / imageTransform.height;
-
-        const mx = Math.floor(x * scaleX);
-        const my = Math.floor(y * scaleY);
-        const idx = my * region.maskWidth + mx;
-
-        if (idx < 0 || idx >= region.maskData.length) return null;
-
-        if (region.maskData[idx] <= 128) return null;
-
-        if (region.innerMaskData && region.innerMaskData[idx] > 128) {
-            return 'inner';
-        }
-
-        return 'outer';
-    }
-
-    const handleMouseMove = (e: React.MouseEvent) => {
-        if (isEditing) return;
-
+    const toImageCoords = (e: React.MouseEvent): { x: number; y: number } | null => {
         const canvas = canvasRef.current;
-        if (!canvas || !imageTransform) return;
-
+        if (!canvas || !imageTransform) return null;
         const rect = canvas.getBoundingClientRect();
-        const canvasX = Math.floor((e.clientX - rect.left) * (canvas.width / rect.width));
-        const canvasY = Math.floor((e.clientY - rect.top) * (canvas.height / rect.height));
-
+        const canvasX = (e.clientX - rect.left) * (canvas.width / rect.width);
+        const canvasY = (e.clientY - rect.top) * (canvas.height / rect.height);
         const x = canvasX - imageTransform.x;
         const y = canvasY - imageTransform.y;
+        if (x < 0 || y < 0 || x >= imageTransform.width || y >= imageTransform.height) return null;
+        return { x, y };
+    };
 
-        if (x < 0 || y < 0 || x >= imageTransform.width || y >= imageTransform.height) {
-            onHoverChange(null);
-            return;
-        }
+    const resolveHit = (x: number, y: number): Region | null => {
+        if (!imageTransform) return null;
 
-        // PERSONS FIRST
         for (let i = tile.regions.length - 1; i >= 0; i--) {
             const region = tile.regions[i];
             if (region.type !== 'person' || !peopleEnabled) continue;
-
-            const hit = hitTestPersonRegion(x, y, region, imageTransform);
+            const hit = hitTestPerson(x, y, region, imageTransform, erodeCache.current);
             if (!hit) continue;
-
-            if (hit === 'inner') {
-                onHoverChange(region.id);
-            } else {
-                const group = tile.regions.find(r => r.type === 'people-group');
-                onHoverChange(group ? group.id : null);
-            }
-            return;
+            if (hit === 'inner') return region;
+            return tile.regions.find(r => r.type === 'people-group') ?? region;
         }
 
-        // BACKGROUND
         const bg = tile.regions.find(r => r.type === 'background');
         if (bg && backgroundEnabled) {
             const scaleX = bg.maskWidth / imageTransform.width;
             const scaleY = bg.maskHeight / imageTransform.height;
             const idx = Math.floor(y * scaleY) * bg.maskWidth + Math.floor(x * scaleX);
-            // Check bounds
-            if (idx >= 0 && idx < bg.maskData.length && bg.maskData[idx] > 128) {
-                onHoverChange(bg.id);
-                return;
-            }
+            if (idx >= 0 && idx < bg.maskData.length && bg.maskData[idx] > 30) return bg;
         }
 
-        onHoverChange(null);
+        return null;
     };
 
-    const clickTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    // ── Event handlers ────────────────────────────────────────────────────────
+
+    const handleMouseMove = (e: React.MouseEvent) => {
+        if (isEditing) return;
+        const coords = toImageCoords(e);
+        if (!coords) { onHoverChange(null); return; }
+        const hit = resolveHit(coords.x, coords.y);
+        onHoverChange(hit ? hit.id : null);
+    };
+
+    const clickTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const handleCanvasClick = (e: React.MouseEvent) => {
         const isMultiToggle = e.ctrlKey || e.metaKey || e.shiftKey;
-
-        const canvas = canvasRef.current;
-        if (!canvas || !imageTransform) return;
-
-        const rect = canvas.getBoundingClientRect();
-        const canvasX = Math.floor((e.clientX - rect.left) * (canvas.width / rect.width));
-        const canvasY = Math.floor((e.clientY - rect.top) * (canvas.height / rect.height));
-
-        const x = canvasX - imageTransform.x;
-        const y = canvasY - imageTransform.y;
-
-        // Check if click is within image bounds
-        if (x < 0 || y < 0 || x >= imageTransform.width || y >= imageTransform.height) {
-            onUpdateTile({ regions: tile.regions.map(r => ({ ...r, selected: false })) });
+        const coords = toImageCoords(e);
+        if (!coords) {
+            if (!isMultiToggle) onUpdateTile({ regions: tile.regions.map(r => ({ ...r, selected: false })) });
             return;
         }
 
-        // Check which region was clicked
-        let clickedRegion: Region | null = null;
-
-        for (let i = tile.regions.length - 1; i >= 0; i--) {
-            const region = tile.regions[i];
-            if ((region.type === 'person' && !peopleEnabled) ||
-                (region.type === 'background' && !backgroundEnabled)) {
-                continue;
-            }
-
-            if (region.type === 'person') {
-                const hit = hitTestPersonRegion(x, y, region, imageTransform);
-                if (!hit) continue;
-
-                if (hit === 'inner') {
-                    clickedRegion = region;
-                } else {
-                    clickedRegion =
-                        tile.regions.find(r => r.type === 'people-group') ?? null;
-                }
-                break;
-            }
-
-            if (!clickedRegion && backgroundEnabled) {
-                const bg = tile.regions.find(r => r.type === 'background');
-                if (bg) {
-                    const scaleX = bg.maskWidth / imageTransform.width;
-                    const scaleY = bg.maskHeight / imageTransform.height;
-
-                    const mx = Math.floor(x * scaleX);
-                    const my = Math.floor(y * scaleY);
-                    const idx = my * bg.maskWidth + mx;
-
-                    if (idx >= 0 && idx < bg.maskData.length && bg.maskData[idx] > 128) {
-                        clickedRegion = bg;
-                    }
-                }
-            }
-
-        }
+        const clickedRegion = resolveHit(coords.x, coords.y);
 
         if (clickedRegion) {
-            e.stopPropagation(); // Prevent bubble to ImageTile background handler
-
+            e.stopPropagation();
             const performSelectionUpdate = () => {
                 const updatedRegions = tile.regions.map(r => {
-                    // ⌘ / Ctrl + click → toggle ONLY this region
-                    if (isMultiToggle) {
-                        if (r.id === clickedRegion!.id) {
-                            return { ...r, selected: !r.selected };
-                        }
-                        return r; // ← DO NOT TOUCH OTHERS
-                    }
-
-                    // Normal click → single select
-                    return {
-                        ...r,
-                        selected: r.id === clickedRegion!.id,
-                    };
+                    if (isMultiToggle) return r.id === clickedRegion.id ? { ...r, selected: !r.selected } : r;
+                    return { ...r, selected: r.id === clickedRegion.id };
                 });
                 onUpdateTile({ regions: updatedRegions });
             };
-
-            // Double Click Handling Strategy:
-            // If we click an ALREADY selected region (without modifiers),
-            // we delay the "Deselect Others" action to wait for a potential Double Click.
-            // If Double Click happens, we cancel this update, preserving the multi-selection for the Editor.
             if (!isMultiToggle && clickedRegion.selected) {
                 if (clickTimeoutRef.current) clearTimeout(clickTimeoutRef.current);
-                clickTimeoutRef.current = setTimeout(() => {
-                    performSelectionUpdate();
-                }, 250); // 250ms delay to allow double-click
+                clickTimeoutRef.current = setTimeout(performSelectionUpdate, 250);
             } else {
-                // Immediate update for explicit toggle OR new selection
                 performSelectionUpdate();
             }
-
-            // Activate the region (make it red/active) UNLESS we just deselected it via toggle
             const isDeselecting = isMultiToggle && clickedRegion.selected;
-            if (!isDeselecting) {
-                onEditRegion(clickedRegion);
-            }
+            if (!isDeselecting) onEditRegion(clickedRegion);
         } else {
-            // Clicked empty space → clear selection (ONLY if not multi-toggle)
-            if (!isMultiToggle) {
-                onUpdateTile({
-                    regions: tile.regions.map(r => ({ ...r, selected: false })),
-                });
-            }
+            if (!isMultiToggle) onUpdateTile({ regions: tile.regions.map(r => ({ ...r, selected: false })) });
         }
     };
 
     const handleCanvasDoubleClick = (e: React.MouseEvent) => {
-        // CANCEL pending single-select update (Preserve Multi-Selection)
         if (clickTimeoutRef.current) clearTimeout(clickTimeoutRef.current);
-        const canvas = canvasRef.current;
-        if (!canvas || !imageTransform) return;
-
-        const rect = canvas.getBoundingClientRect();
-        const canvasX = Math.floor((e.clientX - rect.left) * (canvas.width / rect.width));
-        const canvasY = Math.floor((e.clientY - rect.top) * (canvas.height / rect.height));
-
-        const x = canvasX - imageTransform.x;
-        const y = canvasY - imageTransform.y;
-
-        if (x < 0 || y < 0 || x >= imageTransform.width || y >= imageTransform.height) return;
-
-        for (let i = tile.regions.length - 1; i >= 0; i--) {
-            const region = tile.regions[i];
-            if ((region.type === 'person' && !peopleEnabled) ||
-                (region.type === 'background' && !backgroundEnabled)) {
-                continue;
-            }
-            if (region.type === 'person') {
-                const hit = hitTestPersonRegion(x, y, region, imageTransform);
-                if (!hit) continue;
-
-                if (hit === 'inner') {
-                    if (onEnterLocalEdit) {
-                        onEnterLocalEdit(region);
-                    } else {
-                        onEditRegion(region);
-                    }
-                } else {
-                    const group = tile.regions.find(r => r.type === 'people-group');
-                    if (group) {
-                        if (onEnterLocalEdit) {
-                            onEnterLocalEdit(group);
-                        } else {
-                            onEditRegion(group);
-                        }
-                    }
-                }
-                return;
-            }
-            const bg = tile.regions.find(r => r.type === 'background');
-            if (bg && backgroundEnabled) {
-                const scaleX = bg.maskWidth / imageTransform.width;
-                const scaleY = bg.maskHeight / imageTransform.height;
-                const idx = Math.floor(y * scaleY) * bg.maskWidth + Math.floor(x * scaleX);
-
-                if (idx >= 0 && idx < bg.maskData.length && bg.maskData[idx] > 128) {
-                    if (onEnterLocalEdit) {
-                        onEnterLocalEdit(bg);
-                    } else {
-                        onEditRegion(bg);
-                    }
-                    return;
-                }
-            }
-        }
+        const coords = toImageCoords(e);
+        if (!coords) return;
+        const hit = resolveHit(coords.x, coords.y);
+        if (!hit) return;
+        if (onEnterLocalEdit) onEnterLocalEdit(hit);
+        else onEditRegion(hit);
     };
 
     return (
