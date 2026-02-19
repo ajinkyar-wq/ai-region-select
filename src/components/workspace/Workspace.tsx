@@ -372,17 +372,25 @@ export function Workspace() {
       // Identify masks in this group
       const groupRegions = prev.regions.filter(r => r.groupId === groupId);
 
-      // Separate into types
-      const manualToDelete = groupRegions.filter(r =>
+      // Identify masks clipped to this group (Intersections)
+      const clippedRegions = prev.regions.filter(r => r.clipParentId === groupId);
+
+      // Combine all affected regions
+      const allAffected = [...groupRegions, ...clippedRegions];
+
+      // Separate into types for Hard vs Soft delete
+      const manualToDelete = allAffected.filter(r =>
         r.type === 'manual' || r.type === 'linear-gradient' || r.type === 'radial-gradient'
       );
 
-      const aiToReset = groupRegions.filter(r =>
+      // AI Masks are only reset, never hard deleted via Group Delete (they return to pool)
+      const aiToReset = allAffected.filter(r =>
         !manualToDelete.includes(r)
       );
 
       // 1. Remove Manual Masks (Hard Delete)
-      let newRegions = prev.regions.filter(r => !manualToDelete.includes(r));
+      // Filter out anything in manualToDelete
+      let newRegions = prev.regions.filter(r => !manualToDelete.some(d => d.id === r.id));
 
       // 2. Reset AI Masks (Soft Delete: Ungroup, Remove Edits, Deselect)
       newRegions = newRegions.map(r => {
@@ -392,7 +400,8 @@ export function Workspace() {
             groupId: undefined, // Ungroup
             hasEdits: false,    // Remove from List
             selected: false,    // Deselect
-            visible: true       // Keep on canvas
+            visible: true,      // Keep on canvas
+            clipParentId: undefined // Detach if it was clipped? (Unlikely for AI, but safe)
           };
         }
         return r;
@@ -1194,6 +1203,28 @@ export function Workspace() {
       setActiveMask(newMask);
     }
   };
+  /**
+   * Clip a gradient to a parent mask (Intersect mode).
+   *
+   * The gradient is NOT deleted — it becomes a child of the target mask in the outliner.
+   * Rendering is clipped live: gradient pixels are only visible where the parent mask is active.
+   * The gradient can still be moved and edited independently.
+   */
+  const handleIntersectGradient = (gradientId: string, targetId: string) => {
+    if (!image) return;
+
+    setImage(prev => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        regions: prev.regions.map(r =>
+          r.id === gradientId
+            ? { ...r, clipParentId: targetId }
+            : r
+        )
+      };
+    });
+  };
 
 
   return (
@@ -1464,6 +1495,7 @@ export function Workspace() {
               onMoveRegion={handleMoveRegion}
               onDeleteGroup={handleDeleteGroup}
               onInvertMask={handleInvertMask}
+              onIntersectGradient={handleIntersectGradient}
             />
           </div>
         </div>

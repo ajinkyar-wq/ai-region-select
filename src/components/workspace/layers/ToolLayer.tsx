@@ -580,6 +580,58 @@ export function ToolLayer({
             {effectiveRegions // Use Effective regions to pass down offsets!
                 .filter(r => (r.type === 'linear-gradient' || r.type === 'radial-gradient') && r.visible && r.id !== excludedRegionId)
                 .map(region => {
+                    // clipParentId can be a single region ID or a group ID — handle both.
+                    const clipParent = region.clipParentId
+                        ? regions.find(r => r.id === region.clipParentId)
+                        : undefined;
+
+                    // If no direct region match, treat clipParentId as a group ID
+                    const clipGroupMembers = (!clipParent && region.clipParentId)
+                        ? regions.filter(r => r.groupId === region.clipParentId)
+                        : [];
+
+                    const isParentSelected = clipParent
+                        ? clipParent.selected
+                        : clipGroupMembers.some(r => r.selected);
+
+                    // When parent is selected but this gradient is NOT individually selected,
+                    // SmartMaskLayer renders the intersection overlay. Hide the gradient tool.
+                    if (isParentSelected && !region.selected) {
+                        return null;
+                    }
+
+                    // Compute clip mask: for a single parent, use its mask directly.
+                    // For a group, compute the union of all group members' masks.
+                    let clipMask: { data: Uint8Array; width: number; height: number } | undefined;
+
+                    if (clipParent?.maskData) {
+                        clipMask = { data: clipParent.maskData, width: clipParent.maskWidth, height: clipParent.maskHeight };
+                    } else if (clipGroupMembers.length > 0) {
+                        // Compute union of all group members
+                        const membersWithMask = clipGroupMembers.filter(m => m.maskData);
+                        if (membersWithMask.length === 1) {
+                            clipMask = { data: membersWithMask[0].maskData, width: membersWithMask[0].maskWidth, height: membersWithMask[0].maskHeight };
+                        } else if (membersWithMask.length > 1) {
+                            // Union: use the max dimensions, then for each pixel take max across all members
+                            const uW = Math.max(...membersWithMask.map(m => m.maskWidth));
+                            const uH = Math.max(...membersWithMask.map(m => m.maskHeight));
+                            const unionData = new Uint8Array(uW * uH);
+                            membersWithMask.forEach(m => {
+                                for (let py = 0; py < uH; py++) {
+                                    for (let px = 0; px < uW; px++) {
+                                        const mx = Math.min(Math.floor((px / uW) * m.maskWidth), m.maskWidth - 1);
+                                        const my = Math.min(Math.floor((py / uH) * m.maskHeight), m.maskHeight - 1);
+                                        const val = m.maskData[my * m.maskWidth + mx];
+                                        if (val > unionData[py * uW + px]) {
+                                            unionData[py * uW + px] = val;
+                                        }
+                                    }
+                                }
+                            });
+                            clipMask = { data: unionData, width: uW, height: uH };
+                        }
+                    }
+
                     if (region.type === 'radial-gradient') {
                         return (
                             <RadialGradientTool
@@ -588,6 +640,8 @@ export function ToolLayer({
                                 region={region}
                                 isSelected={region.selected}
                                 isEditing={region.id === editingRegionId}
+                                clipMask={clipMask}
+                                isParentSelected={isParentSelected}
                                 onUpdate={(updates) => {
                                     if (!onUpdateTile) return;
                                     const updatedRegions = regions.map(r =>
@@ -609,6 +663,8 @@ export function ToolLayer({
                             region={region}
                             isSelected={region.selected}
                             isEditing={region.id === editingRegionId}
+                            clipMask={clipMask}
+                            isParentSelected={isParentSelected}
                             onUpdate={(updates) => {
                                 if (!onUpdateTile) return;
                                 const updatedRegions = regions.map(r =>
@@ -624,6 +680,7 @@ export function ToolLayer({
                             }}
                         />
                     )
+
                 })}
         </div>
     );

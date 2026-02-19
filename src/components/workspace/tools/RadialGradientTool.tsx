@@ -20,6 +20,10 @@ interface RadialGradientToolProps {
     onDoubleClick?: (e: React.MouseEvent) => void;
     onDrag?: (delta: { x: number, y: number }) => void;
     onDragEnd?: (sourceUpdates?: Partial<Region>) => void;
+    /** When set, the gradient overlay is clipped to these mask pixels (for intersect mode) */
+    clipMask?: { data: Uint8Array; width: number; height: number };
+    /** When true the parent mask is selected — gradient should reveal its overlay even without editing */
+    isParentSelected?: boolean;
 }
 
 export function RadialGradientTool({
@@ -31,7 +35,9 @@ export function RadialGradientTool({
     onSelect,
     onDoubleClick,
     onDrag,
-    onDragEnd
+    onDragEnd,
+    clipMask,
+    isParentSelected = false,
 }: RadialGradientToolProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -79,7 +85,7 @@ export function RadialGradientTool({
         if (!canvas || !dragState || !imageTransform) return;
 
         // Active Render Only: If not editing/dragging, ToolLayer handles the static overlay.
-        if (!isEditing && !dragState.isDragging) return;
+        if (!isEditing && !dragState.isDragging && !isSelected && !isParentSelected) return;
 
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
@@ -139,7 +145,38 @@ export function RadialGradientTool({
         // Outside (>1) -> Red (0.4) (Extended by fillRect with the gradient? Canvas extends last stop)
         // Correct.
 
-    }, [dragState, imageTransform?.width, imageTransform?.height, isSelected, isEditing, region.radialGradient?.invert]);
+        // ── Clip to parent mask if in intersect mode ──────────────────────
+        if (clipMask) {
+            const maskCanvas = document.createElement('canvas');
+            maskCanvas.width = canvas.width;
+            maskCanvas.height = canvas.height;
+            const mCtx = maskCanvas.getContext('2d');
+            if (mCtx) {
+                const imgData = mCtx.createImageData(canvas.width, canvas.height);
+                const mW = clipMask.width;
+                const mH = clipMask.height;
+                for (let py = 0; py < canvas.height; py++) {
+                    for (let px = 0; px < canvas.width; px++) {
+                        const nx = px / canvas.width;
+                        const ny = py / canvas.height;
+                        const mx = Math.min(Math.floor(nx * mW), mW - 1);
+                        const my = Math.min(Math.floor(ny * mH), mH - 1);
+                        const alpha = clipMask.data[my * mW + mx];
+                        const i = (py * canvas.width + px) * 4;
+                        imgData.data[i] = 255;
+                        imgData.data[i + 1] = 255;
+                        imgData.data[i + 2] = 255;
+                        imgData.data[i + 3] = alpha;
+                    }
+                }
+                mCtx.putImageData(imgData, 0, 0);
+                ctx.globalCompositeOperation = 'destination-in';
+                ctx.drawImage(maskCanvas, 0, 0);
+                ctx.globalCompositeOperation = 'source-over';
+            }
+        }
+
+    }, [dragState, clipMask, imageTransform?.width, imageTransform?.height, isSelected, isEditing, isParentSelected, region.radialGradient?.invert]);
 
 
     // --- Interaction Handlers ---

@@ -233,6 +233,29 @@ export function SmartMaskLayer({
             return r.visible;
         });
 
+        // Pre-compute clip-children map: parentId -> gradient regions clipped to it
+        const clipChildrenByParent: Record<string, Region[]> = {};
+        tile.regions.forEach(r => {
+            if (r.clipParentId && (r.type === 'linear-gradient' || r.type === 'radial-gradient') && r.visible) {
+                if (!clipChildrenByParent[r.clipParentId]) clipChildrenByParent[r.clipParentId] = [];
+                clipChildrenByParent[r.clipParentId].push(r);
+            }
+        });
+        // Also map clip-children that point to a group (clipParentId = groupId)
+        // by resolving which group members have maskData
+        const clipChildrenByGroup: Record<string, Region[]> = {};
+        tile.regions.forEach(r => {
+            if (r.clipParentId && (r.type === 'linear-gradient' || r.type === 'radial-gradient') && r.visible) {
+                // Check if this clipParentId is actually a groupId
+                const isGroupId = !tile.regions.some(p => p.id === r.clipParentId) &&
+                    tile.regions.some(p => p.groupId === r.clipParentId);
+                if (isGroupId) {
+                    if (!clipChildrenByGroup[r.clipParentId]) clipChildrenByGroup[r.clipParentId] = [];
+                    clipChildrenByGroup[r.clipParentId].push(r);
+                }
+            }
+        });
+
         visibleRegions.forEach(region => {
             if (!region.selected && region.id !== hoveredRegionId) return;
 
@@ -247,8 +270,57 @@ export function SmartMaskLayer({
 
             const overlayAlpha = region.selected ? 0.5 : 0.3;
 
-            // Pass 1 — rubylith wash over the full mask
-            renderMask(ctx, mask, w, h, rC, gC, bC, overlayAlpha, destX, destY, destW, destH);
+            // Collect all clip-children for this region (direct + via group)
+            const directClipKids = clipChildrenByParent[region.id] || [];
+            const groupClipKids = region.groupId ? (clipChildrenByGroup[region.groupId] || []) : [];
+            const allClipKids = [...directClipKids, ...groupClipKids];
+
+            if (region.selected && allClipKids.length > 0) {
+                // ── Intersection rendering ──────────────────────────────────────
+                // Show the INTERSECTION of the parent mask with each gradient.
+                // For each clip-child: compute parent ∩ gradient and render it.
+                // This gives the user a clear view of the effective mask regions.
+
+                // First, render a dimmed version of the parent mask as context
+                renderMask(ctx, mask, w, h, rC, gC, bC, overlayAlpha * 0.3, destX, destY, destW, destH);
+
+                // Then render each intersection at full overlay alpha
+                allClipKids.forEach(child => {
+                    // Compute intersection: min(parent[pixel], gradient[pixel]) at each pixel
+                    // We need to resample both masks to the same resolution.
+                    // Use the parent mask dimensions as the target.
+                    const iW = w;
+                    const iH = h;
+                    const intersected = new Uint8Array(iW * iH);
+
+                    const cW = child.maskWidth;
+                    const cH = child.maskHeight;
+
+                    for (let py = 0; py < iH; py++) {
+                        for (let px = 0; px < iW; px++) {
+                            // Parent mask value at this pixel
+                            const parentVal = mask[py * iW + px];
+                            if (parentVal <= 0) continue;
+
+                            // Sample child mask at corresponding position
+                            const cx = Math.min(Math.floor((px / iW) * cW), cW - 1);
+                            const cy = Math.min(Math.floor((py / iH) * cH), cH - 1);
+                            const childVal = child.maskData[cy * cW + cx];
+
+                            // Intersection = min of both
+                            intersected[py * iW + px] = Math.min(parentVal, childVal);
+                        }
+                    }
+
+                    // Render the intersection using the region's own color
+                    renderMask(ctx, intersected, iW, iH, rC, gC, bC, overlayAlpha, destX, destY, destW, destH);
+                    // Also render contour of the intersection
+                    renderContourStroke(ctx, intersected, iW, iH, rC, gC, bC, destX, destY, destW, destH);
+                });
+            } else {
+                // Pass 1 — rubylith wash over the full mask (no clip-children or not selected)
+                renderMask(ctx, mask, w, h, rC, gC, bC, overlayAlpha, destX, destY, destW, destH);
+            }
 
             // Pass 2 — dashed contour
             // person:       contour traces the ERODED mask = inner zone boundary

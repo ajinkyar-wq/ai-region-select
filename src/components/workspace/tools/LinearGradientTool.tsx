@@ -20,6 +20,10 @@ interface LinearGradientToolProps {
     onDoubleClick?: (e: React.MouseEvent) => void;
     onDrag?: (delta: { x: number, y: number }) => void;
     onDragEnd?: (sourceUpdates?: Partial<Region>) => void;
+    /** When set, the gradient overlay is clipped to these mask pixels (for intersect mode) */
+    clipMask?: { data: Uint8Array; width: number; height: number };
+    /** When true the parent mask is selected — gradient should reveal its overlay even without editing */
+    isParentSelected?: boolean;
 }
 
 export function LinearGradientTool({
@@ -31,7 +35,9 @@ export function LinearGradientTool({
     onSelect,
     onDoubleClick,
     onDrag,
-    onDragEnd
+    onDragEnd,
+    clipMask,
+    isParentSelected = false,
 }: LinearGradientToolProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -65,22 +71,22 @@ export function LinearGradientTool({
         }
     }, [region.gradient, imageTransform?.width, imageTransform?.height, imageTransform?.x, imageTransform?.y, dragState?.isDragging]);
 
-    // Live Gradient Preview
+    // Live Gradient Preview — redraws canvas whenever selection, editing, or clip state changes
     useEffect(() => {
         const canvas = canvasRef.current;
-        // Optimization: Render if dragging OR if selected/editing
         if (!canvas || !dragState || !imageTransform) return;
-
-        // Optimization: Render if dragging OR if selected/editing
-        if (!canvas || !dragState || !imageTransform) return;
-
-        // Active Render Only: If not editing/dragging, ToolLayer handles the static overlay.
-        if (!isEditing && !dragState.isDragging) return;
 
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
 
+        // Render when: actively editing/dragging, explicitly selected, OR parent mask is selected
+        if (!isEditing && !dragState.isDragging && !isSelected && !isParentSelected) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            return;
+        }
+
         ctx.clearRect(0, 0, canvas.width, canvas.height);
+
 
         const grad = ctx.createLinearGradient(
             dragState.start.x, dragState.start.y,
@@ -92,7 +98,39 @@ export function LinearGradientTool({
 
         ctx.fillStyle = grad;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-    }, [dragState, imageTransform?.width, imageTransform?.height, isSelected, isEditing]);
+
+        // ── Clip to parent mask if in intersect mode ────────────────────────
+        if (clipMask) {
+            const maskCanvas = document.createElement('canvas');
+            maskCanvas.width = canvas.width;
+            maskCanvas.height = canvas.height;
+            const mCtx = maskCanvas.getContext('2d');
+            if (mCtx) {
+                const imgData = mCtx.createImageData(canvas.width, canvas.height);
+                const mW = clipMask.width;
+                const mH = clipMask.height;
+                for (let py = 0; py < canvas.height; py++) {
+                    for (let px = 0; px < canvas.width; px++) {
+                        const nx = px / canvas.width;
+                        const ny = py / canvas.height;
+                        const mx = Math.min(Math.floor(nx * mW), mW - 1);
+                        const my = Math.min(Math.floor(ny * mH), mH - 1);
+                        const alpha = clipMask.data[my * mW + mx];
+                        const i = (py * canvas.width + px) * 4;
+                        imgData.data[i] = 255;
+                        imgData.data[i + 1] = 255;
+                        imgData.data[i + 2] = 255;
+                        imgData.data[i + 3] = alpha;
+                    }
+                }
+                mCtx.putImageData(imgData, 0, 0);
+                ctx.globalCompositeOperation = 'destination-in';
+                ctx.drawImage(maskCanvas, 0, 0);
+                ctx.globalCompositeOperation = 'source-over';
+            }
+        }
+    }, [dragState, clipMask, imageTransform?.width, imageTransform?.height, isSelected, isEditing, isParentSelected]);
+
 
 
     // --- Geometry Helpers ---

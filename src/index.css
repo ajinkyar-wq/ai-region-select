@@ -142,3 +142,41 @@ All colors MUST be HSL.
     top: 120%;
   }
 }
+
+/* ── Intersect Drag Animations ──────────────────────────────────────────── */
+/* Full-row amber wash that wipes in from left when a gradient is held over a mask */
+@keyframes intersect-wipe {
+  from {
+    opacity: 0;
+    transform: translateX(-100%);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Border glow that pulses on the top and bottom of the target row */
+@keyframes intersect-border-pulse {
+  from {
+    opacity: 0.4;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+/* Badge scales up with a spring when intersect state is committed */
+@keyframes intersect-badge-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}

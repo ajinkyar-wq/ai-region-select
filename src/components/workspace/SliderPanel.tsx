@@ -84,6 +84,8 @@ export function SliderPanel({
 
   // 2. Build Render List respecting original order
   // We want groups to appear at the position of their FIRST member.
+  // Clip children (gradients with clipParentId) are excluded from the root list
+  // and rendered inline under their parent mask instead.
   const topLevelItems: (Region | { type: 'group'; id: string; regions: Region[] })[] = [];
   const processedGroupIds = new Set<string>();
 
@@ -96,7 +98,19 @@ export function SliderPanel({
     }
   });
 
+  // Build map: parentId -> clip-children (gradients clipped to that mask)
+  const clipChildrenByParent: Record<string, Region[]> = {};
   editedRegions.forEach(r => {
+    if (r.clipParentId) {
+      if (!clipChildrenByParent[r.clipParentId]) clipChildrenByParent[r.clipParentId] = [];
+      clipChildrenByParent[r.clipParentId].push(r);
+    }
+  });
+
+  editedRegions.forEach(r => {
+    // Exclude clip-children from root list — they appear under their parent
+    if (r.clipParentId) return;
+
     if (r.groupId) {
       // It's in a group
       if (!processedGroupIds.has(r.groupId)) {
@@ -122,15 +136,22 @@ export function SliderPanel({
   // Tracks when a gradient is being dragged and hovering over a valid intersect target.
   // After INTERSECT_HOLD_MS of hover, the row animates "ready to intersect".
   const [intersectTarget, setIntersectTarget] = useState<string | null>(null);
+  const [intersectHoverTarget, setIntersectHoverTarget] = useState<string | null>(null);
   const [draggingGradientId, setDraggingGradientId] = useState<string | null>(null);
   const intersectHoldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const INTERSECT_HOLD_MS = 600;
+  const INTERSECT_HOLD_MS = 300;
 
   const clearIntersectHold = () => {
     if (intersectHoldTimerRef.current) {
       clearTimeout(intersectHoldTimerRef.current);
       intersectHoldTimerRef.current = null;
     }
+  };
+
+  const clearAllIntersect = () => {
+    clearIntersectHold();
+    setIntersectTarget(null);
+    setIntersectHoverTarget(null);
   };
 
   // Helper for DnD
@@ -208,9 +229,6 @@ export function SliderPanel({
     e.preventDefault();
     e.stopPropagation();
 
-    // ── Intersect Mode ────────────────────────────────────────────────────
-    // If a gradient is being dragged, check if the target is a non-gradient mask.
-    // If so, we enter intersect mode (slide-right animation) instead of group mode.
     const isGradientDrag = !!draggingGradientId;
     const isValidIntersectTarget = isGradientDrag &&
       targetRegionType &&
@@ -218,11 +236,13 @@ export function SliderPanel({
       targetRegionType !== 'radial-gradient';
 
     if (isValidIntersectTarget) {
-      // Set drop target as 'inside' so normal group ring is suppressed (we draw our own)
+      // Always show the blue "inside" ring first — same as grouping
       setDropTarget({ id, position: 'inside' });
 
-      // Start hold timer to commit to intersect animation
-      if (intersectTarget !== id) {
+      // Only act when we first enter this row — dragover fires constantly, so
+      // without this guard the timer gets reset on every tick and never completes.
+      if (intersectHoverTarget !== id) {
+        setIntersectHoverTarget(id);
         clearIntersectHold();
         setIntersectTarget(null);
         intersectHoldTimerRef.current = setTimeout(() => {
@@ -230,11 +250,11 @@ export function SliderPanel({
         }, INTERSECT_HOLD_MS);
       }
       return;
+
     }
 
-    // Normal DnD positioning
-    clearIntersectHold();
-    if (intersectTarget) setIntersectTarget(null);
+    // Normal DnD positioning — moved off a valid intersect target
+    clearAllIntersect();
 
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const y = e.clientY - rect.top;
@@ -256,15 +276,14 @@ export function SliderPanel({
 
   const handleDragLeave = () => {
     setDropTarget({ id: null, position: null });
-    clearIntersectHold();
-    setIntersectTarget(null);
+    clearAllIntersect();
   };
 
   // Called when the drag ends globally (so we can reset dragging gradient state)
   const handleGlobalDragEnd = () => {
     setDraggingGradientId(null);
-    clearIntersectHold();
-    setIntersectTarget(null);
+    clearAllIntersect();
+    setDropTarget({ id: null, position: null });
   };
 
   const handleDropItem = (e: React.DragEvent, targetId: string, targetRegionType?: string) => {
@@ -273,27 +292,23 @@ export function SliderPanel({
 
     clearIntersectHold();
     setDraggingGradientId(null);
+    setIntersectHoverTarget(null);
 
-    // ── Intersect Drop ────────────────────────────────────────────────────
-    // If we were in intersect mode (gradient hovering over a valid mask), do the intersect.
-    if (intersectTarget === targetId && draggingGradientId === null) {
-      // draggingGradientId is already cleared above; read from dataTransfer instead
-      const gradId = e.dataTransfer.getData('gradient-intersect') || e.dataTransfer.getData('text/plain');
-      const isGradientType = targetRegionType &&
-        targetRegionType !== 'linear-gradient' &&
-        targetRegionType !== 'radial-gradient';
-      if (gradId && isGradientType) {
-        onIntersectGradient?.(gradId, targetId);
-        setIntersectTarget(null);
-        setDropTarget({ id: null, position: null });
-        return;
-      }
-    }
-
-    // Also handle the case where the gradient was dropped during hold (intersectTarget already set)
     const gradId = e.dataTransfer.getData('gradient-intersect');
-    if (gradId && targetRegionType && targetRegionType !== 'linear-gradient' && targetRegionType !== 'radial-gradient') {
-      onIntersectGradient?.(gradId, targetId);
+    const isValidTarget = targetRegionType &&
+      targetRegionType !== 'linear-gradient' &&
+      targetRegionType !== 'radial-gradient';
+
+    if (gradId && isValidTarget) {
+      if (intersectTarget === targetId) {
+        // ── AMBER phase: CLIP the gradient to this mask ──────────────────────
+        onIntersectGradient?.(gradId, targetId);
+      } else {
+        // ── BLUE phase: GROUP the gradient with this mask ─────────────────
+        // Drop inside the mask → Workspace groups them (spreads existing region, clipParentId preserved)
+        handleDrop(e, targetId);
+      }
+
       setIntersectTarget(null);
       setDropTarget({ id: null, position: null });
       return;
@@ -555,26 +570,27 @@ export function SliderPanel({
                             h-[35px] px-2 cursor-pointer select-none
                             transition-colors relative
                             ${isGroupSelected ? 'bg-[#04395E] text-white' : (groupHeaderIndex % 2 === 0 ? 'bg-[#222222]' : 'bg-[#272727]')}
-                            ${!isGroupSelected && isDropTarget && dropTarget.position === 'inside' ? 'ring-2 ring-blue-500 ring-inset' : ''}
+                            ${!isGroupSelected && isDropTarget && dropTarget.position === 'inside' ? 'ring-2 ring-blue-500 ring-inset z-20' : ''}
+                            ${intersectTarget === groupId ? 'ring-2 ring-amber-500 ring-inset z-20' : ''}
                             ${!isGroupSelected && 'hover:bg-[#353535]'}
                           `}
                         draggable={true}
                         onDragStart={(e) => handleDragStart(e, groupId)}
-                        onDragOver={(e) => handleDragOverItem(e, groupId, true)}
+                        onDragOver={(e) => handleDragOverItem(e, groupId, true, 'group')}
                         onDragLeave={handleDragLeave}
-                        onDrop={(e) => handleDropItem(e, groupId)}
+                        onDrop={(e) => handleDropItem(e, groupId, 'group')}
                         onClick={(e) => {
                           const multi = e.metaKey || e.ctrlKey;
                           const shift = e.shiftKey;
 
                           if (shift) {
-                            // Handle Shift Select for Groups??
-                            // Usually selects all items inside?
-                            // Let's implement simpler: select group = select all items
                             onSelectBatchRegions?.(groupRegions.map(r => r.id), true);
                           } else {
                             onSelectBatchRegions?.(groupRegions.map(r => r.id), multi);
                           }
+
+                          // SmartMaskLayer handles intersection rendering when the group is selected.
+                          // No need to activate individual clip-child gradients here.
                         }}
                       >
                         {/* ... Header Content ... */}
@@ -660,11 +676,14 @@ export function SliderPanel({
                                     onToggleVis={() => onToggleVisibility(region.id)}
                                     onDelete={() => onDeleteRegion(region.id)}
                                     onInvert={() => onInvertMask?.(region.id)}
-                                    onDragStart={(e) => handleDragStart(e, region.id)}
-                                    onDragOver={(e) => handleDragOverItem(e, region.id, false)}
-                                    onDrop={(e) => handleDropItem(e, region.id)}
+                                    onDragStart={(e) => handleDragStart(e, region.id, region.type)}
+                                    onDragEnd={handleGlobalDragEnd}
+                                    onDragOver={(e) => handleDragOverItem(e, region.id, false, region.type)}
+                                    onDrop={(e) => handleDropItem(e, region.id, region.type)}
                                     isChild={true}
                                     dropTarget={dropTarget.id === region.id ? dropTarget.position : null}
+                                    isIntersectTarget={intersectTarget === region.id}
+                                    isDraggingGradient={!!draggingGradientId}
                                   />
 
                                   {dropTarget.id === region.id && dropTarget.position === 'bottom' && (
@@ -689,6 +708,7 @@ export function SliderPanel({
                   const region = item as Region;
                   const itemIndex = globalIndex++;
                   const isDropTarget = dropTarget.id === region.id;
+                  const clipKids = clipChildrenByParent[region.id] || [];
 
                   return (
                     <div key={region.id} className="relative">
@@ -699,16 +719,68 @@ export function SliderPanel({
                       <OutlinerItem
                         region={region}
                         index={itemIndex}
-                        onSelect={(multi, shift) => handleSelectRegion(region.id, multi, shift!)}
+                        onSelect={(multi, shift) => {
+                          handleSelectRegion(region.id, multi, shift!);
+                          // SmartMaskLayer handles intersection rendering when the parent is selected.
+                          // No need to activate individual clip-child gradients here.
+                        }}
                         onActivate={() => onActivateRegion?.(region.id)}
                         onToggleVis={() => onToggleVisibility(region.id)}
                         onDelete={() => onDeleteRegion(region.id)}
                         onInvert={() => onInvertMask?.(region.id)}
-                        onDragStart={(e) => handleDragStart(e, region.id)}
-                        onDragOver={(e) => handleDragOverItem(e, region.id, false)}
-                        onDrop={(e) => handleDropItem(e, region.id)}
+                        onDragStart={(e) => handleDragStart(e, region.id, region.type)}
+                        onDragEnd={handleGlobalDragEnd}
+                        onDragOver={(e) => handleDragOverItem(e, region.id, false, region.type)}
+                        onDrop={(e) => handleDropItem(e, region.id, region.type)}
                         dropTarget={isDropTarget ? dropTarget.position : null}
+                        isIntersectTarget={intersectTarget === region.id}
+                        isIntersectHover={intersectHoverTarget === region.id && intersectTarget !== region.id}
+                        clipChildCount={clipKids.length}
                       />
+
+                      {/* ── Clip-children: gradients locked to this mask ── */}
+                      {clipKids.length > 0 && (
+                        <div className="flex flex-col pl-5 relative">
+                          {/* Dashed left border hinting hierarchy */}
+                          <div
+                            className="absolute left-[18px] top-0 bottom-0 w-[1px]"
+                            style={{ borderLeft: '1.5px dashed rgba(251,146,60,0.35)' }}
+                          />
+                          {clipKids.map((child) => {
+                            const childIndex = globalIndex++;
+                            return (
+                              <div key={child.id} className="relative flex items-center">
+                                {/* Elbow connector */}
+                                <div className="absolute left-0 top-1/2 w-3 h-px"
+                                  style={{ background: 'rgba(251,146,60,0.35)', top: '50%' }}
+                                />
+                                <div className="flex-1">
+                                  <OutlinerItem
+                                    region={child}
+                                    index={childIndex}
+                                    onSelect={(multi, shift) => {
+                                      handleSelectRegion(child.id, multi, shift!);
+                                      // Single-click on a clip-child gradient immediately activates it
+                                      // so the gradient handles appear without needing a double-click.
+                                      if (!multi && !shift) {
+                                        onActivateRegion?.(child.id);
+                                      }
+                                    }}
+                                    onActivate={() => onActivateRegion?.(child.id)}
+                                    onToggleVis={() => onToggleVisibility(child.id)}
+                                    onDelete={() => onDeleteRegion(child.id)}
+                                    onDragStart={(e) => handleDragStart(e, child.id, child.type)}
+                                    onDragEnd={handleGlobalDragEnd}
+                                    onDragOver={(e) => handleDragOverItem(e, child.id, false, child.type)}
+                                    onDrop={(e) => handleDropItem(e, child.id, child.type)}
+                                    isClipChild={true}
+                                  />
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
 
                       {isDropTarget && dropTarget.position === 'bottom' && (
                         <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-blue-500 z-50" />
@@ -716,6 +788,7 @@ export function SliderPanel({
                     </div>
                   );
                 }
+
               })
             )}
           </div>
@@ -755,7 +828,13 @@ function OutlinerItem({
   onDrop,
   isChild = false,
   onDragOver,
-  dropTarget
+  dropTarget,
+  onDragEnd,
+  isIntersectTarget = false,
+  isIntersectHover = false,
+  isDraggingGradient = false,
+  clipChildCount = 0,
+  isClipChild = false,
 }: {
   region: Region;
   index: number;
@@ -767,117 +846,188 @@ function OutlinerItem({
   onDragStart?: (e: React.DragEvent) => void;
   onDrop?: (e: React.DragEvent) => void;
   onDragOver?: (e: React.DragEvent) => void;
+  onDragEnd?: () => void;
   isChild?: boolean;
   dropTarget?: 'top' | 'bottom' | 'inside' | null;
+  /** True when this row is the active intersect drop target (gradient held over it) */
+  isIntersectTarget?: boolean;
+  /** True immediately when a gradient first enters this row (before the 600ms hold) */
+  isIntersectHover?: boolean;
+  /** True while ANY gradient is being dragged (suppresses group-ring hint) */
+  isDraggingGradient?: boolean;
+  /** Number of clip-children attached to this mask row */
+  clipChildCount?: number;
+  /** True if this row is a gradient clipped to a parent mask */
+  isClipChild?: boolean;
 }) {
   const Icon = getRegionIcon(region.type);
 
+  const isGradientType = region.type === 'linear-gradient' || region.type === 'radial-gradient';
+  // Show blue group ring when drop target is 'inside' — unless amber clip mode is committed
+  const showGroupRing = dropTarget === 'inside' && !isIntersectTarget;
+
   return (
     <div
-      draggable={!!onDragStart}
-      onDragStart={onDragStart}
-      onDragOver={(e) => {
-        if (onDragOver) {
-          onDragOver(e);
-          return;
-        }
-        if (onDrop) {
-          e.preventDefault(); // Allow drop
-        }
-      }}
-      onDrop={onDrop}
-      onClick={(e) => {
-        // prevent triggering selection when clicking controls
-        onSelect(e.metaKey || e.ctrlKey, e.shiftKey);
-      }}
-      onDoubleClick={(e) => {
-        e.stopPropagation();
-        onActivate?.();
-      }}
-      className={`
-        group flex items-center justify-between
-        h-[35px] px-2 cursor-pointer select-none
-        transition-colors
-        ${dropTarget === 'inside' ? 'ring-2 ring-blue-500 ring-inset' : ''}
-        ${region.selected ? 'bg-[#04395E] text-white' : index % 2 === 0 ? 'bg-[#222222]' : 'bg-[#272727]'}
-        ${!region.selected && 'hover:bg-[#353535] text-[#ABABAB]'}
-        ${isChild ? 'pl-6' : ''}
-      `}
+      className="relative overflow-hidden"
+      style={{ isolation: 'isolate' }}
     >
-      <div className="flex items-center gap-2 overflow-hidden">
-        {/* Preview Thumbnail or Icon */}
-        <div className="w-4 h-4 flex-shrink-0 flex items-center justify-center bg-black/20 rounded-sm">
-          {(() => {
-            // Use existing preview if available
-            if (region.previewUrl) {
-              return <img src={region.previewUrl} className="w-full h-full object-contain" alt="" />;
-            }
+      {/* ── Blue hover tint (gradient over mask, group phase 0-600ms) ────────── */}
+      {isIntersectHover && !isIntersectTarget && !isGradientType && (
+        <div
+          className="absolute inset-0 pointer-events-none z-10"
+          style={{ background: 'rgba(59,130,246,0.10)' }}
+        />
+      )}
 
-            // Generate on-the-fly for default masks (Background/People Group)
-            // They have maskData but no previewUrl initially
-            if (region.maskData && region.maskWidth && region.maskHeight) {
-              // We use a simple memoized generation here to avoid re-running every render
-              // but we can't really use useMemo inside a map loop easily if this component wasn't extracted.
-              // Fortunately OutlinerItem IS a component.
-              const generatedPreview = useMemo(() => {
-                return generateMaskPreview(
-                  region.maskData,
-                  region.maskWidth,
-                  region.maskHeight,
-                  region.color
-                );
-              }, [region.maskData, region.maskWidth, region.maskHeight, region.color]);
-
-              return <img src={generatedPreview} className="w-full h-full object-contain" alt="" />;
-            }
-
-            return Icon;
-          })()}
-        </div>
-        <span className="text-[13px] truncate">{region.label || formatType(region.type)}</span>
-      </div>
-
-      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        {onInvert && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onInvert();
+      {/* ── Full committed intersect animation ───────────────────────────── */}
+      {isIntersectTarget && !isGradientType && (
+        <>
+          {/* Full-row amber flash that wipes in from left */}
+          <div
+            className="absolute inset-0 pointer-events-none z-10"
+            style={{
+              background: 'linear-gradient(90deg, rgba(251,146,60,0.55) 0%, rgba(251,146,60,0.3) 60%, transparent 100%)',
+              animation: 'intersect-wipe 0.4s cubic-bezier(0.22,1,0.36,1) forwards',
             }}
-            className="p-1 text-[#ABABAB] hover:text-white transition-colors"
-            title="Invert Mask"
-          >
-            <Contrast className="h-3 w-3" />
-          </button>
-        )}
-        {onDelete && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete();
-            }}
-            className="p-1 hover:text-red-400"
-          >
-            <Trash2 className="h-3 w-3" />
-          </button>
-        )}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleVis();
-          }}
-          className={`p-1 hover:text-white ${!region.visible ? 'text-white/40' : ''}`}
-        >
-          {region.visible ? (
-            <Eye className="h-3.5 w-3.5" />
-          ) : (
-            <EyeOff className="h-3.5 w-3.5" />
+          />
+          {/* Pulsing top+bottom amber borders */}
+          <div className="absolute inset-x-0 top-0 h-[2px] pointer-events-none z-20 bg-orange-400"
+            style={{ animation: 'intersect-border-pulse 0.7s ease-in-out infinite alternate' }} />
+          <div className="absolute inset-x-0 bottom-0 h-[2px] pointer-events-none z-20 bg-orange-400"
+            style={{ animation: 'intersect-border-pulse 0.7s ease-in-out infinite alternate' }} />
+        </>
+      )}
+
+      {/* ── Clip-child accent line (left edge amber) ─────────────────────── */}
+      {isClipChild && (
+        <div className="absolute left-0 top-0 bottom-0 w-[2px] pointer-events-none z-20 bg-orange-400/60" />
+      )}
+
+      {/* ── Inner row ──────────────────────────────────────────────────────── */}
+      <div
+        draggable={!!onDragStart}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        onDragOver={(e) => {
+          if (onDragOver) { onDragOver(e); return; }
+          if (onDrop) e.preventDefault();
+        }}
+        onDrop={onDrop}
+        onClick={(e) => onSelect(e.metaKey || e.ctrlKey, e.shiftKey)}
+        onDoubleClick={(e) => { e.stopPropagation(); onActivate?.(); }}
+        className={`
+          group flex items-center justify-between
+          h-[35px] px-2 cursor-pointer select-none
+          transition-colors relative z-20
+          ${showGroupRing ? 'ring-2 ring-blue-500 ring-inset' : ''}
+          ${isIntersectTarget && !isGradientType ? 'ring-2 ring-orange-400 ring-inset' : ''}
+          ${region.selected ? 'bg-[#04395E] text-white' : index % 2 === 0 ? 'bg-[#222222]' : 'bg-[#272727]'}
+          ${!region.selected && 'hover:bg-[#353535] text-[#ABABAB]'}
+          ${isChild ? 'pl-6' : ''}
+          ${isClipChild ? 'pl-3' : ''}
+        `}
+      >
+        <div className="flex items-center gap-2 overflow-hidden min-w-0">
+          {/* Clip-child chain icon */}
+          {isClipChild && (
+            <svg width="10" height="10" viewBox="0 0 14 14" fill="none" className="text-orange-400 flex-shrink-0 opacity-80">
+              <path d="M5.5 8.5C5.5 8.5 6 10 8 10H10C11.657 10 13 8.657 13 7C13 5.343 11.657 4 10 4H8C6.343 4 5 5.343 5 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              <path d="M8.5 5.5C8.5 5.5 8 4 6 4H4C2.343 4 1 5.343 1 7C1 8.657 2.343 10 4 10H6C7.657 10 9 8.657 9 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
           )}
-        </button>
+
+          {/* Preview Thumbnail or Icon */}
+          <div className="w-4 h-4 flex-shrink-0 flex items-center justify-center bg-black/20 rounded-sm">
+            {(() => {
+              if (region.previewUrl) return <img src={region.previewUrl} className="w-full h-full object-contain" alt="" />;
+              if (region.maskData && region.maskWidth && region.maskHeight) {
+                const generatedPreview = useMemo(() =>
+                  generateMaskPreview(region.maskData, region.maskWidth, region.maskHeight, region.color),
+                  [region.maskData, region.maskWidth, region.maskHeight, region.color]);
+                return <img src={generatedPreview} className="w-full h-full object-contain" alt="" />;
+              }
+              return Icon;
+            })()}
+          </div>
+
+          <span className={`text-[13px] truncate ${isClipChild ? 'text-orange-300/90' : ''}`}>
+            {region.label || formatType(region.type)}
+          </span>
+
+          {/* Clip-count badge on parent row */}
+          {clipChildCount > 0 && (
+            <span
+              className="flex-shrink-0 ml-0.5 text-[9px] font-bold px-1 py-0 rounded-full leading-4"
+              style={{ background: 'rgba(251,146,60,0.25)', color: 'rgba(251,146,60,0.9)', border: '1px solid rgba(251,146,60,0.35)' }}
+            >
+              {clipChildCount}
+            </span>
+          )}
+        </div>
+
+        {/* ── Blue hover badge \u2014 group phase (immediate) ────────────────── */}
+        {isIntersectHover && !isIntersectTarget && !isGradientType && (
+          <div
+            className="absolute inset-0 flex items-center justify-center pointer-events-none z-30"
+            style={{ animation: 'intersect-badge-pop 0.2s cubic-bezier(0.34,1.56,0.64,1) forwards' }}
+          >
+            <div className="flex items-center gap-1.5 px-3 py-1 rounded-full"
+              style={{ background: 'rgba(59,130,246,0.85)', backdropFilter: 'blur(4px)' }}>
+              {/* Group icon */}
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none" className="text-white">
+                <rect x="1.5" y="1.5" width="4.5" height="4.5" rx="0.8" stroke="currentColor" strokeWidth="1.5" />
+                <rect x="8" y="1.5" width="4.5" height="4.5" rx="0.8" stroke="currentColor" strokeWidth="1.5" />
+                <rect x="1.5" y="8" width="4.5" height="4.5" rx="0.8" stroke="currentColor" strokeWidth="1.5" />
+                <rect x="8" y="8" width="4.5" height="4.5" rx="0.8" stroke="currentColor" strokeWidth="1.5" />
+              </svg>
+              <span className="text-[11px] font-bold text-white tracking-wide">Add to Group</span>
+            </div>
+          </div>
+        )}
+
+        {/* ── Amber clip badge \u2014 clip phase (after 600ms hold) ───────────── */}
+        {isIntersectTarget && !isGradientType && (
+          <div
+            className="absolute inset-0 flex items-center justify-center pointer-events-none z-30"
+            style={{ animation: 'intersect-badge-pop 0.3s cubic-bezier(0.34,1.56,0.64,1) forwards' }}
+          >
+            <div className="flex items-center gap-1.5 px-3 py-1 rounded-full"
+              style={{ background: 'rgba(251,146,60,0.9)', backdropFilter: 'blur(4px)' }}>
+              {/* ⊓ symbol */}
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-white">
+                <path d="M3 10V5.5C3 3.567 4.567 2 6.5 2H7.5C9.433 2 11 3.567 11 5.5V10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                <line x1="2" y1="10" x2="12" y2="10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              </svg>
+              <span className="text-[11px] font-bold text-white tracking-wide">Clip to Mask</span>
+            </div>
+          </div>
+        )}
+
+        {/* ── Normal controls ────────────────────────────────────────────── */}
+        {!isIntersectTarget && !isIntersectHover && (
+          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+            {onInvert && (
+              <button onClick={(e) => { e.stopPropagation(); onInvert(); }}
+                className="p-1 text-[#ABABAB] hover:text-white transition-colors" title="Invert Mask">
+                <Contrast className="h-3 w-3" />
+              </button>
+            )}
+            {onDelete && (
+              <button onClick={(e) => { e.stopPropagation(); onDelete(); }} className="p-1 hover:text-red-400">
+                <Trash2 className="h-3 w-3" />
+              </button>
+            )}
+            <button onClick={(e) => { e.stopPropagation(); onToggleVis(); }}
+              className={`p-1 hover:text-white ${!region.visible ? 'text-white/40' : ''}`}>
+              {region.visible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
 }
+
 
 function getRegionIcon(type: Region['type']) {
   const className = "h-3.5 w-3.5 opacity-70";

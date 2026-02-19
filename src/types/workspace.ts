@@ -31,6 +31,8 @@ export interface Region {
   // Outliner state
   hasEdits?: boolean;
   groupId?: string;
+  /** If set, this gradient is a child of the mask with this ID (intersect/clip mode) */
+  clipParentId?: string;
   previewUrl?: string;
   adjustments?: RegionAdjustments;
 }
