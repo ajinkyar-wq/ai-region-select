@@ -594,11 +594,12 @@ export function ToolLayer({
                         ? clipParent.selected
                         : clipGroupMembers.some(r => r.selected);
 
-                    // When parent is selected but this gradient is NOT individually selected,
-                    // SmartMaskLayer renders the intersection overlay. Hide the gradient tool.
-                    if (isParentSelected && !region.selected) {
-                        return null;
-                    }
+                    // When parent is selected, we want to show the gradient tool (icon/overlay)
+                    // so the user knows it exists and can select it to edit.
+                    // Previously we hid it, which made "intersect on group" invisible in terms of controls.
+                    // if (isParentSelected && !region.selected) {
+                    //     return null;
+                    // }
 
                     // Compute clip mask: for a single parent, use its mask directly.
                     // For a group, compute the union of all group members' masks.
