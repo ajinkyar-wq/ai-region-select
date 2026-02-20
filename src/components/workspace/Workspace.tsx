@@ -185,20 +185,12 @@ export function Workspace() {
       })
     });
 
-    // Sync Activation if activeId is provided (e.g. from Shift-Click)
+    // Sync Activation if activeId is provided (e.g. from single-click or Shift-Click)
     if (activeId) {
       const region = image.regions.find(r => r.id === activeId);
       if (region) {
         setActiveMask(region);
-
-        if (region.type === 'manual') {
-          setBrushActive(true);
-          setBrushMode('add');
-        } else {
-          setBrushActive(false);
-        }
-
-        // Clear drawing tool if switching masks
+        setBrushActive(false); // Selection never activates brush — only double-click does
         setDrawingTool(null);
       }
     }
@@ -265,13 +257,25 @@ export function Workspace() {
           newRegions[targetIndex] = { ...newRegions[targetIndex], groupId: newGroupId };
 
           // Insert moving items AFTER target? or BEFORE?
-          // "Drop onto" usually implies they become siblings. 
+          // "Drop onto" usually implies they become siblings.
           // Let's insert AFTER for now.
           newRegions.splice(targetIndex + 1, 0, ...updatedMoving);
         } else {
           // Fallback: just append (shouldn't happen if target found)
           newRegions.push(...updatedMoving);
         }
+
+        // Auto-dissolve groups that now have 0 or 1 member (same as CASE 2)
+        const groupCounts: Record<string, number> = {};
+        newRegions.forEach(r => {
+          if (r.groupId) groupCounts[r.groupId] = (groupCounts[r.groupId] || 0) + 1;
+        });
+        newRegions = newRegions.map(r => {
+          if (r.groupId && (groupCounts[r.groupId] || 0) <= 1) {
+            return { ...r, groupId: undefined };
+          }
+          return r;
+        });
 
         return { ...prev, regions: newRegions };
       });
@@ -354,6 +358,18 @@ export function Workspace() {
           // formatting fallback: append
           newRegions.push(...updatedMovingRegions);
         }
+
+        // Auto-dissolve groups that now have 0 or 1 member
+        const groupCounts: Record<string, number> = {};
+        newRegions.forEach(r => {
+          if (r.groupId) groupCounts[r.groupId] = (groupCounts[r.groupId] || 0) + 1;
+        });
+        newRegions = newRegions.map(r => {
+          if (r.groupId && (groupCounts[r.groupId] || 0) <= 1) {
+            return { ...r, groupId: undefined };
+          }
+          return r;
+        });
 
         return {
           ...prev,
@@ -1274,7 +1290,7 @@ export function Workspace() {
               {image && (brushActive || (isLocalEditing && activeMask && activeMask.type !== 'linear-gradient' && activeMask.type !== 'radial-gradient')) && (
                 <DraggableToolbar
                   containerRef={containerRef}
-                  activeId={brushActive ? (brushMode === 'erase' ? 'eraser' : 'brush') : 'move'}
+                  activeId={(brushActive && activeMask?.type === 'manual') ? (brushMode === 'erase' ? 'eraser' : 'brush') : 'move'}
                   onActiveChange={(id) => {
                     if (id === 'brush') {
                       setBrushActive(true);
@@ -1468,15 +1484,40 @@ export function Workspace() {
 
                 setImage(prev => {
                   if (!prev) return prev;
+
+                  // Identify the main region to delete
+                  // AND any regions that are clipped to it (orphans)
+                  const dependents = prev.regions.filter(r => r.clipParentId === id);
+                  const regionsToDelete = [region, ...dependents];
+
+                  // Filter sets
+                  const manualToDelete = regionsToDelete.filter(r =>
+                    r.type === 'manual' || r.type === 'linear-gradient' || r.type === 'radial-gradient'
+                  );
+
+                  const aiToReset = regionsToDelete.filter(r =>
+                    !manualToDelete.includes(r)
+                  );
+
                   let newRegions: Region[];
 
-                  if (isManual) {
-                    // Hard Delete
-                    newRegions = prev.regions.filter(r => r.id !== id);
-                  } else {
-                    // Soft Delete (Reset)
-                    newRegions = prev.regions.map(r => r.id === id ? { ...r, hasEdits: false, selected: false, visible: true } : r);
-                  }
+                  // 1. Convert prev regions to a new list, filtering out HARD deletes
+                  newRegions = prev.regions.filter(r => !manualToDelete.some(del => del.id === r.id));
+
+                  // 2. Soft Reset AI masks
+                  newRegions = newRegions.map(r => {
+                    if (aiToReset.some(reset => reset.id === r.id)) {
+                      return {
+                        ...r,
+                        hasEdits: false,
+                        selected: false,
+                        visible: true,
+                        groupId: undefined, // Ungroup
+                        clipParentId: undefined // Detach from the deleted parent
+                      };
+                    }
+                    return r;
+                  });
 
                   return { ...prev, regions: newRegions };
                 });

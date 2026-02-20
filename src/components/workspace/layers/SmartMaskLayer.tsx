@@ -275,14 +275,15 @@ export function SmartMaskLayer({
             const groupClipKids = region.groupId ? (clipChildrenByGroup[region.groupId] || []) : [];
             const allClipKids = [...directClipKids, ...groupClipKids];
 
-            if (region.selected && allClipKids.length > 0) {
+            if (allClipKids.length > 0) {
                 // ── Intersection rendering ──────────────────────────────────────
                 // Show the INTERSECTION of the parent mask with each gradient.
                 // For each clip-child: compute parent ∩ gradient and render it.
                 // This gives the user a clear view of the effective mask regions.
 
                 // First, render a dimmed version of the parent mask as context
-                renderMask(ctx, mask, w, h, rC, gC, bC, overlayAlpha * 0.3, destX, destY, destW, destH);
+                // REMOVED per user request: "other side of gradient needs to be blank"
+                // renderMask(ctx, mask, w, h, rC, gC, bC, overlayAlpha * 0.3, destX, destY, destW, destH);
 
                 // Then render each intersection at full overlay alpha
                 allClipKids.forEach(child => {
@@ -314,8 +315,10 @@ export function SmartMaskLayer({
 
                     // Render the intersection using the region's own color
                     renderMask(ctx, intersected, iW, iH, rC, gC, bC, overlayAlpha, destX, destY, destW, destH);
-                    // Also render contour of the intersection
-                    renderContourStroke(ctx, intersected, iW, iH, rC, gC, bC, destX, destY, destW, destH);
+
+                    // DELETED: renderContourStroke on intersected mask
+                    // Why? Because gradients produce ugly internal contour lines where they fade out.
+                    // The user wants "just the contour showcase only", which implies the clean original boundary.
                 });
             } else {
                 // Pass 1 — rubylith wash over the full mask (no clip-children or not selected)
@@ -323,31 +326,18 @@ export function SmartMaskLayer({
             }
 
             // Pass 2 — dashed contour
-            // person:       contour traces the ERODED mask = inner zone boundary
-            // people-group: no contour on the group mask itself — instead draw
-            //               the eroded contour for each individual person region,
-            //               showing where each individual's inner zone sits
-            if (region.type === 'person') {
-                const entry = getOrBuildErodedEntry(region, erodeCache.current);
-                const contourMask = entry ? entry.eroded : mask;
-                renderContourStroke(ctx, contourMask, w, h, rC, gC, bC, destX, destY, destW, destH);
-            } else if (region.type === 'people-group') {
-                tile.regions.forEach(pr => {
-                    if (pr.type !== 'person' || !pr.visible || !peopleEnabled) return;
-                    const entry = getOrBuildErodedEntry(pr, erodeCache.current);
-                    const cm2 = pr.color.match(/#([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})/i);
-                    const r2 = cm2 ? parseInt(cm2[1], 16) : rC;
-                    const g2 = cm2 ? parseInt(cm2[2], 16) : gC;
-                    const b2 = cm2 ? parseInt(cm2[3], 16) : bC;
-                    renderContourStroke(
-                        ctx,
-                        entry ? entry.eroded : pr.maskData,
-                        pr.maskWidth, pr.maskHeight,
-                        r2, g2, b2,
-                        destX, destY, destW, destH,
-                    );
-                });
+            // REMOVED per user request: "just remove the contours altogether they do not make sense now"
+            /*
+            const showOriginalContour = !(region.selected && allClipKids.length > 0);
+
+            if (showOriginalContour) {
+                if (region.type === 'person') {
+                   // ...
+                } else if (region.type === 'people-group') {
+                   // ...
+                }
             }
+            */
         });
 
     }, [tile.regions, imageTransform, hoveredRegionId, isEditing, peopleEnabled, backgroundEnabled, width, height]);

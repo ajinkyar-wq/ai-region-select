@@ -416,7 +416,7 @@ export function ImageTile({
         )}
 
         {/* TOOL: Interactive Brush (Global) - Now Inside Transform */}
-        {brushActive && !editingRegion && imageTransform && activeMask && (
+        {brushActive && !editingRegion && imageTransform && activeMask && activeMask.type === 'manual' && (
           <BrushTool
             imageTransform={imageTransform}
             activeMask={activeMask}

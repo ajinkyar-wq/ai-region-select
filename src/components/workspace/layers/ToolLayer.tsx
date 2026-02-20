@@ -173,12 +173,42 @@ export function ToolLayer({
             const imageData = new ImageData(region.maskWidth, region.maskHeight);
             const data = region.maskData;
 
+            // Identify intersected gradients (Clip Children)
+            const clipKids = effectiveRegions.filter(c => c.clipParentId === region.id);
+            const hasClipKids = clipKids.length > 0;
+            const rw = region.maskWidth; // capture for loop
+
             // Color logic: Manual = Green, Linear/Radial Gradient = Red
             for (let i = 0; i < data.length; i++) {
-                if (data[i] > 10) {
+                let alpha = data[i];
+
+                // If we have clip children, intersect them
+                if (hasClipKids && alpha > 0) {
+                    const x = i % rw;
+                    const y = Math.floor(i / rw);
+
+                    for (const kid of clipKids) {
+                        const kw = kid.maskWidth;
+                        const kh = kid.maskHeight;
+
+                        let childVal = 0;
+                        if (kw === rw && kh === region.maskHeight) {
+                            // Fast path: same dimensions
+                            childVal = kid.maskData[i];
+                        } else {
+                            // Resample
+                            const kx = Math.min(Math.floor((x / rw) * kw), kw - 1);
+                            const ky = Math.min(Math.floor((y / region.maskHeight) * kh), kh - 1);
+                            childVal = kid.maskData[ky * kw + kx];
+                        }
+                        alpha = Math.min(alpha, childVal);
+                    }
+                }
+
+                if (alpha > 10) {
                     const idx = i * 4;
                     // Use alpha from mask for gradients
-                    const opacity = data[i] / 255;
+                    const opacity = alpha / 255;
 
                     if (region.type === 'linear-gradient' || region.type === 'radial-gradient') {
                         imageData.data[idx] = 255;     // R
