@@ -79,8 +79,16 @@ export function LinearGradientTool({
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
 
-        // Render when: actively editing/dragging, explicitly selected, OR parent mask is selected
-        if (!isEditing && !dragState.isDragging && !isSelected && !isParentSelected) {
+        // When parent is selected and handles are not actively being dragged:
+        // the parent's rendering layer (SmartMaskLayer for AI masks, ToolLayer canvas
+        // for manual masks) already draws the intersection — clear here to avoid doubling.
+        // Only show our own canvas during an active handle drag (live positioning feedback).
+        if (isParentSelected && !dragState.isDragging) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            return;
+        }
+        // Default off: not editing, not dragging, and not selected without a parent.
+        if (!isEditing && !dragState.isDragging && !isSelected) {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             return;
         }

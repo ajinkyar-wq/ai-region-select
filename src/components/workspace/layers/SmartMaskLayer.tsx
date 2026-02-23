@@ -19,6 +19,7 @@ interface SmartMaskLayerProps {
     onUpdateTile: (updates: Partial<ImageTileData>) => void;
     onEditRegion: (region: Region) => void;
     onEnterLocalEdit?: (region: Region) => void;
+    canvasInteractionsEnabled?: boolean;
 }
 
 // ─── Erosion ──────────────────────────────────────────────────────────────────
@@ -204,6 +205,7 @@ export function SmartMaskLayer({
     onUpdateTile,
     onEditRegion,
     onEnterLocalEdit,
+    canvasInteractionsEnabled = true,
 }: SmartMaskLayerProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     // Cache persists across renders; checksum-based invalidation handles mask edits
@@ -230,6 +232,10 @@ export function SmartMaskLayer({
             if (r.type === 'person' && !peopleEnabled) return false;
             if (r.type === 'background' && !backgroundEnabled) return false;
             if (r.type === 'manual' || r.type === 'linear-gradient' || r.type === 'radial-gradient') return false;
+            if (!canvasInteractionsEnabled) {
+                if (r.type === 'background' || r.type === 'people-group') return r.hasEdits !== false;
+                return !!r.hasEdits;
+            }
             return r.visible;
         });
 
@@ -340,7 +346,7 @@ export function SmartMaskLayer({
             */
         });
 
-    }, [tile.regions, imageTransform, hoveredRegionId, isEditing, peopleEnabled, backgroundEnabled, width, height]);
+    }, [tile.regions, imageTransform, hoveredRegionId, isEditing, peopleEnabled, backgroundEnabled, width, height, canvasInteractionsEnabled]);
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -356,20 +362,38 @@ export function SmartMaskLayer({
         return { x, y };
     };
 
+    const isOnList = (r: Region) => {
+        if (r.type === 'background' || r.type === 'people-group') return r.hasEdits !== false;
+        return !!r.hasEdits;
+    };
+
     const resolveHit = (x: number, y: number): Region | null => {
         if (!imageTransform) return null;
 
         for (let i = tile.regions.length - 1; i >= 0; i--) {
             const region = tile.regions[i];
             if (region.type !== 'person' || !peopleEnabled) continue;
+            // Always hit-test — never skip. Filter the result after.
             const hit = hitTestPerson(x, y, region, imageTransform, erodeCache.current);
             if (!hit) continue;
+
+            const pg = tile.regions.find(r => r.type === 'people-group');
+
+            if (!canvasInteractionsEnabled) {
+                // Return the most specific on-list candidate
+                if (hit === 'inner' && isOnList(region)) return region;
+                if (pg && isOnList(pg)) return pg;
+                if (isOnList(region)) return region;
+                return null;
+            }
+
             if (hit === 'inner') return region;
-            return tile.regions.find(r => r.type === 'people-group') ?? region;
+            return pg ?? region;
         }
 
         const bg = tile.regions.find(r => r.type === 'background');
         if (bg && backgroundEnabled) {
+            if (!canvasInteractionsEnabled && !isOnList(bg)) return null;
             const scaleX = bg.maskWidth / imageTransform.width;
             const scaleY = bg.maskHeight / imageTransform.height;
             const idx = Math.floor(y * scaleY) * bg.maskWidth + Math.floor(x * scaleX);

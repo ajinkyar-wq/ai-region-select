@@ -84,8 +84,16 @@ export function RadialGradientTool({
         // We always want to render the gradient on the preview canvas if we are active.
         if (!canvas || !dragState || !imageTransform) return;
 
-        // Active Render Only: If not editing/dragging, ToolLayer handles the static overlay.
-        if (!isEditing && !dragState.isDragging && !isSelected && !isParentSelected) return;
+        // When parent is selected and handles are not actively being dragged:
+        // the parent's rendering layer already draws the intersection — clear to avoid doubling.
+        // Only show our own canvas during an active handle drag (live positioning feedback).
+        if (isParentSelected && !dragState.isDragging) {
+            const ctx2 = canvas.getContext('2d');
+            if (ctx2) ctx2.clearRect(0, 0, canvas.width, canvas.height);
+            return;
+        }
+        // Default off: not editing, not dragging, and not selected without a parent.
+        if (!isEditing && !dragState.isDragging && !isSelected) return;
 
         const ctx = canvas.getContext('2d');
         if (!ctx) return;

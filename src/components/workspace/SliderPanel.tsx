@@ -9,6 +9,8 @@ import {
   Trash2,
   Layers,
   Contrast, // Use Contrast icon for Invert
+  ToggleLeft,
+  ToggleRight,
 } from 'lucide-react';
 import type { Region, RegionAdjustments } from '@/types/workspace';
 
@@ -34,6 +36,9 @@ interface SliderPanelProps {
   onUpdateAdjustments?: (adjustments: RegionAdjustments) => void;
   /** Called when a gradient is dropped onto a target mask/group to intersect with it */
   onIntersectGradient?: (gradientId: string, targetId: string) => void;
+  /** Whether canvas drawing interactions (gradient creation) are enabled */
+  canvasInteractionsEnabled?: boolean;
+  onToggleCanvasInteractions?: () => void;
 }
 
 export function SliderPanel({
@@ -56,6 +61,8 @@ export function SliderPanel({
   onActivateRegion,
   onUpdateAdjustments,
   onIntersectGradient,
+  canvasInteractionsEnabled = true,
+  onToggleCanvasInteractions,
 }: SliderPanelProps) {
   const [activeTab, setActiveTab] = useState<'sliders' | 'crop' | 'masking'>('masking');
   const [showAddMaskMenu, setShowAddMaskMenu] = useState(false);
@@ -65,6 +72,18 @@ export function SliderPanel({
     'smart-selections': true,
     'masks': true,
   });
+
+  // Drag & Drop State — must live before the early return to satisfy Rules of Hooks
+  const [dropTarget, setDropTarget] = useState<{ id: string | null; position: 'top' | 'bottom' | 'inside' | null }>({ id: null, position: null });
+  const [lastSelectedId, setLastSelectedId] = useState<string | null>(null);
+
+  // ── Intersect Drag State ──────────────────────────────────────────────────
+  const [intersectTarget, setIntersectTarget] = useState<string | null>(null);
+  const [intersectHoverTarget, setIntersectHoverTarget] = useState<string | null>(null);
+  const [draggingGradientId, setDraggingGradientId] = useState<string | null>(null);
+  const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
+  const intersectHoldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const INTERSECT_HOLD_MS = 800;
 
   const toggleGroup = (key: string) => {
     setExpandedGroups(prev => ({ ...prev, [key]: !prev[key] }));
@@ -92,6 +111,9 @@ export function SliderPanel({
   // Pre-group regions for checks
   const regionsByGroup: Record<string, Region[]> = {};
   editedRegions.forEach(r => {
+    // Exclude clip children from group membership (they exclusively belong to their parent)
+    if (r.clipParentId) return;
+
     if (r.groupId) {
       if (!regionsByGroup[r.groupId]) regionsByGroup[r.groupId] = [];
       regionsByGroup[r.groupId].push(r);
@@ -128,19 +150,11 @@ export function SliderPanel({
     }
   });
 
-  // Drag & Drop State
-  const [dropTarget, setDropTarget] = useState<{ id: string | null; position: 'top' | 'bottom' | 'inside' | null }>({ id: null, position: null });
-  const [lastSelectedId, setLastSelectedId] = useState<string | null>(null);
-
-  // ── Intersect Drag State ──────────────────────────────────────────────────
-  // Tracks when a gradient is being dragged and hovering over a valid intersect target.
-  // After INTERSECT_HOLD_MS of hover, the row animates "ready to intersect".
-  const [intersectTarget, setIntersectTarget] = useState<string | null>(null);
-  const [intersectHoverTarget, setIntersectHoverTarget] = useState<string | null>(null);
-  const [draggingGradientId, setDraggingGradientId] = useState<string | null>(null);
-  const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
-  const intersectHoldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const INTERSECT_HOLD_MS = 800;
+  // Which group (if any) the currently-dragged item originally belongs to.
+  // Used to show the "remove from group" escape zone above that group header.
+  const draggingItemSourceGroupId = draggingItemId
+    ? editedRegions.find(r => r.id === draggingItemId)?.groupId
+    : undefined;
 
   const clearIntersectHold = () => {
     if (intersectHoldTimerRef.current) {
@@ -232,17 +246,36 @@ export function SliderPanel({
     e.stopPropagation();
 
     const isGradientDrag = !!draggingGradientId;
+
+    // A gradient that already has a clipParentId is being moved/repositioned —
+    // dragging it over a GROUP header should only reorder, never re-clip.
+    // A FREE gradient (no clipParentId) can still trigger the amber hold timer on
+    // a group header to clip it to the whole group (additive operation).
+    const draggingGradientIsClipped = !!editedRegions.find(r => r.id === draggingGradientId)?.clipParentId;
+
     const isValidIntersectTarget = isGradientDrag &&
+      !(isGroup && draggingGradientIsClipped) &&
       targetRegionType &&
       targetRegionType !== 'linear-gradient' &&
       targetRegionType !== 'radial-gradient';
 
     if (isValidIntersectTarget) {
-      // Always show the blue "inside" ring first — same as grouping
-      setDropTarget({ id, position: 'inside' });
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      const y = e.clientY - rect.top;
+      const h = rect.height;
+      // Outer 30% of the row = plain reorder (top/bottom insertion line).
+      // Centre 40% = intersect/group zone with hold timer.
+      const edgeThreshold = h * 0.3;
 
-      // Only act when we first enter this row — dragover fires constantly, so
-      // without this guard the timer gets reset on every tick and never completes.
+      if (y < edgeThreshold || y > h - edgeThreshold) {
+        // Reorder zone — treat gradient like any other item, no intersect UI
+        clearAllIntersect();
+        setDropTarget({ id, position: y < h / 2 ? 'top' : 'bottom' });
+        return;
+      }
+
+      // Centre zone: start / continue intersect hold timer
+      setDropTarget({ id, position: 'inside' });
       if (intersectHoverTarget !== id) {
         setIntersectHoverTarget(id);
         clearIntersectHold();
@@ -252,7 +285,6 @@ export function SliderPanel({
         }, INTERSECT_HOLD_MS);
       }
       return;
-
     }
 
     // Normal DnD positioning — moved off a valid intersect target
@@ -262,17 +294,16 @@ export function SliderPanel({
     const y = e.clientY - rect.top;
     const height = rect.height;
 
-    // Thresholds — 35% top/bottom zones make reordering easier, shrinks the "group" inside zone
-    const edgeThreshold = height * 0.35;
-
     if (isGroup) {
+      // Group headers: 3 zones — top edge moves before group, center adds to group, bottom edge moves after
+      const edgeThreshold = height * 0.3;
       if (y < edgeThreshold) setDropTarget({ id, position: 'top' });
       else if (y > height - edgeThreshold) setDropTarget({ id, position: 'bottom' });
       else setDropTarget({ id, position: 'inside' });
     } else {
-      if (y < edgeThreshold) setDropTarget({ id, position: 'top' });
-      else if (y > height - edgeThreshold) setDropTarget({ id, position: 'bottom' });
-      else setDropTarget({ id, position: 'inside' });
+      // Individual items: simple 50/50 split — top half = insert before, bottom half = insert after.
+      // No accidental grouping; to add to a group drag onto the group header instead.
+      setDropTarget({ id, position: y < height / 2 ? 'top' : 'bottom' });
     }
   };
 
@@ -303,13 +334,14 @@ export function SliderPanel({
       targetRegionType !== 'linear-gradient' &&
       targetRegionType !== 'radial-gradient';
 
-    if (gradId && isValidTarget) {
+    // Only intercept gradient drags that landed in the centre (intersect/group) zone.
+    // top/bottom drops fall through to the normal reorder path below.
+    if (gradId && isValidTarget && dropTarget.position === 'inside') {
       if (intersectTarget === targetId) {
         // ── AMBER phase: CLIP the gradient to this mask ──────────────────────
         onIntersectGradient?.(gradId, targetId);
       } else {
         // ── BLUE phase: GROUP the gradient with this mask ─────────────────
-        // Drop inside the mask → Workspace groups them (spreads existing region, clipParentId preserved)
         handleDrop(e, targetId);
       }
 
@@ -456,13 +488,29 @@ export function SliderPanel({
         <div className="relative flex w-full items-center justify-between py-4 px-4">
           <h2 className="text-[14px] font-semibold leading-[20px] text-[#E2E2E2]" style={{ fontFamily: 'Google Sans, sans-serif' }}>Masks</h2>
 
-          <button
-            onClick={() => setShowAddMaskMenu(v => !v)}
-            className="flex h-4 w-4 items-center justify-center text-white hover:opacity-80"
-            aria-label="Add mask"
-          >
-            <PlusCircle className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-3">
+            {/* Canvas Interactions Toggle */}
+            <button
+              onClick={onToggleCanvasInteractions}
+              className={`flex items-center justify-center transition-colors ${canvasInteractionsEnabled ? 'text-white hover:opacity-80' : 'text-[#484848] hover:text-[#666666]'}`}
+              aria-label={canvasInteractionsEnabled ? 'Disable canvas interactions' : 'Enable canvas interactions'}
+              title={canvasInteractionsEnabled ? 'Canvas interactions on' : 'Canvas interactions off'}
+            >
+              {canvasInteractionsEnabled
+                ? <ToggleRight className="h-[22px] w-[22px]" />
+                : <ToggleLeft className="h-[22px] w-[22px]" />
+              }
+            </button>
+
+            {/* Add mask */}
+            <button
+              onClick={() => setShowAddMaskMenu(v => !v)}
+              className="flex h-4 w-4 items-center justify-center text-white hover:opacity-80"
+              aria-label="Add mask"
+            >
+              <PlusCircle className="h-4 w-4" />
+            </button>
+          </div>
 
           {showAddMaskMenu && (
             <div className="absolute right-4 top-8 z-50 w-[132px] rounded-lg bg-[#242424] p-1 shadow-xl border border-[#5E5E5E] mt-2">
@@ -536,6 +584,9 @@ export function SliderPanel({
           onDrop={(e) => {
             // Drop on empty space = root, append to end
             e.stopPropagation();
+            setDraggingItemId(null);
+            setDraggingGradientId(null);
+            clearAllIntersect();
             setDropTarget({ id: null, position: null });
             handleDrop(e, undefined, editedRegions.length);
           }}
@@ -563,6 +614,43 @@ export function SliderPanel({
                       key={groupId}
                       className="flex flex-col relative"
                     >
+                      {/* ── ESCAPE ZONE: shown when dragging a member of THIS group ─── */}
+                      {draggingItemSourceGroupId === groupId && (
+                        <div
+                          className={`flex items-center justify-center gap-1.5 h-7 mx-0.5 mb-0.5 rounded cursor-default select-none transition-colors ${dropTarget.id === `escape-${groupId}`
+                              ? 'bg-blue-500/20 border border-blue-500/60'
+                              : 'border border-dashed border-white/15'
+                            }`}
+                          onDragOver={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setDropTarget({ id: `escape-${groupId}`, position: 'top' });
+                          }}
+                          onDragLeave={() => setDropTarget({ id: null, position: null })}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const id = e.dataTransfer.getData('text/plain');
+                            if (id) {
+                              const firstIdx = editedRegions.findIndex(r => r.groupId === groupId);
+                              onMoveRegion?.(id, undefined, firstIdx >= 0 ? firstIdx : 0);
+                            }
+                            setDraggingItemId(null);
+                            setDraggingGradientId(null);
+                            clearAllIntersect();
+                            setDropTarget({ id: null, position: null });
+                          }}
+                        >
+                          <svg width="10" height="10" viewBox="0 0 10 10" fill="none"
+                            className={dropTarget.id === `escape-${groupId}` ? 'text-blue-400' : 'text-white/25'}>
+                            <path d="M5 7.5V2.5M5 2.5L2.5 5M5 2.5L7.5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                          <span className={`text-[10px] ${dropTarget.id === `escape-${groupId}` ? 'text-blue-400' : 'text-white/25'}`}>
+                            Drop here to remove from group
+                          </span>
+                        </div>
+                      )}
+
                       {/* Insertion Lines for Group */}
                       {isDropTarget && dropTarget.position === 'top' && (
                         <div className="absolute top-0 left-0 right-0 h-[2px] bg-blue-500 z-50" />
@@ -607,6 +695,7 @@ export function SliderPanel({
                           `}
                         draggable={true}
                         onDragStart={(e) => handleDragStart(e, groupId)}
+                        onDragEnd={handleGlobalDragEnd}
                         onDragOver={(e) => handleDragOverItem(e, groupId, true, 'group')}
                         onDragLeave={handleDragLeave}
                         onDrop={(e) => handleDropItem(e, groupId, 'group')}
@@ -615,9 +704,11 @@ export function SliderPanel({
                           const shift = e.shiftKey;
 
                           // Collect all IDs to select: Group members + Intersected Gradients
+                          // Include clip children of the GROUP and of each individual member.
                           const memberIds = groupRegions.map(r => r.id);
-                          const clipChildIds = (clipChildrenByParent[groupId] || []).map(c => c.id);
-                          const allIdsToSelect = [...memberIds, ...clipChildIds];
+                          const groupClipChildIds = (clipChildrenByParent[groupId] || []).map(c => c.id);
+                          const memberClipChildIds = groupRegions.flatMap(r => (clipChildrenByParent[r.id] || []).map(c => c.id));
+                          const allIdsToSelect = [...memberIds, ...groupClipChildIds, ...memberClipChildIds];
 
                           if (shift) {
                             onSelectBatchRegions?.(allIdsToSelect, true);
@@ -654,15 +745,20 @@ export function SliderPanel({
                           </div>
                           <span className="text-[13px] text-[#E2E2E2] truncate">Mask Group</span>
 
-                          {/* CLIP COUNT BADGE */}
-                          {(clipChildrenByParent[groupId] || []).length > 0 && (
-                            <span
-                              className="flex-shrink-0 ml-0.5 text-[9px] font-bold px-1 py-0 rounded-full leading-4"
-                              style={{ background: 'rgba(251,146,60,0.25)', color: 'rgba(251,146,60,0.9)', border: '1px solid rgba(251,146,60,0.35)' }}
-                            >
-                              {(clipChildrenByParent[groupId] || []).length}
-                            </span>
-                          )}
+                          {/* CLIP COUNT BADGE — includes group-level + member-level clip children */}
+                          {(() => {
+                            const totalClipCount =
+                              (clipChildrenByParent[groupId] || []).length +
+                              groupRegions.reduce((sum, r) => sum + (clipChildrenByParent[r.id] || []).length, 0);
+                            return totalClipCount > 0 ? (
+                              <span
+                                className="flex-shrink-0 ml-0.5 text-[9px] font-bold px-1 py-0 rounded-full leading-4"
+                                style={{ background: 'rgba(251,146,60,0.25)', color: 'rgba(251,146,60,0.9)', border: '1px solid rgba(251,146,60,0.35)' }}
+                              >
+                                {totalClipCount}
+                              </span>
+                            ) : null;
+                          })()}
                         </div>
 
                         {/* HOVER BADGES */}
@@ -739,6 +835,10 @@ export function SliderPanel({
                             {/* Standard Group Members */}
                             {groupRegions.map((region) => {
                               const itemIndex = globalIndex++;
+                              const memberClipKids = clipChildrenByParent[region.id] || [];
+                              // Expansion state mirrors standalone items — default expanded
+                              const memberItemId = `single-${region.id}`;
+                              const isMemberExpanded = expandedGroups[memberItemId] !== false;
                               return (
                                 <div key={region.id} className="relative">
                                   {/* Insertion Lines logic for children */}
@@ -749,7 +849,15 @@ export function SliderPanel({
                                   <OutlinerItem
                                     region={region}
                                     index={itemIndex}
-                                    onSelect={(multi, shift) => handleSelectRegion(region.id, multi, shift!)}
+                                    onSelect={(multi, shift) => {
+                                      // Mirror standalone: select member + all its clip children together
+                                      const allIds = [region.id, ...memberClipKids.map(c => c.id)];
+                                      if (shift) {
+                                        onSelectBatchRegions?.(allIds, true);
+                                      } else {
+                                        onSelectBatchRegions?.(allIds, multi, region.id);
+                                      }
+                                    }}
                                     onActivate={() => onActivateRegion?.(region.id)}
                                     onToggleVis={() => onToggleVisibility(region.id)}
                                     onDelete={() => onDeleteRegion(region.id)}
@@ -764,8 +872,54 @@ export function SliderPanel({
                                     isIntersectHover={intersectHoverTarget === region.id && intersectTarget !== region.id}
                                     isDraggingGradient={!!draggingGradientId}
                                     isDragSource={draggingItemId === region.id}
-                                    dragIntent={draggingItemId === region.id ? (intersectTarget ? 'intersect' : intersectHoverTarget ? 'group' : null) : null}
+                                    dragIntent={draggingItemId === region.id ? (
+                                      draggingGradientId
+                                        ? (intersectTarget ? 'intersect' : intersectHoverTarget ? 'group' : null)
+                                        : (dropTarget.position === 'inside' ? 'group' : null)
+                                    ) : null}
+                                    clipChildCount={memberClipKids.length}
+                                    hasChildren={memberClipKids.length > 0}
+                                    isExpanded={isMemberExpanded}
+                                    onToggleExpand={() => toggleGroup(memberItemId)}
                                   />
+
+                                  {/* Clip children — same tree structure as standalone, respects expand/collapse */}
+                                  {isMemberExpanded && memberClipKids.length > 0 && (
+                                    <div
+                                      className="relative ml-6"
+                                      style={{ borderLeft: '1.5px dashed rgba(251,146,60,0.4)' }}
+                                    >
+                                      {memberClipKids.map((child) => {
+                                        const childIndex = globalIndex++;
+                                        return (
+                                          <div key={child.id} className="relative flex items-center">
+                                            <div
+                                              className="absolute left-0 top-1/2 w-3.5 flex-shrink-0"
+                                              style={{ height: '1px', background: 'rgba(251,146,60,0.4)' }}
+                                            />
+                                            <div className="flex-1 pl-3.5">
+                                              <OutlinerItem
+                                                region={child}
+                                                index={childIndex}
+                                                onSelect={(multi, shift) => {
+                                                  handleSelectRegion(child.id, multi, shift!);
+                                                  if (!multi && !shift) onActivateRegion?.(child.id);
+                                                }}
+                                                onActivate={() => onActivateRegion?.(child.id)}
+                                                onToggleVis={() => onToggleVisibility(child.id)}
+                                                onDelete={() => onDeleteRegion(child.id)}
+                                                onDragStart={(e) => handleDragStart(e, child.id, child.type)}
+                                                onDragEnd={handleGlobalDragEnd}
+                                                onDragOver={(e) => handleDragOverItem(e, child.id, false, child.type)}
+                                                onDrop={(e) => handleDropItem(e, child.id, child.type)}
+                                                isClipChild={true}
+                                              />
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
 
                                   {dropTarget.id === region.id && dropTarget.position === 'bottom' && (
                                     <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-blue-500 z-50" />
@@ -777,8 +931,8 @@ export function SliderPanel({
                         )
                       }
 
-                      {/* Intersected Gradients (Clip Children of the Group) - MOVED OUTSIDE isExpanded */}
-                      {(clipChildrenByParent[groupId] || []).map((child) => {
+                      {/* Intersected Gradients (Clip Children of the Group) — collapse with the group */}
+                      {isExpanded && (clipChildrenByParent[groupId] || []).map((child) => {
                         const childIndex = globalIndex++;
                         return (
                           <div key={child.id} className="relative flex items-center pl-5">
@@ -866,7 +1020,11 @@ export function SliderPanel({
                         clipChildCount={clipKids.length}
                         isDraggingGradient={!!draggingGradientId}
                         isDragSource={draggingItemId === region.id}
-                        dragIntent={draggingItemId === region.id ? (intersectTarget ? 'intersect' : intersectHoverTarget ? 'group' : null) : null}
+                        dragIntent={draggingItemId === region.id ? (
+                          draggingGradientId
+                            ? (intersectTarget ? 'intersect' : intersectHoverTarget ? 'group' : null)
+                            : (dropTarget.position === 'inside' ? 'group' : null)
+                        ) : null}
                         hasChildren={clipKids.length > 0}
                         isExpanded={isSingleItemExpanded}
                         onToggleExpand={() => toggleGroup(singleItemId)}
@@ -1017,6 +1175,12 @@ function OutlinerItem({
   // Show blue group ring when drop target is 'inside' — unless amber clip mode is committed
   const showGroupRing = dropTarget === 'inside' && !isIntersectTarget;
 
+  // Memoised mask preview — must be at component top level (Rules of Hooks)
+  const generatedPreview = useMemo(() => {
+    if (!region.maskData || !region.maskWidth || !region.maskHeight) return null;
+    return generateMaskPreview(region.maskData, region.maskWidth, region.maskHeight, region.color);
+  }, [region.maskData, region.maskWidth, region.maskHeight, region.color]);
+
   return (
     <div
       className="relative overflow-hidden"
@@ -1127,16 +1291,11 @@ function OutlinerItem({
           )}
 
           <div className="w-4 h-4 flex-shrink-0 flex items-center justify-center bg-black/20 rounded-sm">
-            {(() => {
-              if (region.previewUrl) return <img src={region.previewUrl} className="w-full h-full object-contain" alt="" />;
-              if (region.maskData && region.maskWidth && region.maskHeight) {
-                const generatedPreview = useMemo(() =>
-                  generateMaskPreview(region.maskData, region.maskWidth, region.maskHeight, region.color),
-                  [region.maskData, region.maskWidth, region.maskHeight, region.color]);
-                return <img src={generatedPreview} className="w-full h-full object-contain" alt="" />;
-              }
-              return Icon;
-            })()}
+            {region.previewUrl
+              ? <img src={region.previewUrl} className="w-full h-full object-contain" alt="" />
+              : generatedPreview
+                ? <img src={generatedPreview} className="w-full h-full object-contain" alt="" />
+                : Icon}
           </div>
 
           <span className={`text-[13px] truncate ${isClipChild ? 'text-orange-300/90' : ''}`}>

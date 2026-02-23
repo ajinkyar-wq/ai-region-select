@@ -631,6 +631,13 @@ export function ToolLayer({
                     //     return null;
                     // }
 
+                    // If clipParentId is set but neither a valid region nor a valid group
+                    // exists, this gradient is orphaned — skip rendering it entirely so it
+                    // doesn't appear as an unclipped ghost on the canvas.
+                    if (region.clipParentId && !clipParent && clipGroupMembers.length === 0) {
+                        return null;
+                    }
+
                     // Compute clip mask: for a single parent, use its mask directly.
                     // For a group, compute the union of all group members' masks.
                     let clipMask: { data: Uint8Array; width: number; height: number } | undefined;

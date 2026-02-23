@@ -37,6 +37,7 @@ interface ImageViewProps {
 
   // Edit Mode Notification (Local AI Mask Editing)
   onEditingModeChange?: (isEditing: boolean) => void;
+  canvasInteractionsEnabled?: boolean;
 }
 
 export function ImageTile({
@@ -58,6 +59,7 @@ export function ImageTile({
   peopleEnabled = true,
   backgroundEnabled = true,
   onEditingModeChange,
+  canvasInteractionsEnabled = true,
 }: ImageViewProps) {
   const mainCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -395,6 +397,7 @@ export function ImageTile({
               handleEditRegion(r.id);
               setEditingRegion(r);
             }}
+            canvasInteractionsEnabled={canvasInteractionsEnabled}
           />
         )}
 

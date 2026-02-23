@@ -35,6 +35,9 @@ export function Workspace() {
   // New Drawing Mode State
   const [drawingTool, setDrawingTool] = useState<'linear-gradient' | 'radial-gradient' | null>(null);
 
+  // Canvas Interactions Toggle — when false, new canvas drawing (gradient drag) is disabled
+  const [canvasInteractionsEnabled, setCanvasInteractionsEnabled] = useState(true);
+
   // Clipboard State
   const [clipboard, setClipboard] = useState<Region[]>([]);
 
@@ -196,6 +199,58 @@ export function Workspace() {
     }
   };
 
+  /**
+   * When a group loses members and shrinks to 0 or 1, dissolve it.
+   * Any gradient clipped to the group (clipParentId === groupId) is transferred
+   * to the surviving member's id, or unclipped entirely if no member remains.
+   */
+  const autoDissolveGroups = (regions: Region[]): Region[] => {
+    const groupCounts: Record<string, number> = {};
+    regions.forEach(r => {
+      if (r.groupId) groupCounts[r.groupId] = (groupCounts[r.groupId] || 0) + 1;
+    });
+
+    // dissolving[groupId] = surviving member id, or null if empty
+    const dissolving: Record<string, string | null> = {};
+    Object.entries(groupCounts).forEach(([gId, count]) => {
+      if (count <= 1) {
+        const survivor = regions.find(r => r.groupId === gId);
+        dissolving[gId] = survivor?.id ?? null;
+      }
+    });
+
+    if (Object.keys(dissolving).length === 0) return regions;
+
+    return regions.map(r => {
+      // Clear groupId for the lone remaining member
+      if (r.groupId && Object.prototype.hasOwnProperty.call(dissolving, r.groupId)) {
+        return { ...r, groupId: undefined };
+      }
+      // Transfer (or remove) clip children whose parent group is dissolving
+      if (r.clipParentId && Object.prototype.hasOwnProperty.call(dissolving, r.clipParentId)) {
+        const survivorId = dissolving[r.clipParentId];
+        return { ...r, clipParentId: survivorId ?? undefined };
+      }
+      return r;
+    });
+  };
+
+  /**
+   * Hard-deletes any gradient whose clipParentId no longer points to a valid
+   * region or active group. Prevents ghost gradients on the canvas that have
+   * no way to be selected or deleted from the panel.
+   */
+  const removeOrphanedClipChildren = (regions: Region[]): Region[] => {
+    const validIds = new Set(regions.map(r => r.id));
+    const validGroupIds = new Set<string>();
+    regions.forEach(r => { if (r.groupId) validGroupIds.add(r.groupId); });
+
+    return regions.filter(r => {
+      if (!r.clipParentId) return true;
+      return validIds.has(r.clipParentId) || validGroupIds.has(r.clipParentId);
+    });
+  };
+
   const handleMoveRegion = (id: string, targetGroupId: string | undefined, targetIndex?: number) => {
     if (!image) return;
 
@@ -256,26 +311,18 @@ export function Workspace() {
         if (targetIndex !== -1) {
           newRegions[targetIndex] = { ...newRegions[targetIndex], groupId: newGroupId };
 
-          // Insert moving items AFTER target? or BEFORE?
-          // "Drop onto" usually implies they become siblings.
-          // Let's insert AFTER for now.
+          // Insert moving items AFTER target (siblings in the new group).
           newRegions.splice(targetIndex + 1, 0, ...updatedMoving);
         } else {
           // Fallback: just append (shouldn't happen if target found)
           newRegions.push(...updatedMoving);
         }
 
-        // Auto-dissolve groups that now have 0 or 1 member (same as CASE 2)
-        const groupCounts: Record<string, number> = {};
-        newRegions.forEach(r => {
-          if (r.groupId) groupCounts[r.groupId] = (groupCounts[r.groupId] || 0) + 1;
-        });
-        newRegions = newRegions.map(r => {
-          if (r.groupId && (groupCounts[r.groupId] || 0) <= 1) {
-            return { ...r, groupId: undefined };
-          }
-          return r;
-        });
+        // Clip children keep their clipParentId pointing to the individual region —
+        // they stay attached to their specific parent even after that parent joins a group.
+        // Auto-dissolve any OLD groups that now have 0 or 1 member left,
+        // and transfer their clip children to the surviving member (or unclip if none).
+        newRegions = autoDissolveGroups(newRegions);
 
         return { ...prev, regions: newRegions };
       });
@@ -317,39 +364,36 @@ export function Workspace() {
 
         // Insert at targetIndex
         if (typeof targetIndex === 'number') {
-          // Fix: targetIndex is based on "edited regions" (visible list), but regions contains everything.
-          // We need to find the "Anchor Region" in the full list that corresponds to targetIndex in the filtered list.
-
-          // 1. Get the list of regions that match the criteria used in SliderPanel (hasEdits)
-          // Note: We use 'prev.regions' (BEFORE removal) to find the anchor? 
-          // No, SliderPanel calculated index based on the list state *before* the drop? 
-          // Usually yes. But we need to insert into `newRegions` (AFTER removal).
-          // So we should find the anchor in `newRegions` (which currently lacks the moving items).
-
-          // SliderPanel's `editedRegions` includes the moving item. 
-          // If I drop at index 5, it means "I want to be at index 5".
-          // If I remove the item, index 5 might shift.
-
-          // Let's rely on finding the region that *should be after* our new position.
-          // In SliderPanel, `editedRegions` is the snapshot.
-          // `targetIndex` is where we want to insert.
-
-          // Let's filter `newRegions` (which has moving items removed) to get `remainingVisibleRegions`.
+          // targetIndex was computed by SliderPanel from its editedRegions list, which still
+          // contains the moving item. We must look up the anchor in the ORIGINAL (pre-removal)
+          // region list so indices align, then find that anchor in newRegions (post-removal) for
+          // the actual splice position. Using newRegions for the lookup causes off-by-one errors
+          // whenever the moving item sat before the anchor in the original list.
+          const allVisibleRegions = prev.regions.filter(r => {
+            if (r.type !== 'people-group' && r.type !== 'background') return r.hasEdits;
+            return r.hasEdits !== false;
+          });
           const remainingVisibleRegions = newRegions.filter(r => r.hasEdits);
 
-          let insertIndex = newRegions.length; // Default to end
+          let insertIndex = newRegions.length; // Default: append to end
 
-          if (targetIndex >= remainingVisibleRegions.length) {
-            // Append to end of visible regions (which effectively means end of list or after last visible)
+          if (targetIndex < allVisibleRegions.length) {
+            const anchorRegion = allVisibleRegions[targetIndex];
+            const idx = anchorRegion ? newRegions.findIndex(r => r.id === anchorRegion.id) : -1;
+            if (idx !== -1) {
+              insertIndex = idx;
+            } else {
+              // Anchor was itself a moving region — fall back to end of remaining list
+              if (remainingVisibleRegions.length > 0) {
+                const lastVisible = remainingVisibleRegions[remainingVisibleRegions.length - 1];
+                insertIndex = newRegions.findIndex(r => r.id === lastVisible.id) + 1;
+              }
+            }
+          } else {
+            // targetIndex beyond list end → append after last visible region
             if (remainingVisibleRegions.length > 0) {
               const lastVisible = remainingVisibleRegions[remainingVisibleRegions.length - 1];
               insertIndex = newRegions.findIndex(r => r.id === lastVisible.id) + 1;
-            }
-          } else {
-            // Insert before the item at targetIndex
-            const anchorRegion = remainingVisibleRegions[targetIndex];
-            if (anchorRegion) {
-              insertIndex = newRegions.findIndex(r => r.id === anchorRegion.id);
             }
           }
 
@@ -359,17 +403,10 @@ export function Workspace() {
           newRegions.push(...updatedMovingRegions);
         }
 
-        // Auto-dissolve groups that now have 0 or 1 member
-        const groupCounts: Record<string, number> = {};
-        newRegions.forEach(r => {
-          if (r.groupId) groupCounts[r.groupId] = (groupCounts[r.groupId] || 0) + 1;
-        });
-        newRegions = newRegions.map(r => {
-          if (r.groupId && (groupCounts[r.groupId] || 0) <= 1) {
-            return { ...r, groupId: undefined };
-          }
-          return r;
-        });
+        // Clip children keep their clipParentId pointing to their specific parent region —
+        // moving a region into a group never re-parents its clip children to the group.
+        // Auto-dissolve groups that now have 0 or 1 member; transfer clip children.
+        newRegions = autoDissolveGroups(newRegions);
 
         return {
           ...prev,
@@ -388,11 +425,18 @@ export function Workspace() {
       // Identify masks in this group
       const groupRegions = prev.regions.filter(r => r.groupId === groupId);
 
-      // Identify masks clipped to this group (Intersections)
-      const clippedRegions = prev.regions.filter(r => r.clipParentId === groupId);
+      // Identify gradients clipped to the GROUP as a whole
+      const clippedToGroup = prev.regions.filter(r => r.clipParentId === groupId);
+
+      // Identify gradients clipped directly to INDIVIDUAL group members
+      // (e.g. a gradient intersected with manualA inside the group)
+      const memberIds = new Set(groupRegions.map(r => r.id));
+      const clippedToMembers = prev.regions.filter(r =>
+        r.clipParentId && memberIds.has(r.clipParentId)
+      );
 
       // Combine all affected regions
-      const allAffected = [...groupRegions, ...clippedRegions];
+      const allAffected = [...groupRegions, ...clippedToGroup, ...clippedToMembers];
 
       // Separate into types for Hard vs Soft delete
       const manualToDelete = allAffected.filter(r =>
@@ -423,11 +467,29 @@ export function Workspace() {
         return r;
       });
 
+      // Safety net: remove any gradients that still have a dangling clipParentId
+      // (covers any nesting depth we may have missed above)
+      newRegions = removeOrphanedClipChildren(newRegions);
+
       return {
         ...prev,
         regions: newRegions
       };
     });
+
+    // Clear activeMask and brush if the active region was part of this group
+    // (must run after setImage so we compare against the pre-delete snapshot)
+    const preDeleteMemberIds = new Set(image.regions.filter(r => r.groupId === groupId).map(r => r.id));
+    const affectedIds = new Set(image.regions.filter(r =>
+      r.groupId === groupId ||
+      r.clipParentId === groupId ||
+      (r.clipParentId && preDeleteMemberIds.has(r.clipParentId))
+    ).map(r => r.id));
+    if (activeMask && affectedIds.has(activeMask.id)) {
+      setActiveMask(null);
+      setBrushActive(false);
+      setDrawingTool(null);
+    }
   };
 
   const handleEditManualMask = (regionId: string) => {
@@ -535,9 +597,33 @@ export function Workspace() {
             setBrushActive(false);
           }
 
-          // 4. Construct new state
-          // A. Filter out manual masks
-          let newRegions = prev.regions.filter(r => !manualToDelete.some(del => del.id === r.id));
+          // 4. Cascade: hard-delete gradients clipped to any region being removed,
+          //    and gradients clipped to groups that will be fully emptied.
+          const primaryDeleteIds = new Set(allAffected.map(r => r.id));
+
+          // Find groups that will have ALL their members deleted
+          const groupMemberIds: Record<string, string[]> = {};
+          prev.regions.forEach(r => {
+            if (r.groupId) {
+              if (!groupMemberIds[r.groupId]) groupMemberIds[r.groupId] = [];
+              groupMemberIds[r.groupId].push(r.id);
+            }
+          });
+          const fullyEmptiedGroups = new Set<string>();
+          Object.entries(groupMemberIds).forEach(([gId, mIds]) => {
+            if (mIds.every(mid => primaryDeleteIds.has(mid))) fullyEmptiedGroups.add(gId);
+          });
+
+          const cascadeDeletes = prev.regions.filter(r =>
+            r.clipParentId &&
+            (primaryDeleteIds.has(r.clipParentId) || fullyEmptiedGroups.has(r.clipParentId)) &&
+            (r.type === 'linear-gradient' || r.type === 'radial-gradient')
+          );
+          const allHardDeleteIds = new Set([...manualToDelete.map(r => r.id), ...cascadeDeletes.map(r => r.id)]);
+
+          // 5. Construct new state
+          // A. Filter out manual masks + cascaded clip-children
+          let newRegions = prev.regions.filter(r => !allHardDeleteIds.has(r.id));
 
           // B. Reset AI masks
           newRegions = newRegions.map(r => {
@@ -546,11 +632,15 @@ export function Workspace() {
                 ...r,
                 hasEdits: false,
                 selected: false,
-                visible: true // Reset visibility too
+                visible: true
               };
             }
             return r;
           });
+
+          // C. Dissolve groups that became singletons and clean up any remaining orphans
+          newRegions = autoDissolveGroups(newRegions);
+          newRegions = removeOrphanedClipChildren(newRegions);
 
           return {
             ...prev,
@@ -1235,7 +1325,8 @@ export function Workspace() {
         ...prev,
         regions: prev.regions.map(r =>
           r.id === gradientId
-            ? { ...r, clipParentId: targetId }
+            // clipParentId and groupId are mutually exclusive: clipping removes group membership
+            ? { ...r, clipParentId: targetId, groupId: undefined }
             : r
         )
       };
@@ -1404,6 +1495,7 @@ export function Workspace() {
                     }
                   }}
                   onEditingModeChange={handleLocalEditChange}
+                  canvasInteractionsEnabled={canvasInteractionsEnabled}
                 />
               </div>
 
@@ -1485,9 +1577,24 @@ export function Workspace() {
                 setImage(prev => {
                   if (!prev) return prev;
 
-                  // Identify the main region to delete
-                  // AND any regions that are clipped to it (orphans)
-                  const dependents = prev.regions.filter(r => r.clipParentId === id);
+                  // Identify the main region to delete, any regions clipped directly
+                  // to it (clipParentId === id), and any clipped to the group it belongs to
+                  // if this deletion will leave that group with 0 members.
+                  const directClipChildren = prev.regions.filter(r => r.clipParentId === id);
+
+                  // Check if deleting this region empties its group entirely
+                  const groupId = region.groupId;
+                  const groupClipChildren = groupId
+                    ? (() => {
+                        const survivors = prev.regions.filter(r => r.groupId === groupId && r.id !== id);
+                        // Only cascade group-level clips when the group will be empty after this delete
+                        return survivors.length === 0
+                          ? prev.regions.filter(r => r.clipParentId === groupId)
+                          : [];
+                      })()
+                    : [];
+
+                  const dependents = [...directClipChildren, ...groupClipChildren];
                   const regionsToDelete = [region, ...dependents];
 
                   // Filter sets
@@ -1512,12 +1619,16 @@ export function Workspace() {
                         hasEdits: false,
                         selected: false,
                         visible: true,
-                        groupId: undefined, // Ungroup
-                        clipParentId: undefined // Detach from the deleted parent
+                        groupId: undefined,
+                        clipParentId: undefined
                       };
                     }
                     return r;
                   });
+
+                  // 3. Dissolve groups that became singletons; clean up any remaining ghosts
+                  newRegions = autoDissolveGroups(newRegions);
+                  newRegions = removeOrphanedClipChildren(newRegions);
 
                   return { ...prev, regions: newRegions };
                 });
@@ -1537,6 +1648,8 @@ export function Workspace() {
               onDeleteGroup={handleDeleteGroup}
               onInvertMask={handleInvertMask}
               onIntersectGradient={handleIntersectGradient}
+              canvasInteractionsEnabled={canvasInteractionsEnabled}
+              onToggleCanvasInteractions={() => setCanvasInteractionsEnabled(v => !v)}
             />
           </div>
         </div>
