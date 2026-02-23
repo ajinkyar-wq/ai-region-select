@@ -4,7 +4,6 @@ import {
   Paintbrush, Eraser, RotateCcw, Minimize2, Maximize2
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { Slider } from '@/components/ui/slider';
 import { SliderVertical } from '@/components/ui/slider-vertical';
 
 type Position = 'top' | 'bottom' | 'left' | 'right';

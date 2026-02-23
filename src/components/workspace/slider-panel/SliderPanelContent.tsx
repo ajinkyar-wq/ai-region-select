@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { AdjustmentSlider } from './AdjustmentSlider';
+import { AdjustmentSlider } from '@/components/ui/adjustment-slider';
 import { ChevronDown, ChevronRight, RotateCcw, Eye } from 'lucide-react';
 import { Region, RegionAdjustments, DEFAULT_ADJUSTMENTS } from '@/types/workspace';
 

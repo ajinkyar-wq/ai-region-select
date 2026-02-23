@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Region } from '@/types/workspace';
-import { applyBrushStroke } from '@/lib/brush-engine';
 
 interface AIMaskEditorProps {
     activeRegions: Region[]; // explicit selection

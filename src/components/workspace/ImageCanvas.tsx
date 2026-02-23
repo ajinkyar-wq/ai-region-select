@@ -1,6 +1,6 @@
 
 import { useEffect, useRef, useState } from 'react';
-import { ScanAnimation } from './ScanAnimation';
+import { ScanAnimation } from './layers/ScanAnimation';
 import { AIMaskEditor } from './tools/AIMaskEditor';
 import { SmartMaskLayer } from './layers/SmartMaskLayer';
 import { ToolLayer } from './layers/ToolLayer';
@@ -9,8 +9,8 @@ import { BrushTool } from './tools/BrushTool';
 import { segmentImage } from '@/lib/segmentation';
 import type { ImageTileData, Region } from '@/types/workspace';
 
-interface ImageViewProps {
-  tile: ImageTileData;
+interface ImageCanvasProps {
+  image: ImageTileData | null;
   onUpdateTile: (updates: Partial<ImageTileData>) => void;
   selectionMode?: 'single' | 'multi';
   hoveredRegionOverride?: 'person' | 'background' | null;
@@ -38,10 +38,11 @@ interface ImageViewProps {
   // Edit Mode Notification (Local AI Mask Editing)
   onEditingModeChange?: (isEditing: boolean) => void;
   canvasInteractionsEnabled?: boolean;
+  onActionComplete?: () => void;
 }
 
-export function ImageTile({
-  tile,
+export function ImageCanvas({
+  image: tile,
   onUpdateTile,
   selectionMode,
   hoveredRegionOverride,
@@ -60,7 +61,7 @@ export function ImageTile({
   backgroundEnabled = true,
   onEditingModeChange,
   canvasInteractionsEnabled = true,
-}: ImageViewProps) {
+}: ImageCanvasProps) {
   const mainCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -210,9 +211,13 @@ export function ImageTile({
         onUpdateTile({ width: img.width, height: img.height });
       }
 
-      const scale = Math.min(width / img.width, height / img.height);
-      const scaledWidth = img.width * scale;
-      const scaledHeight = img.height * scale;
+      // Provide default width and height to prevent NaNs if image not loaded
+      const imgWidth = tile?.width || 800;
+      const imgHeight = tile?.height || 600;
+      const imageRegions = tile?.regions || [];
+      const scale = Math.min(width / imgWidth, height / imgHeight);
+      const scaledWidth = imgWidth * scale;
+      const scaledHeight = imgHeight * scale;
       const x = (width - scaledWidth) / 2;
       const y = (height - scaledHeight) / 2;
 
@@ -230,8 +235,8 @@ export function ImageTile({
       setShowScan(true);
       const start = Date.now();
 
-      const regions = await segmentImage(img, mainCanvas);
-      onUpdateTile({ regions, isProcessing: false });
+      const segmentedRegions = await segmentImage(img, mainCanvas);
+      onUpdateTile({ regions: segmentedRegions, isProcessing: false });
 
       const elapsed = Date.now() - start;
       if (elapsed < 900) {
