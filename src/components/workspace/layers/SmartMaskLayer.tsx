@@ -408,12 +408,48 @@ export function SmartMaskLayer({
 
     // ── Event handlers ────────────────────────────────────────────────────────
 
+    const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const handleMouseLeaveCanvas = () => {
+        if (hoverTimeoutRef.current) {
+            clearTimeout(hoverTimeoutRef.current);
+            hoverTimeoutRef.current = null;
+        }
+        onHoverChange(null);
+    };
+
     const handleMouseMove = (e: React.MouseEvent) => {
         if (isEditing) return;
         const coords = toImageCoords(e);
-        if (!coords) { onHoverChange(null); return; }
+
+        if (!coords) {
+            handleMouseLeaveCanvas();
+            return;
+        }
+
         const hit = resolveHit(coords.x, coords.y);
-        onHoverChange(hit ? hit.id : null);
+
+        if (!hit) {
+            handleMouseLeaveCanvas();
+            return;
+        }
+
+        if (hit.id !== hoveredRegionId) {
+            if (hit.type === 'person') {
+                if (hoverTimeoutRef.current) {
+                    clearTimeout(hoverTimeoutRef.current);
+                    hoverTimeoutRef.current = null;
+                }
+                onHoverChange(hit.id);
+            } else {
+                // Keep resetting the timeout while moving to enforce a true "dwell/stop" velocity check
+                if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
+                hoverTimeoutRef.current = setTimeout(() => {
+                    onHoverChange(hit.id);
+                    hoverTimeoutRef.current = null;
+                }, 100);
+            }
+        }
     };
 
     const clickTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -467,7 +503,7 @@ export function SmartMaskLayer({
             onClick={handleCanvasClick}
             onDoubleClick={handleCanvasDoubleClick}
             onMouseMove={handleMouseMove}
-            onMouseLeave={() => onHoverChange(null)}
+            onMouseLeave={handleMouseLeaveCanvas}
         />
     );
 }
