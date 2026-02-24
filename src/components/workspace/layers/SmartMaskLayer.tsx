@@ -20,6 +20,7 @@ interface SmartMaskLayerProps {
     onEditRegion: (region: Region) => void;
     onEnterLocalEdit?: (region: Region) => void;
     canvasInteractionsEnabled?: boolean;
+    isWalkthroughActive?: boolean;
 }
 
 // ─── Erosion ──────────────────────────────────────────────────────────────────
@@ -206,6 +207,7 @@ export function SmartMaskLayer({
     onEditRegion,
     onEnterLocalEdit,
     canvasInteractionsEnabled = true,
+    isWalkthroughActive = false,
 }: SmartMaskLayerProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     // Cache persists across renders; checksum-based invalidation handles mask edits
@@ -263,7 +265,8 @@ export function SmartMaskLayer({
         });
 
         visibleRegions.forEach(region => {
-            if (!region.selected && region.id !== hoveredRegionId) return;
+            const shouldDrawHover = region.id === hoveredRegionId && !isWalkthroughActive;
+            if (!region.selected && !shouldDrawHover) return;
 
             const mask = region.maskData;
             const w = region.maskWidth;

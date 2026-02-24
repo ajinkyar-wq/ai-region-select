@@ -168,6 +168,7 @@ All colors MUST be HSL.
   }
 }
 
+
 /* Badge scales up with a spring when intersect state is committed */
 @keyframes intersect-badge-pop {
   from {
@@ -178,5 +179,69 @@ All colors MUST be HSL.
   to {
     opacity: 1;
     transform: scale(1);
+  }
+}
+
+/* ── Walkthrough Animations ──────────────────────────────────────────── */
+
+/*
+ * Wave: diagonal band sweeping from bottom-right to top-left.
+ * Uses background-position on a -45deg gradient tile (300%×300%).
+ * Band center sits at tile center (1.5W, 1.5H).
+ *
+ * background-position math (tile=3W×3H, diff=-2W/-2H):
+ *   -25% -25%  → tile origin (0.5W, 0.5H)   → band at (2W, 2H)   [off BR]
+ *    50%  50%  → tile origin (-W, -H)         → band at (0.5W,0.5H)[center]
+ *   125% 125%  → tile origin (-2.5W, -2.5H)  → band at (-W, -H)  [off TL]
+ *
+ * The parent mask-image clips to the shape — only where the sweeping
+ * band intersects the mask is anything visible.
+ */
+@keyframes walkthrough-wave {
+  0% {
+    background-position: -25% -25%;
+    opacity: 0;
+  }
+
+  8% {
+    opacity: 1;
+  }
+
+  92% {
+    opacity: 1;
+  }
+
+  100% {
+    background-position: 125% 125%;
+    opacity: 0;
+  }
+}
+
+.animate-walkthrough-wave {
+  animation: walkthrough-wave 5s linear infinite;
+}
+
+/* Bounce: fires when user hovers a mask */
+@keyframes walkthrough-bounce {
+
+  0%,
+  100% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.3));
+  }
+
+  25% {
+    transform: scale(0.93);
+    filter: drop-shadow(0 0 28px rgba(255, 255, 255, 0.95));
+  }
+
+  50% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.3));
+  }
+
+  75% {
+    transform: scale(0.93);
+    filter: drop-shadow(0 0 28px rgba(255, 255, 255, 0.95));
   }
 }

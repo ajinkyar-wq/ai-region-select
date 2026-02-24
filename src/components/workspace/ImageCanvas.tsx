@@ -6,6 +6,8 @@ import { SmartMaskLayer } from './layers/SmartMaskLayer';
 import { ToolLayer } from './layers/ToolLayer';
 import { AdjustmentLayer } from './layers/AdjustmentLayer';
 import { BrushTool } from './tools/BrushTool';
+import { WalkthroughOverlay } from './layers/WalkthroughOverlay';
+import { useWalkthrough } from './Workspacelogic/useWalkthrough';
 import { segmentImage } from '@/lib/segmentation';
 import type { ImageTileData, Region } from '@/types/workspace';
 
@@ -64,6 +66,8 @@ export function ImageCanvas({
 }: ImageCanvasProps) {
   const mainCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  const { isWalkthroughActive, completeWalkthrough, resetWalkthrough } = useWalkthrough();
 
   const [showScan, setShowScan] = useState(true);
   const [imageTransform, setImageTransform] = useState<{
@@ -184,6 +188,9 @@ export function ImageCanvas({
   // Load image and run segmentation (LAYER 1)
   useEffect(() => {
     if (!mainCanvasRef.current || !containerRef.current) return;
+
+    // Reset walkthrough each time a new image is loaded
+    resetWalkthrough();
 
     const mainCanvas = mainCanvasRef.current;
     const container = containerRef.current;
@@ -393,12 +400,17 @@ export function ImageCanvas({
             height={viewDimensions.height}
             peopleEnabled={peopleEnabled}
             backgroundEnabled={backgroundEnabled}
+            isWalkthroughActive={isWalkthroughActive}
             hoveredRegionId={brushActive ? null : hoveredRegionId}
             isEditing={!!activeEditingRegion && activeEditingRegion.type !== 'manual' && activeEditingRegion.type !== 'linear-gradient' && activeEditingRegion.type !== 'radial-gradient'}
             onHoverChange={brushActive ? () => { } : setLocalHoveredRegion}
             onUpdateTile={onUpdateTile}
             onEditRegion={(r) => handleEditRegion(r.id)} // Single Click: Activate
             onEnterLocalEdit={(r) => { // Double Click: Enter Edit Mode
+              // Intercept double-click if walkthrough is active
+              if (isWalkthroughActive) {
+                completeWalkthrough();
+              }
               handleEditRegion(r.id);
               setEditingRegion(r);
             }}
@@ -406,6 +418,13 @@ export function ImageCanvas({
           />
         )}
 
+        {/* LAYER 2.5: Smoke and Mirrors Onboarding Walkthrough */}
+        <WalkthroughOverlay
+          imageTransform={imageTransform}
+          regions={tile.regions}
+          hoveredRegionId={hoveredRegionId}
+          isWalkthroughActive={isWalkthroughActive}
+        />
 
         {/* LAYER 3: Creative Tools + View Controls */}
         {naturalSize && (
