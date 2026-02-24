@@ -221,27 +221,77 @@ All colors MUST be HSL.
   animation: walkthrough-wave 5s linear infinite;
 }
 
-/* Bounce: fires when user hovers a mask */
+/* Bounce: snappy double-pulse that fires when user hovers a mask */
 @keyframes walkthrough-bounce {
 
-  0%,
+  0% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.3));
+  }
+
+  /* First visible, snappy tap (40ms down) */
+  2% {
+    transform: scale(0.95);
+    filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.3));
+  }
+
+  /* Back to normal (60ms up, total 100ms) */
+  5% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.3));
+  }
+
+  /* Wait out a clear gap between the double-tap (200ms gap) */
+  15% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.3));
+  }
+
+  /* Second visible, snappy tap (40ms down) */
+  17% {
+    transform: scale(0.95);
+    filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.3));
+  }
+
+  /* Back to normal and rest for the remainder of the 2s loop */
+  20%,
   100% {
     transform: scale(1);
     filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.3));
   }
+}
 
-  25% {
-    transform: scale(0.93);
-    filter: drop-shadow(0 0 28px rgba(255, 255, 255, 0.95));
-  }
-
-  50% {
-    transform: scale(1);
+/* Background Bounce: Because scaling a full-screen mask with holes creates a sliding illusion,
+   we flash the opacity for the background mask instead to keep it physically pinned. */
+@keyframes walkthrough-bg-bounce {
+  0% {
+    opacity: 1;
     filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.3));
   }
 
-  75% {
-    transform: scale(0.93);
-    filter: drop-shadow(0 0 28px rgba(255, 255, 255, 0.95));
+  2% {
+    opacity: 0.4;
+    filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.3));
+  }
+
+  5% {
+    opacity: 1;
+    filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.3));
+  }
+
+  15% {
+    opacity: 1;
+    filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.3));
+  }
+
+  17% {
+    opacity: 0.4;
+    filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.3));
+  }
+
+  20%,
+  100% {
+    opacity: 1;
+    filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.3));
   }
 }

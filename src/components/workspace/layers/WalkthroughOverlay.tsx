@@ -22,6 +22,8 @@ interface MaskEntry {
     g: number;
     b: number;
     maxX: number;
+    cx: number;
+    cy: number;
 }
 
 function buildMaskPNGs(region: Region): MaskEntry | null {
@@ -48,14 +50,20 @@ function buildMaskPNGs(region: Region): MaskEntry | null {
     const gC = cm ? parseInt(cm[2], 16) : 150;
     const bC = cm ? parseInt(cm[3], 16) : 255;
 
+    let minX = w;
+    let minY = h;
     let maxX = 0;
+    let maxY = 0;
 
     for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
             const i = y * w + x;
             const v = region.maskData[i];
             if (v > 0) {
+                if (x < minX) minX = x;
                 if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
 
                 const p = i * 4;
                 const a = Math.round((v / 255) * 255);
@@ -88,6 +96,8 @@ function buildMaskPNGs(region: Region): MaskEntry | null {
         g: gC,
         b: bC,
         maxX,
+        cx: w > 0 ? ((minX + maxX) / 2 / w) * 100 : 50,
+        cy: h > 0 ? ((minY + maxY) / 2 / h) * 100 : 50,
     };
 }
 
@@ -103,7 +113,7 @@ export function WalkthroughOverlay({
         if (!isWalkthroughActive) { setMasks([]); return; }
 
         const targets = regions.filter(r =>
-            (r.type === 'person' || r.type === 'background') &&
+            (r.type === 'person' || r.type === 'background' || r.type === 'people-group') &&
             r.visible && r.maskData && r.maskWidth && r.maskHeight
         );
 
@@ -147,9 +157,11 @@ export function WalkthroughOverlay({
                     let delay = 0;
                     if (mask.type === 'person') {
                         delay = personMasks.findIndex(m => m.id === mask.id) * 0.5;
+                    } else if (mask.type === 'people-group') {
+                        // People group sweeps right behind the individuals
+                        delay = (personMasks.length * 0.5) + 0.5;
                     } else if (mask.type === 'background') {
-                        // Background sweep starts just behind the final person
-                        // making the entire sequence fast and tight
+                        // Background sweeps right alongside the people group
                         delay = (personMasks.length * 0.5) + 0.5;
                     }
 
@@ -172,6 +184,12 @@ export function WalkthroughOverlay({
                                 maskSize: '100% 100%',
                                 opacity: anyHovered && !isHovered ? 0 : 1,
                                 transition: 'opacity 0.3s ease',
+                                transformOrigin: `${mask.cx}% ${mask.cy}%`,
+                                ...(isHovered ? {
+                                    animation: mask.type === 'background'
+                                        ? 'walkthrough-bg-bounce 2s ease-in-out infinite'
+                                        : 'walkthrough-bounce 2s ease-in-out infinite'
+                                } : {})
                             }}
                         >
                             {isHovered ? (
@@ -184,10 +202,9 @@ export function WalkthroughOverlay({
                                         // Use normal blend mode instead of screen so 
                                         // 30% alpha looks identical to SmartMaskLayer
                                         mixBlendMode: 'normal',
-                                        animation: 'walkthrough-bounce 0.75s ease-in-out 2',
                                     }}
                                 />
-                            ) : (
+                            ) : mask.type === 'people-group' ? null : (
                                 /*
                                  * Wave: a diagonal band of color sweeping from bottom-right
                                  * to top-left, implemented via background-position animation.
