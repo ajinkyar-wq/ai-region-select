@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { ImageTileData, Region } from '@/types/workspace';
+import { getMaskCenter } from '@/lib/mask-analysis';
 
 interface SmartMaskLayerProps {
     tile: ImageTileData;
@@ -213,6 +214,34 @@ export function SmartMaskLayer({
     // Cache persists across renders; checksum-based invalidation handles mask edits
     const erodeCache = useRef<Map<string, ErodedEntry | null>>(new Map());
 
+    const toolHandlesRef = useRef<{ x: number, y: number, time?: number }[]>([]);
+    const pathHistoryRef = useRef<{ x: number, y: number, time: number }[]>([]);
+
+    useEffect(() => {
+        if (!imageTransform) return;
+        const handles: { x: number, y: number }[] = [];
+        tile.regions.forEach(r => {
+            if (!r.visible) return;
+            if (r.type === 'linear-gradient' && r.gradient) {
+                handles.push({ x: r.gradient.start.x * imageTransform.width, y: r.gradient.start.y * imageTransform.height });
+                handles.push({ x: r.gradient.end.x * imageTransform.width, y: r.gradient.end.y * imageTransform.height });
+            } else if (r.type === 'radial-gradient' && r.radialGradient) {
+                handles.push({ x: r.radialGradient.center.x * imageTransform.width, y: r.radialGradient.center.y * imageTransform.height });
+            } else if (r.type === 'manual' && r.maskData && r.selected) {
+                const center = getMaskCenter(r.maskData, r.maskWidth, r.maskHeight);
+                if (center) {
+                    const scaleX = imageTransform.width / r.maskWidth;
+                    const scaleY = imageTransform.height / r.maskHeight;
+                    handles.push({
+                        x: (center.x + (r.offset?.x || 0)) * scaleX,
+                        y: (center.y + (r.offset?.y || 0)) * scaleY
+                    });
+                }
+            }
+        });
+        toolHandlesRef.current = handles;
+    }, [tile.regions, imageTransform]);
+
     // ── Render ───────────────────────────────────────────────────────────────
     useEffect(() => {
         if (!canvasRef.current || !imageTransform) return;
@@ -409,12 +438,14 @@ export function SmartMaskLayer({
     // ── Event handlers ────────────────────────────────────────────────────────
 
     const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const hoverAnchorRef = useRef<{ x: number, y: number } | null>(null);
 
     const handleMouseLeaveCanvas = () => {
         if (hoverTimeoutRef.current) {
             clearTimeout(hoverTimeoutRef.current);
             hoverTimeoutRef.current = null;
         }
+        hoverAnchorRef.current = null;
         onHoverChange(null);
     };
 
@@ -434,21 +465,73 @@ export function SmartMaskLayer({
             return;
         }
 
-        if (hit.id !== hoveredRegionId) {
-            if (hit.type === 'person') {
-                if (hoverTimeoutRef.current) {
-                    clearTimeout(hoverTimeoutRef.current);
-                    hoverTimeoutRef.current = null;
-                }
-                onHoverChange(hit.id);
-            } else {
-                // Keep resetting the timeout while moving to enforce a true "dwell/stop" velocity check
-                if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
-                hoverTimeoutRef.current = setTimeout(() => {
-                    onHoverChange(hit.id);
-                    hoverTimeoutRef.current = null;
-                }, 100);
+        let isTargetingTool = false;
+        for (const handle of toolHandlesRef.current) {
+            const handleDist = Math.hypot(coords.x - handle.x, coords.y - handle.y);
+            if (handleDist < 80) { // 80px magnetic halo
+                isTargetingTool = true;
+                break;
             }
+        }
+
+        if (hit.type !== 'background') {
+            if (hoverTimeoutRef.current) {
+                clearTimeout(hoverTimeoutRef.current);
+                hoverTimeoutRef.current = null;
+            }
+            hoverAnchorRef.current = null;
+            if (hit.id !== hoveredRegionId) {
+                onHoverChange(hit.id);
+            }
+            return;
+        }
+
+        // --- Environmental / Background Logic ---
+
+        if (isTargetingTool) {
+            if (hoverTimeoutRef.current) {
+                clearTimeout(hoverTimeoutRef.current);
+                hoverTimeoutRef.current = null;
+            }
+            hoverAnchorRef.current = null;
+            if (hoveredRegionId) onHoverChange(null);
+            return;
+        }
+
+        if (hoveredRegionId === hit.id) {
+            // Already actively hovering the background
+            return;
+        }
+
+        // We are on the background, but NOT hovering it yet.
+        // We use a simple 200ms spatial timer. If they move out of a 20px radius, restart the timer.
+        // If they twitch erratically inside the 20px radius, the timer completes and turns it on.
+
+        if (!hoverAnchorRef.current) {
+            hoverAnchorRef.current = { x: coords.x, y: coords.y };
+        }
+
+        const anchor = hoverAnchorRef.current;
+        const dist = Math.hypot(coords.x - anchor.x, coords.y - anchor.y);
+
+        if (dist > 15) {
+            // Broke the anchor boundary (transiting or slow course correction). Reset.
+            hoverAnchorRef.current = { x: coords.x, y: coords.y };
+            if (hoverTimeoutRef.current) {
+                clearTimeout(hoverTimeoutRef.current);
+            }
+            hoverTimeoutRef.current = setTimeout(() => {
+                onHoverChange(hit.id);
+                hoverTimeoutRef.current = null;
+                hoverAnchorRef.current = null;
+            }, 300);
+        } else if (!hoverTimeoutRef.current) {
+            // Inside boundary, but no timer running (initial entry)
+            hoverTimeoutRef.current = setTimeout(() => {
+                onHoverChange(hit.id);
+                hoverTimeoutRef.current = null;
+                hoverAnchorRef.current = null;
+            }, 300);
         }
     };
 
