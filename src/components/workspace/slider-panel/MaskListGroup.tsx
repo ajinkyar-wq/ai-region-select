@@ -17,6 +17,7 @@ interface MaskListGroupProps {
     setDropTarget: React.Dispatch<React.SetStateAction<{ id: string | null; position: 'top' | 'bottom' | 'inside' | null }>>;
     intersectTarget: string | null;
     intersectHoverTarget: string | null;
+    groupingHoverTarget: string | null;
     draggingItemSourceGroupId: string | undefined;
     draggingItemId: string | null;
     draggingGradientId: string | null;
@@ -47,6 +48,7 @@ export function MaskListGroup(props: MaskListGroupProps) {
     const {
         groupId, groupRegions, expandedGroups, toggleGroup, clipChildrenByParent, editedRegions,
         globalIndexRef, dropTarget, setDropTarget, intersectTarget, intersectHoverTarget,
+        groupingHoverTarget,
         draggingItemSourceGroupId, draggingItemId, draggingGradientId, setDraggingItemId, setDraggingGradientId,
         handleDragStart, handleDragOverItem, handleDragLeave, handleGlobalDragEnd, handleDropItem,
         clearAllIntersect, onMoveRegion, handleSelectRegion, onSelectBatchRegions, onActivateRegion,
@@ -63,42 +65,8 @@ export function MaskListGroup(props: MaskListGroupProps) {
 
     return (
         <div key={groupId} className="flex flex-col relative">
-            {/* ── ESCAPE ZONE: shown when dragging a member of THIS group ─── */}
-            {draggingItemSourceGroupId === groupId && (
-                <div
-                    className={`flex items-center justify-center gap-1.5 h-7 mx-0.5 mb-0.5 rounded cursor-default select-none transition-colors ${dropTarget.id === `escape-${groupId}`
-                        ? 'bg-blue-500/20 border border-blue-500/60'
-                        : 'border border-dashed border-white/15'
-                        }`}
-                    onDragOver={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        setDropTarget({ id: `escape-${groupId}`, position: 'top' });
-                    }}
-                    onDragLeave={() => setDropTarget({ id: null, position: null })}
-                    onDrop={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        const id = e.dataTransfer.getData('text/plain');
-                        if (id) {
-                            const firstIdx = editedRegions.findIndex(r => r.groupId === groupId);
-                            onMoveRegion?.(id, undefined, firstIdx >= 0 ? firstIdx : 0);
-                        }
-                        setDraggingItemId(null);
-                        setDraggingGradientId(null);
-                        clearAllIntersect();
-                        setDropTarget({ id: null, position: null });
-                    }}
-                >
-                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none"
-                        className={dropTarget.id === `escape-${groupId}` ? 'text-blue-400' : 'text-white/25'}>
-                        <path d="M5 7.5V2.5M5 2.5L2.5 5M5 2.5L7.5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                    <span className={`text-[10px] ${dropTarget.id === `escape-${groupId}` ? 'text-blue-400' : 'text-white/25'}`}>
-                        Drop here to remove from group
-                    </span>
-                </div>
-            )}
+
+
 
             {/* Insertion Lines for Group */}
             {isDropTarget && dropTarget.position === 'top' && (
@@ -135,7 +103,8 @@ export function MaskListGroup(props: MaskListGroupProps) {
             <div
                 className={`
             group flex items-center justify-between
-            h-[35px] px-2 cursor-pointer select-none
+            h-[35px] px-2 select-none
+            cursor-grab active:cursor-grabbing
             transition-colors relative z-20
             ${isGroupSelected ? 'bg-[#04395E] text-white' : (groupHeaderIndex % 2 === 0 ? 'bg-[#222222]' : 'bg-[#272727]')}
             ${!isGroupSelected && isDropTarget && dropTarget.position === 'inside' ? 'ring-2 ring-blue-500 ring-inset' : ''}
@@ -305,11 +274,13 @@ export function MaskListGroup(props: MaskListGroupProps) {
                                     onDragStart={(e) => handleDragStart(e, region.id, region.type)}
                                     onDragEnd={handleGlobalDragEnd}
                                     onDragOver={(e) => handleDragOverItem(e, region.id, false, region.type)}
+                                    onDragLeave={handleDragLeave}
                                     onDrop={(e) => handleDropItem(e, region.id, region.type)}
                                     isChild={true}
                                     dropTarget={dropTarget.id === region.id ? dropTarget.position : null}
                                     isIntersectTarget={intersectTarget === region.id}
                                     isIntersectHover={intersectHoverTarget === region.id && intersectTarget !== region.id}
+                                    isGroupingHover={groupingHoverTarget === region.id}
                                     isDraggingGradient={!!draggingGradientId}
                                     isDragSource={draggingItemId === region.id}
                                     dragIntent={draggingItemId === region.id ? (
@@ -321,6 +292,10 @@ export function MaskListGroup(props: MaskListGroupProps) {
                                     hasChildren={memberClipKids.length > 0}
                                     isExpanded={isMemberExpanded}
                                     onToggleExpand={() => toggleGroup(memberItemId)}
+                                    onUngroup={() => {
+                                        const firstIdx = editedRegions.findIndex(r => r.groupId === groupId);
+                                        onMoveRegion?.(region.id, undefined, firstIdx >= 0 ? firstIdx : 0);
+                                    }}
                                 />
 
                                 {/* Clip children */}
@@ -369,6 +344,9 @@ export function MaskListGroup(props: MaskListGroupProps) {
                     })}
                 </div>
             )}
+
+
+
 
             {/* Intersected Gradients (Clip Children of the Group) */}
             {isExpanded && (clipChildrenByParent[groupId] || []).map((child) => {

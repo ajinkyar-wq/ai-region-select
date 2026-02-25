@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { generateMaskPreview } from '@/lib/mask-preview';
-import { ChevronDown, ChevronRight, Brush, Eye, EyeOff, Trash2, Contrast } from 'lucide-react';
+import { ChevronDown, ChevronRight, Brush, Eye, EyeOff, Trash2, Contrast, Ungroup } from 'lucide-react';
 import type { Region } from '@/types/workspace';
 
 // ----------------------------------------------------------------------
@@ -19,10 +19,12 @@ export function MaskListItem({
     onDrop,
     isChild = false,
     onDragOver,
+    onDragLeave,
     dropTarget,
     onDragEnd,
     isIntersectTarget = false,
     isIntersectHover = false,
+    isGroupingHover = false,
     isDraggingGradient = false,
     isDragSource = false,
     dragIntent = null,
@@ -31,6 +33,7 @@ export function MaskListItem({
     hasChildren = false,
     isExpanded = false,
     onToggleExpand,
+    onUngroup,
 }: {
     region: Region;
     index: number;
@@ -42,11 +45,13 @@ export function MaskListItem({
     onDragStart?: (e: React.DragEvent) => void;
     onDrop?: (e: React.DragEvent) => void;
     onDragOver?: (e: React.DragEvent) => void;
+    onDragLeave?: () => void;
     onDragEnd?: () => void;
     isChild?: boolean;
     dropTarget?: 'top' | 'bottom' | 'inside' | null;
     isIntersectTarget?: boolean;
     isIntersectHover?: boolean;
+    isGroupingHover?: boolean;
     isDraggingGradient?: boolean;
     isDragSource?: boolean;
     dragIntent?: 'group' | 'intersect' | null;
@@ -55,12 +60,13 @@ export function MaskListItem({
     hasChildren?: boolean;
     isExpanded?: boolean;
     onToggleExpand?: () => void;
+    onUngroup?: () => void;
 }) {
     const Icon = getRegionIcon(region.type);
 
     const isGradientType = region.type === 'linear-gradient' || region.type === 'radial-gradient';
     // Show blue group ring when drop target is 'inside' — unless amber clip mode is committed
-    const showGroupRing = dropTarget === 'inside' && !isIntersectTarget;
+    const showGroupRing = (dropTarget === 'inside' && !isIntersectTarget) || isGroupingHover;
 
     // Memoised mask preview — must be at component top level (Rules of Hooks)
     const generatedPreview = useMemo(() => {
@@ -74,10 +80,10 @@ export function MaskListItem({
             style={{ isolation: 'isolate' }}
         >
             {/* ── Blue hover tint (Group Phase) ───────────────────────── */}
-            {isIntersectHover && !isIntersectTarget && !isGradientType && (
+            {(isIntersectHover || isGroupingHover) && !isIntersectTarget && !isGradientType && (
                 <div
                     className="absolute inset-0 pointer-events-none z-10"
-                    style={{ background: 'rgba(59,130,246,0.10)' }}
+                    style={{ background: 'rgba(59,130,246,0.12)' }}
                 />
             )}
 
@@ -136,13 +142,16 @@ export function MaskListItem({
                     if (onDragOver) { onDragOver(e); return; }
                     if (onDrop) e.preventDefault();
                 }}
+                onDragLeave={onDragLeave}
                 onDrop={onDrop}
                 onClick={(e) => onSelect(e.metaKey || e.ctrlKey, e.shiftKey)}
                 onDoubleClick={(e) => { e.stopPropagation(); onActivate?.(); }}
                 className={`
           group flex items-center justify-between
-          h-[35px] px-2 cursor-pointer select-none
+          h-[35px] px-2 select-none
+          ${onDragStart ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'}
           transition-colors relative z-20
+          ${isDragSource ? 'opacity-50' : 'opacity-100'}
           ${showGroupRing ? 'ring-2 ring-blue-500 ring-inset' : ''}
           ${isIntersectTarget && !isGradientType ? 'ring-2 ring-orange-400 ring-inset' : ''}
           ${region.selected ? 'bg-[#04395E] text-white' : index % 2 === 0 ? 'bg-[#222222]' : 'bg-[#272727]'}
@@ -199,7 +208,7 @@ export function MaskListItem({
                     )}
                 </div>
 
-                {isIntersectHover && !isIntersectTarget && !isGradientType && (
+                {(isIntersectHover || isGroupingHover) && !isIntersectTarget && !isGradientType && (
                     <div
                         className="absolute inset-0 flex items-center justify-center pointer-events-none z-30"
                         style={{ animation: 'intersect-badge-pop 0.2s cubic-bezier(0.34,1.56,0.64,1) forwards' }}
@@ -212,7 +221,7 @@ export function MaskListItem({
                                 <rect x="1.5" y="8" width="4.5" height="4.5" rx="0.8" stroke="currentColor" strokeWidth="1.5" />
                                 <rect x="8" y="8" width="4.5" height="4.5" rx="0.8" stroke="currentColor" strokeWidth="1.5" />
                             </svg>
-                            <span className="text-[11px] font-bold text-white tracking-wide">Add to Group</span>
+                            <span className="text-[11px] font-bold text-white tracking-wide">Group</span>
                         </div>
                     </div>
                 )}
@@ -233,21 +242,31 @@ export function MaskListItem({
                     </div>
                 )}
 
-                {!isIntersectTarget && !isIntersectHover && (
-                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                {!isIntersectTarget && !isIntersectHover && !isGroupingHover && (
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                        {/* Ungroup button — always visible on child rows */}
+                        {onUngroup && (
+                            <button
+                                onClick={(e) => { e.stopPropagation(); onUngroup(); }}
+                                className="p-1 text-[#666] hover:text-blue-400 transition-colors"
+                                title="Remove from group"
+                            >
+                                <Ungroup className="h-3 w-3" />
+                            </button>
+                        )}
                         {onInvert && (
                             <button onClick={(e) => { e.stopPropagation(); onInvert(); }}
-                                className="p-1 text-[#ABABAB] hover:text-white transition-colors" title="Invert Mask">
+                                className="p-1 text-[#ABABAB] opacity-0 group-hover:opacity-100 hover:text-white transition-colors" title="Invert Mask">
                                 <Contrast className="h-3 w-3" />
                             </button>
                         )}
                         {onDelete && (
-                            <button onClick={(e) => { e.stopPropagation(); onDelete(); }} className="p-1 hover:text-red-400">
+                            <button onClick={(e) => { e.stopPropagation(); onDelete(); }} className="p-1 opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity">
                                 <Trash2 className="h-3 w-3" />
                             </button>
                         )}
                         <button onClick={(e) => { e.stopPropagation(); onToggleVis(); }}
-                            className={`p-1 hover:text-white ${!region.visible ? 'text-white/40' : ''}`}>
+                            className={`p-1 opacity-0 group-hover:opacity-100 hover:text-white transition-opacity ${!region.visible ? 'text-white/40' : ''}`}>
                             {region.visible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
                         </button>
                     </div>

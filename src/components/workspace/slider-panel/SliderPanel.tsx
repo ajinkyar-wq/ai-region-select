@@ -84,6 +84,7 @@ export function SliderPanel({
     intersectTarget,
     intersectHoverTarget,
     draggingItemSourceGroupId,
+    groupingHoverTarget,
     handleDragStart,
     handleDrop,
     handleDragOverItem,
@@ -305,6 +306,7 @@ export function SliderPanel({
                       setDropTarget={setDropTarget}
                       intersectTarget={intersectTarget}
                       intersectHoverTarget={intersectHoverTarget}
+                      groupingHoverTarget={groupingHoverTarget}
                       draggingItemSourceGroupId={draggingItemSourceGroupId}
                       draggingItemId={draggingItemId}
                       draggingGradientId={draggingGradientId}
