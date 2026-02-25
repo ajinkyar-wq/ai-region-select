@@ -148,48 +148,173 @@ function renderMask(
 // ─── Contour tracing ──────────────────────────────────────────────────────────
 
 /**
- * Render the edge pixels of a mask directly as a pixel overlay.
- * Edge = any ON pixel with at least one OFF 4-neighbor.
- * Painted as solid colour at full opacity — same pipeline as renderMask.
- * Cannot fail, cannot produce crossed lines, works on any shape.
+ * Render a smooth, single external contour line.
+ * Uses a flood-fill algorithm to definitively isolate the absolute major outer
+ * boundary, completely ignoring all internal hollows or disjointed holes.
+ * The strict 1px edge is then mapped back to the canvas with native interpolation
+ * to naturally smooth out the jagged pixel boundaries.
  */
 function renderContourStroke(
     ctx: CanvasRenderingContext2D,
     mask: Uint8Array,
     w: number, h: number,
     rC: number, gC: number, bC: number,
+    alpha255: number,
     destX: number, destY: number, destW: number, destH: number,
+    clipMasks?: { data: Uint8Array, w: number, h: number }[],
+    lineWidthMultiplier: number = 2
 ) {
-    const scratch = document.createElement('canvas');
-    scratch.width = w; scratch.height = h;
-    const sctx = scratch.getContext('2d')!;
-    const img = sctx.createImageData(w, h);
+    // 1. Flood-fill to discover the true exterior space (ignoring internal holes)
+    const exterior = new Uint8Array(w * h);
+    const qx = new Int32Array(w * h);
+    const qy = new Int32Array(w * h);
+    let head = 0; let tail = 0;
+
+    const pushQ = (x: number, y: number) => {
+        if (x < 0 || y < 0 || x >= w || y >= h) return;
+        const i = y * w + x;
+        if (exterior[i] === 1) return;
+        if (mask[i] > 30) return;
+        exterior[i] = 1;
+        qx[tail] = x; qy[tail] = y; tail++;
+    };
+
+    for (let x = 0; x < w; x++) { pushQ(x, 0); pushQ(x, h - 1); }
+    for (let y = 0; y < h; y++) { pushQ(0, y); pushQ(w - 1, y); }
+
+    while (head < tail) {
+        const x = qx[head]; const y = qy[head]; head++;
+        pushQ(x + 1, y); pushQ(x - 1, y); pushQ(x, y + 1); pushQ(x, y - 1);
+    }
+
+    // 2. Create a solid mask that explicitly plugs internal holes to guarantee 1 contour
+    const solidMask = new Uint8Array(w * h);
+    for (let i = 0; i < mask.length; i++) {
+        solidMask[i] = (mask[i] > 30 || exterior[i] === 0) ? 255 : 0;
+    }
+
+    // 3. Fast Box Blur on the solid mask to create a smooth mathematical gradient
+    // This allows Interpolated Marching Squares to draw perfectly swooping curves instead of 45-deg angles.
+    const radius = 6;
+    const blurred = new Uint8Array(w * h);
+    const temp = new Uint16Array(w * h);
 
     for (let y = 0; y < h; y++) {
+        let sum = solidMask[y * w] * radius;
+        for (let i = 0; i <= radius; i++) sum += solidMask[y * w + i];
         for (let x = 0; x < w; x++) {
-            const v = mask[y * w + x];
-            if (v <= 30) continue;
-            const hasOffNeighbor =
-                (x === 0 || mask[y * w + (x - 1)] <= 30) ||
-                (x === w - 1 || mask[y * w + (x + 1)] <= 30) ||
-                (y === 0 || mask[(y - 1) * w + x] <= 30) ||
-                (y === h - 1 || mask[(y + 1) * w + x] <= 30);
-            if (!hasOffNeighbor) continue;
-            // Heavy dotted line: 4px ON, 2px OFF
-            if ((x + y) % 6 >= 4) continue;
-            const p = (y * w + x) * 4;
-            img.data[p] = rC;
-            img.data[p + 1] = gC;
-            img.data[p + 2] = bC;
-            img.data[p + 3] = 230; // near-full opacity, crisp line
+            temp[y * w + x] = sum;
+            const sub = x - radius >= 0 ? solidMask[y * w + (x - radius)] : solidMask[y * w];
+            const add = x + radius + 1 < w ? solidMask[y * w + (x + radius + 1)] : solidMask[y * w + (w - 1)];
+            sum += add - sub;
+        }
+    }
+    const diameter = radius * 2 + 1;
+    for (let x = 0; x < w; x++) {
+        let sum = temp[x] * radius;
+        for (let i = 0; i <= radius; i++) sum += temp[i * w + x];
+        for (let y = 0; y < h; y++) {
+            blurred[y * w + x] = Math.floor(sum / (diameter * diameter));
+            const sub = y - radius >= 0 ? temp[(y - radius) * w + x] : temp[x];
+            const add = y + radius + 1 < h ? temp[(y + radius + 1) * w + x] : temp[(h - 1) * w + x];
+            sum += add - sub;
         }
     }
 
-    sctx.putImageData(img, 0, 0);
-    ctx.save();
-    ctx.imageSmoothingEnabled = false; // pixel-perfect — no blur on the line
+    // 4. Interpolated Marching Squares 
+    // This converts the image grid smartly into a perfectly smooth vector path calculation
+    const path = new Path2D();
+    const iso = 127;
+    const interp = (v1: number, v2: number) => (v1 === v2) ? 0.5 : (iso - v1) / (v2 - v1);
+
+    for (let y = 0; y < h - 1; y++) {
+        for (let x = 0; x < w - 1; x++) {
+            const tl = blurred[y * w + x];
+            const tr = blurred[y * w + x + 1];
+            const bl = blurred[(y + 1) * w + x];
+            const br = blurred[(y + 1) * w + x + 1];
+
+            let state = 0;
+            if (tl >= iso) state |= 8;
+            if (tr >= iso) state |= 4;
+            if (br >= iso) state |= 2;
+            if (bl >= iso) state |= 1;
+
+            if (state === 0 || state === 15) continue;
+
+            const getT = () => ({ x: x + interp(tl, tr), y: y });
+            const getR = () => ({ x: x + 1, y: y + interp(tr, br) });
+            const getB = () => ({ x: x + interp(bl, br), y: y + 1 });
+            const getL = () => ({ x: x, y: y + interp(tl, bl) });
+
+            let pts = [];
+            switch (state) {
+                case 1: pts = [getL(), getB()]; break;
+                case 2: pts = [getB(), getR()]; break;
+                case 3: pts = [getL(), getR()]; break;
+                case 4: pts = [getR(), getT()]; break;
+                case 5: pts = [getL(), getT(), getB(), getR()]; break;
+                case 6: pts = [getB(), getT()]; break;
+                case 7: pts = [getL(), getT()]; break;
+                case 8: pts = [getT(), getL()]; break;
+                case 9: pts = [getT(), getB()]; break;
+                case 10: pts = [getT(), getR(), getL(), getB()]; break;
+                case 11: pts = [getT(), getR()]; break;
+                case 12: pts = [getR(), getL()]; break;
+                case 13: pts = [getR(), getB()]; break;
+                case 14: pts = [getB(), getL()]; break;
+            }
+
+            if (pts.length >= 2) {
+                path.moveTo(pts[0].x, pts[0].y);
+                path.lineTo(pts[1].x, pts[1].y);
+            }
+            if (pts.length === 4) {
+                path.moveTo(pts[2].x, pts[2].y);
+                path.lineTo(pts[3].x, pts[3].y);
+            }
+        }
+    }
+
+    // 5. Draw the smart vector line onto a scratch canvas
+    const scW = Math.floor(destW) || 1;
+    const scH = Math.floor(destH) || 1;
+
+    const scratch = document.createElement('canvas');
+    scratch.width = scW; scratch.height = scH;
+    const sctx = scratch.getContext('2d')!;
+
+    sctx.scale(scW / w, scH / h);
+    sctx.strokeStyle = `rgba(${rC}, ${gC}, ${bC}, ${alpha255 / 255})`;
+    sctx.lineWidth = Math.max(lineWidthMultiplier * 0.75, w / scW * lineWidthMultiplier);
+    sctx.lineCap = 'round';
+    sctx.lineJoin = 'round';
+    sctx.stroke(path);
+
+    // 6. Intersection Logic: Multiply the line by the clip masks directly
+    if (clipMasks && clipMasks.length > 0) {
+        sctx.resetTransform();
+        const lineImg = sctx.getImageData(0, 0, scW, scH);
+        for (let y = 0; y < scH; y++) {
+            for (let x = 0; x < scW; x++) {
+                const p = (y * scW + x) * 4;
+                if (lineImg.data[p + 3] === 0) continue;
+
+                let maxClip = 0;
+                for (const cm of clipMasks) {
+                    const cx = Math.min(Math.floor((x / scW) * cm.w), cm.w - 1);
+                    const cy = Math.min(Math.floor((y / scH) * cm.h), cm.h - 1);
+                    const clipVal = cm.data[cy * cm.w + cx];
+                    if (clipVal > maxClip) maxClip = clipVal;
+                }
+                lineImg.data[p + 3] = Math.round((lineImg.data[p + 3] * maxClip) / 255);
+            }
+        }
+        sctx.putImageData(lineImg, 0, 0);
+    }
+
+    // 7. Render contour line onto main canvas
     ctx.drawImage(scratch, destX, destY, destW, destH);
-    ctx.restore();
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -306,7 +431,18 @@ export function SmartMaskLayer({
             const gC = cm ? parseInt(cm[2], 16) : 80;
             const bC = cm ? parseInt(cm[3], 16) : 80;
 
+            // Fill opacity: simple two states — selected is denser, hover is lighter
+            const isHovered = shouldDrawHover;
             const overlayAlpha = region.selected ? 0.5 : 0.3;
+
+            // Hover = boldest affordance. Selected = already done, back off significantly.
+            const contourAlpha255 = !region.selected && isHovered ? 190   // pure hover: strong but not blasting
+                : region.selected && isHovered ? 120                       // selected+hovered: moderate
+                    : 70;                                                      // selected only: very quiet
+            const contourLineWidth = !region.selected && isHovered ? 2    // hover: bold
+                : region.selected && isHovered ? 1.75                     // selected+hovered: normal
+                    : 1.5;                                                     // selected only: thin
+
 
             // Collect all clip-children for this region (direct + via group)
             const directClipKids = clipChildrenByParent[region.id] || [];
@@ -363,19 +499,30 @@ export function SmartMaskLayer({
                 renderMask(ctx, mask, w, h, rC, gC, bC, overlayAlpha, destX, destY, destW, destH);
             }
 
-            // Pass 2 — dashed contour
-            // REMOVED per user request: "just remove the contours altogether they do not make sense now"
-            /*
-            const showOriginalContour = !(region.selected && allClipKids.length > 0);
+            // Pass 2 — soft contour
+            // The contour is now ALWAYS drawn if the region is actively rendering.
+            // Gradients (allClipKids) are passed in to dictate where the contour fades out visually.
+            const clipMasksPayload = allClipKids.map(k => ({ data: k.maskData, w: k.maskWidth, h: k.maskHeight }));
 
-            if (showOriginalContour) {
-                if (region.type === 'person') {
-                   // ...
-                } else if (region.type === 'people-group') {
-                   // ...
-                }
+            if (region.type === 'person') {
+                // Soft, solid line using the Adobe mask's inherent color (rC, gC, bC)
+                // Drawn on the eroded mask edge to visualize the exact hit-detection 
+                // threshold between the outer (group) and inner (individual) selection logic.
+                const entry = getOrBuildErodedEntry(region, erodeCache.current);
+                const contourMask = entry && entry.eroded ? entry.eroded : mask;
+                renderContourStroke(ctx, contourMask, w, h, rC, gC, bC, contourAlpha255, destX, destY, destW, destH, clipMasksPayload, contourLineWidth);
+            } else if (region.type === 'people-group') {
+                // The group mask shouldn't have its own massive outer contour.
+                // Instead, it should draw the *exact same inner contours* that the individual
+                // person masks draw, to show exactly what makes up the group.
+                tile.regions.forEach(ch => {
+                    if (ch.type === 'person') {
+                        const entry = getOrBuildErodedEntry(ch, erodeCache.current);
+                        const contourMask = entry && entry.eroded ? entry.eroded : ch.maskData;
+                        renderContourStroke(ctx, contourMask, ch.maskWidth, ch.maskHeight, rC, gC, bC, contourAlpha255, destX, destY, destW, destH, clipMasksPayload, contourLineWidth);
+                    }
+                });
             }
-            */
         });
 
     }, [tile.regions, imageTransform, hoveredRegionId, isEditing, peopleEnabled, backgroundEnabled, width, height, canvasInteractionsEnabled]);
@@ -501,6 +648,12 @@ export function SmartMaskLayer({
         if (hoveredRegionId === hit.id) {
             // Already actively hovering the background
             return;
+        }
+
+        // If we were hovering a non-background region (e.g. a person mask), clear it
+        // immediately — don't let the background debounce timer delay the exit.
+        if (hoveredRegionId && hoveredRegionId !== hit.id) {
+            onHoverChange(null);
         }
 
         // We are on the background, but NOT hovering it yet.

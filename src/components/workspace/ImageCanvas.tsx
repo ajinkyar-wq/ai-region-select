@@ -67,7 +67,10 @@ export function ImageCanvas({
   const mainCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const { isWalkthroughActive, completeWalkthrough, resetWalkthrough } = useWalkthrough();
+  const { isWalkthroughActive, isWaveStopped, stopWave, completeWalkthrough, resetWalkthrough } = useWalkthrough();
+
+  const [walkthroughClickPos, setWalkthroughClickPos] = useState<{ x: number; y: number } | null>(null);
+  const lastMousePosRef = useRef<{ x: number; y: number } | null>(null);
 
   const [showScan, setShowScan] = useState(true);
   const [imageTransform, setImageTransform] = useState<{
@@ -191,6 +194,7 @@ export function ImageCanvas({
 
     // Reset walkthrough each time a new image is loaded
     resetWalkthrough();
+    setWalkthroughClickPos(null);
 
     const mainCanvas = mainCanvasRef.current;
     const container = containerRef.current;
@@ -343,6 +347,10 @@ export function ImageCanvas({
       ref={containerRef}
       className={`relative h-full w-full overflow-hidden bg-black ${drawingTool ? 'cursor-crosshair' : ''}`}
       onWheel={handleWheel}
+      onMouseMove={(e) => {
+        const rect = containerRef.current?.getBoundingClientRect();
+        if (rect) lastMousePosRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      }}
       onClick={() => {
         // Exit Edit / Brush Modes on background click
         if (drawingTool) return;
@@ -405,12 +413,14 @@ export function ImageCanvas({
             isEditing={!!activeEditingRegion && activeEditingRegion.type !== 'manual' && activeEditingRegion.type !== 'linear-gradient' && activeEditingRegion.type !== 'radial-gradient'}
             onHoverChange={brushActive ? () => { } : setLocalHoveredRegion}
             onUpdateTile={onUpdateTile}
-            onEditRegion={(r) => handleEditRegion(r.id)} // Single Click: Activate
-            onEnterLocalEdit={(r) => { // Double Click: Enter Edit Mode
-              // Intercept double-click if walkthrough is active
-              if (isWalkthroughActive) {
-                completeWalkthrough();
-              }
+            onEditRegion={(r) => { // Single Click: stop wave, show/reset tooltip
+              if (isWalkthroughActive) stopWave();
+              setWalkthroughClickPos(lastMousePosRef.current ? { ...lastMousePosRef.current } : null);
+              handleEditRegion(r.id);
+            }}
+            onEnterLocalEdit={(r) => { // Double Click: complete walkthrough, hide tooltip
+              if (isWalkthroughActive) completeWalkthrough();
+              setWalkthroughClickPos(null);
               handleEditRegion(r.id);
               setEditingRegion(r);
             }}
@@ -418,13 +428,6 @@ export function ImageCanvas({
           />
         )}
 
-        {/* LAYER 2.5: Smoke and Mirrors Onboarding Walkthrough */}
-        <WalkthroughOverlay
-          imageTransform={imageTransform}
-          regions={tile.regions}
-          hoveredRegionId={hoveredRegionId}
-          isWalkthroughActive={isWalkthroughActive}
-        />
 
         {/* LAYER 3: Creative Tools + View Controls */}
         {naturalSize && (
@@ -600,6 +603,16 @@ export function ImageCanvas({
         )}
 
       </div >
+
+      {/* LAYER 2.5: Walkthrough overlay — outside transform div so tooltip coords match container */}
+      <WalkthroughOverlay
+        imageTransform={imageTransform}
+        regions={tile.regions}
+        hoveredRegionId={hoveredRegionId}
+        isWalkthroughActive={isWalkthroughActive}
+        isWaveStopped={isWaveStopped}
+        clickPos={walkthroughClickPos}
+      />
 
       <ScanAnimation isActive={showScan} />
     </div >

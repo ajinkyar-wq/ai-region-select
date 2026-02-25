@@ -1,22 +1,27 @@
 import { useState, useCallback } from 'react';
 
-// Walkthrough state is per image session.
-// It resets automatically when a new image URL is provided to ImageCanvas.
-// We keep this simple - no localStorage needed since it should show every time.
-
 export function useWalkthrough() {
     const [hasCompletedWalkthrough, setHasCompletedWalkthrough] = useState(false);
+    const [isWaveStopped, setIsWaveStopped] = useState(false);
+
+    const stopWave = useCallback(() => {
+        setIsWaveStopped(true);
+    }, []);
 
     const completeWalkthrough = useCallback(() => {
         setHasCompletedWalkthrough(true);
+        setIsWaveStopped(false);
     }, []);
 
     const resetWalkthrough = useCallback(() => {
         setHasCompletedWalkthrough(false);
+        setIsWaveStopped(false);
     }, []);
 
     return {
         isWalkthroughActive: !hasCompletedWalkthrough,
+        isWaveStopped,
+        stopWave,
         completeWalkthrough,
         resetWalkthrough,
     };
