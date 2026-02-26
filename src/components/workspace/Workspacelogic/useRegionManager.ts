@@ -161,6 +161,25 @@ export function useRegionManager({
         }
     }, [image, setImage, autoDissolveGroups]);
 
+    /**
+     * Sets groupId on all currently-selected regions in one atomic update.
+     * Used when multi-select batch drops into a group or onto another item.
+     * `targetGroupId` is the UUID already shared by that group's members.
+     */
+    const handleGroupSelected = useCallback((targetGroupId: string) => {
+        if (!image) return;
+        setImage(prev => {
+            if (!prev) return prev;
+            const newRegions = prev.regions.map(r => {
+                if (!r.selected) return r;
+                // Skip clip-children (gradient clips) — they shouldn't move independently
+                if (r.clipParentId) return r;
+                return { ...r, groupId: targetGroupId };
+            });
+            return { ...prev, regions: autoDissolveGroups(newRegions) };
+        });
+    }, [image, setImage, autoDissolveGroups]);
+
     const handleDeleteGroup = useCallback((groupId: string) => {
         if (!image) return;
 
@@ -222,6 +241,6 @@ export function useRegionManager({
         }
     }, [image, setImage, activeMask, setActiveMask, setBrushActive, setDrawingTool, removeOrphanedClipChildren]);
 
-    return { autoDissolveGroups, removeOrphanedClipChildren, handleMoveRegion, handleDeleteGroup };
+    return { autoDissolveGroups, removeOrphanedClipChildren, handleMoveRegion, handleGroupSelected, handleDeleteGroup };
 
 }

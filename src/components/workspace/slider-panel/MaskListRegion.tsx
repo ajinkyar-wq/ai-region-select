@@ -24,7 +24,7 @@ interface MaskListRegionProps {
 
     // Actions
     onSelectBatchRegions?: (ids: string[], multi: boolean, activeId?: string) => void;
-    handleSelectRegion: (id: string, multi: boolean, shift: boolean) => void;
+    handleSelectRegion: (id: string, multi: boolean, shift: boolean, batchIds?: string[]) => void;
     onActivateRegion?: (id: string) => void;
     onToggleVisibility: (id: string) => void;
     onDeleteRegion: (id: string) => void;
@@ -58,11 +58,7 @@ export function MaskListRegion(props: MaskListRegionProps) {
                 index={itemIndex}
                 onSelect={(multi, shift) => {
                     const allIds = [region.id, ...clipKids.map(c => c.id)];
-                    if (shift) {
-                        onSelectBatchRegions?.(allIds, true);
-                    } else {
-                        onSelectBatchRegions?.(allIds, multi, region.id);
-                    }
+                    handleSelectRegion(region.id, multi, shift!, allIds);
                 }}
                 onActivate={() => onActivateRegion?.(region.id)}
                 onToggleVis={() => onToggleVisibility(region.id)}

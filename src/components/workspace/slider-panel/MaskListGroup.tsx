@@ -34,7 +34,7 @@ interface MaskListGroupProps {
     onMoveRegion?: (id: string, targetGroupId: string | undefined, targetIndex?: number) => void;
 
     // Actions
-    handleSelectRegion: (id: string, multi: boolean, shift: boolean) => void;
+    handleSelectRegion: (id: string, multi: boolean, shift: boolean, batchIds?: string[]) => void;
     onSelectBatchRegions?: (ids: string[], multi: boolean, activeId?: string) => void;
     onActivateRegion?: (id: string) => void;
     onToggleVisibility: (id: string) => void;
@@ -128,11 +128,8 @@ export function MaskListGroup(props: MaskListGroupProps) {
                     const memberClipChildIds = groupRegions.flatMap(r => (clipChildrenByParent[r.id] || []).map(c => c.id));
                     const allIdsToSelect = [...memberIds, ...groupClipChildIds, ...memberClipChildIds];
 
-                    if (shift) {
-                        onSelectBatchRegions?.(allIdsToSelect, true);
-                    } else {
-                        onSelectBatchRegions?.(allIdsToSelect, multi);
-                    }
+                    // Route through handleSelectRegion so lastSelectedId is tracked for shift-range-select
+                    handleSelectRegion(groupId, multi, shift, allIdsToSelect);
                 }}
             >
                 <div className="flex items-center gap-2 overflow-hidden min-w-0">
@@ -261,11 +258,7 @@ export function MaskListGroup(props: MaskListGroupProps) {
                                     index={itemIndex}
                                     onSelect={(multi, shift) => {
                                         const allIds = [region.id, ...memberClipKids.map(c => c.id)];
-                                        if (shift) {
-                                            onSelectBatchRegions?.(allIds, true);
-                                        } else {
-                                            onSelectBatchRegions?.(allIds, multi, region.id);
-                                        }
+                                        handleSelectRegion(region.id, multi, shift!, allIds);
                                     }}
                                     onActivate={() => onActivateRegion?.(region.id)}
                                     onToggleVis={() => onToggleVisibility(region.id)}

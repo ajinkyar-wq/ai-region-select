@@ -48,7 +48,7 @@ export function Workspace() {
 
   const showMaskImage = !!image?.regions.some(r => r.selected);
 
-  const { autoDissolveGroups, removeOrphanedClipChildren, handleMoveRegion, handleDeleteGroup } = useRegionManager({
+  const { autoDissolveGroups, removeOrphanedClipChildren, handleMoveRegion, handleGroupSelected, handleDeleteGroup } = useRegionManager({
     image,
     setImage,
     activeMask,
@@ -522,6 +522,7 @@ export function Workspace() {
               onApplyEdits={handleApplyEdits}
               onSelectBatchRegions={handleSelectBatchRegions}
               onMoveRegion={handleMoveRegion}
+              onGroupSelected={handleGroupSelected}
               onDeleteGroup={handleDeleteGroup}
               onInvertMask={handleInvertMask}
               onIntersectGradient={handleIntersectGradient}
