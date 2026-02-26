@@ -8,6 +8,7 @@ interface WalkthroughOverlayProps {
         width: number;
         height: number;
     } | null;
+    panOffset?: { x: number; y: number };
     regions: Region[];
     hoveredRegionId: string | null;
     isWalkthroughActive: boolean;
@@ -219,6 +220,7 @@ function buildMaskPNGs(region: Region, allRegions: Region[]): MaskEntry | null {
 
 export function WalkthroughOverlay({
     imageTransform,
+    panOffset = { x: 0, y: 0 },
     regions,
     hoveredRegionId,
     isWalkthroughActive,
@@ -318,8 +320,8 @@ export function WalkthroughOverlay({
             <div
                 className="absolute overflow-hidden"
                 style={{
-                    left: imageTransform.x,
-                    top: imageTransform.y,
+                    left: imageTransform.x + panOffset.x,
+                    top: imageTransform.y + panOffset.y,
                     width: imageTransform.width,
                     height: imageTransform.height,
                     willChange: 'transform',

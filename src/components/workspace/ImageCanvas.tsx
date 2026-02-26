@@ -83,7 +83,6 @@ export function ImageCanvas({
   const [naturalSize, setNaturalSize] = useState<{ width: number; height: number } | null>(null);
   const [viewDimensions, setViewDimensions] = useState<{ width: number; height: number } | null>(null);
 
-  const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [localHoveredRegion, setLocalHoveredRegion] = useState<string | null>(null);
   const [editingRegion, setEditingRegion] = useState<Region | null>(null);
@@ -144,8 +143,7 @@ export function ImageCanvas({
 
 
 
-  const MIN_SCALE = 0.3;
-  const MAX_SCALE = 4;
+
 
   const hoveredRegionId = hoveredRegionOverride ?? localHoveredRegion;
 
@@ -158,30 +156,8 @@ export function ImageCanvas({
     ) ? activeMask : null
   );
 
-  // Prevent default wheel behavior
-  // Keeping Zoom/Pan logic here (LAYER 1 Responsibility)
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-
-    const wheelListener = (e: WheelEvent) => {
-      if (e.ctrlKey) {
-        e.preventDefault();
-      }
-    };
-
-    el.addEventListener('wheel', wheelListener, { passive: false });
-    return () => el.removeEventListener('wheel', wheelListener);
-  }, []);
-
+  // Pan only — zoom removed (scale breaks brush and multi-select mask movement)
   const handleWheel = (e: React.WheelEvent) => {
-    if (e.ctrlKey) {
-      e.preventDefault();
-      const zoomDelta = -e.deltaY * 0.002;
-      setScale(prev => Math.min(MAX_SCALE, Math.max(MIN_SCALE, prev + zoomDelta)));
-      return;
-    }
-
     setOffset(prev => ({
       x: prev.x - e.deltaX,
       y: prev.y - e.deltaY,
@@ -381,8 +357,7 @@ export function ImageCanvas({
       <div
         className="absolute inset-0"
         style={{
-          transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
-          transformOrigin: 'center center',
+          transform: `translate(${offset.x}px, ${offset.y}px)`,
           pointerEvents: drawingTool ? 'auto' : 'none'
         }}
       >
@@ -607,6 +582,7 @@ export function ImageCanvas({
       {/* LAYER 2.5: Walkthrough overlay — outside transform div so tooltip coords match container */}
       <WalkthroughOverlay
         imageTransform={imageTransform}
+        panOffset={offset}
         regions={tile.regions}
         hoveredRegionId={hoveredRegionId}
         isWalkthroughActive={isWalkthroughActive}

@@ -98,8 +98,10 @@ export function ToolLayer({
                     // `imageTransform.width` is the rendered width.
 
                     if (imageTransform) {
-                        const dxNorm = multiDragState.delta.x / imageTransform.width;
-                        const dyNorm = multiDragState.delta.y / imageTransform.height;
+                        // delta.x is in natural image pixels (screen delta / fit_scale).
+                        // Normalize by natural image dimensions (width/height props), not displayed dimensions.
+                        const dxNorm = multiDragState.delta.x / width;
+                        const dyNorm = multiDragState.delta.y / height;
                         return {
                             ...r,
                             gradient: {
@@ -112,8 +114,8 @@ export function ToolLayer({
 
                 if (r.type === 'radial-gradient' && r.radialGradient) {
                     if (imageTransform) {
-                        const dxNorm = multiDragState.delta.x / imageTransform.width;
-                        const dyNorm = multiDragState.delta.y / imageTransform.height;
+                        const dxNorm = multiDragState.delta.x / width;
+                        const dyNorm = multiDragState.delta.y / height;
                         return {
                             ...r,
                             radialGradient: {
@@ -300,8 +302,8 @@ export function ToolLayer({
                 }
 
                 if (existing.type === 'linear-gradient' && existing.gradient) {
-                    const dxNorm = multiDragState.delta.x / imageTransform.width;
-                    const dyNorm = multiDragState.delta.y / imageTransform.height;
+                    const dxNorm = multiDragState.delta.x / width;
+                    const dyNorm = multiDragState.delta.y / height;
                     return {
                         ...existing,
                         gradient: {
@@ -318,8 +320,8 @@ export function ToolLayer({
                 }
 
                 if (existing.type === 'radial-gradient' && existing.radialGradient) {
-                    const dxNorm = multiDragState.delta.x / imageTransform.width;
-                    const dyNorm = multiDragState.delta.y / imageTransform.height;
+                    const dxNorm = multiDragState.delta.x / width;
+                    const dyNorm = multiDragState.delta.y / height;
 
                     const newCenter = {
                         x: existing.radialGradient.center.x + dxNorm,
