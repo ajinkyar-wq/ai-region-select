@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import type { ImageTileData, Region } from '@/types/workspace';
 import { getMaskCenter } from '@/lib/mask-analysis';
 
@@ -584,20 +584,45 @@ export function SmartMaskLayer({
 
     // ── Event handlers ────────────────────────────────────────────────────────
 
-    const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const hoverAnchorRef = useRef<{ x: number, y: number } | null>(null);
+    // ── Shift-key tracking ────────────────────────────────────────────────────
+    // Hover is gated behind Shift. When Shift is released, hover clears immediately.
+    const isShiftHeldRef = useRef(false);
 
-    const handleMouseLeaveCanvas = () => {
-        if (hoverTimeoutRef.current) {
-            clearTimeout(hoverTimeoutRef.current);
-            hoverTimeoutRef.current = null;
-        }
-        hoverAnchorRef.current = null;
+    const handleMouseLeaveCanvas = useCallback(() => {
         onHoverChange(null);
-    };
+    }, [onHoverChange]);
+
+    useEffect(() => {
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Shift' && !isShiftHeldRef.current) {
+                isShiftHeldRef.current = true;
+            }
+        };
+        const onKeyUp = (e: KeyboardEvent) => {
+            if (e.key === 'Shift') {
+                isShiftHeldRef.current = false;
+                // Clear hover immediately when Shift is released
+                onHoverChange(null);
+            }
+        };
+        window.addEventListener('keydown', onKeyDown);
+        window.addEventListener('keyup', onKeyUp);
+        return () => {
+            window.removeEventListener('keydown', onKeyDown);
+            window.removeEventListener('keyup', onKeyUp);
+        };
+    }, [onHoverChange]);
 
     const handleMouseMove = (e: React.MouseEvent) => {
         if (isEditing) return;
+
+        // Hover is only active while Shift is held
+        if (!isShiftHeldRef.current) {
+            // If we were showing hover and shift was just released externally,
+            // the keyup handler already cleared it. Nothing to do here.
+            return;
+        }
+
         const coords = toImageCoords(e);
 
         if (!coords) {
@@ -608,83 +633,13 @@ export function SmartMaskLayer({
         const hit = resolveHit(coords.x, coords.y);
 
         if (!hit) {
-            handleMouseLeaveCanvas();
-            return;
-        }
-
-        let isTargetingTool = false;
-        for (const handle of toolHandlesRef.current) {
-            const handleDist = Math.hypot(coords.x - handle.x, coords.y - handle.y);
-            if (handleDist < 80) { // 80px magnetic halo
-                isTargetingTool = true;
-                break;
-            }
-        }
-
-        if (hit.type !== 'background') {
-            if (hoverTimeoutRef.current) {
-                clearTimeout(hoverTimeoutRef.current);
-                hoverTimeoutRef.current = null;
-            }
-            hoverAnchorRef.current = null;
-            if (hit.id !== hoveredRegionId) {
-                onHoverChange(hit.id);
-            }
-            return;
-        }
-
-        // --- Environmental / Background Logic ---
-
-        if (isTargetingTool) {
-            if (hoverTimeoutRef.current) {
-                clearTimeout(hoverTimeoutRef.current);
-                hoverTimeoutRef.current = null;
-            }
-            hoverAnchorRef.current = null;
             if (hoveredRegionId) onHoverChange(null);
             return;
         }
 
-        if (hoveredRegionId === hit.id) {
-            // Already actively hovering the background
-            return;
-        }
-
-        // If we were hovering a non-background region (e.g. a person mask), clear it
-        // immediately — don't let the background debounce timer delay the exit.
-        if (hoveredRegionId && hoveredRegionId !== hit.id) {
-            onHoverChange(null);
-        }
-
-        // We are on the background, but NOT hovering it yet.
-        // We use a simple 200ms spatial timer. If they move out of a 20px radius, restart the timer.
-        // If they twitch erratically inside the 20px radius, the timer completes and turns it on.
-
-        if (!hoverAnchorRef.current) {
-            hoverAnchorRef.current = { x: coords.x, y: coords.y };
-        }
-
-        const anchor = hoverAnchorRef.current;
-        const dist = Math.hypot(coords.x - anchor.x, coords.y - anchor.y);
-
-        if (dist > 15) {
-            // Broke the anchor boundary (transiting or slow course correction). Reset.
-            hoverAnchorRef.current = { x: coords.x, y: coords.y };
-            if (hoverTimeoutRef.current) {
-                clearTimeout(hoverTimeoutRef.current);
-            }
-            hoverTimeoutRef.current = setTimeout(() => {
-                onHoverChange(hit.id);
-                hoverTimeoutRef.current = null;
-                hoverAnchorRef.current = null;
-            }, 300);
-        } else if (!hoverTimeoutRef.current) {
-            // Inside boundary, but no timer running (initial entry)
-            hoverTimeoutRef.current = setTimeout(() => {
-                onHoverChange(hit.id);
-                hoverTimeoutRef.current = null;
-                hoverAnchorRef.current = null;
-            }, 300);
+        // In shift-hover mode: instant, no debounce, no anchor delays, no tool halo
+        if (hit.id !== hoveredRegionId) {
+            onHoverChange(hit.id);
         }
     };
 
