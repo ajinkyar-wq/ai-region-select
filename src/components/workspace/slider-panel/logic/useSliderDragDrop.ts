@@ -213,9 +213,10 @@ export function useSliderDragDrop({
         // ── Gradient drag ──────────────────────────────────────────────────────────
         if (gradId && dropTarget.position === 'inside') {
             if (isValidTarget && intersectTarget === targetId) {
-                // INTERSECT: amber hold fired — clip gradient to target (or its group)
-                const targetGroupId = editedRegions.find(r => r.id === targetId)?.groupId;
-                onIntersectGradient?.(gradId, targetGroupId ?? targetId);
+                // INTERSECT: amber hold fired — clip gradient to exactly the target dropped on.
+                // Do NOT escalate to groupId — if the user dropped on an individual member,
+                // the clipParentId should be that member's id, not the group's id.
+                onIntersectGradient?.(gradId, targetId);
             } else {
                 // GROUP: quick drop (no amber) or gradient-over-gradient — group them
                 handleDrop(e, targetId);
