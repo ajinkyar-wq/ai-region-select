@@ -540,40 +540,79 @@ export function ImageCanvas({
             onPointerUp={handlePointerUp}
             onPointerLeave={handlePointerUp}
           >
-            {drawState?.isDrawing && imageTransform && (
-              <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{
-                left: imageTransform.x,
-                top: imageTransform.y,
-                width: imageTransform.width,
-                height: imageTransform.height
-              }}>
-                {drawingTool === 'radial-gradient' ? (
-                  <ellipse
-                    cx={drawState.start.x * imageTransform.width}
-                    cy={drawState.start.y * imageTransform.height}
-                    rx={Math.abs(drawState.current.x - drawState.start.x) * imageTransform.width}
-                    ry={Math.abs(drawState.current.y - drawState.start.y) * imageTransform.height}
-                    stroke="rgba(255, 50, 50, 0.8)"
-                    strokeWidth="2"
-                    fill="rgba(255, 50, 50, 0.2)"
+            {drawState?.isDrawing && imageTransform && (() => {
+              const iw = imageTransform.width;
+              const ih = imageTransform.height;
+              const sx = drawState.start.x * iw;
+              const sy = drawState.start.y * ih;
+              const ex = drawState.current.x * iw;
+              const ey = drawState.current.y * ih;
+
+              return (
+                <div
+                  className="absolute pointer-events-none"
+                  style={{ left: imageTransform.x, top: imageTransform.y, width: iw, height: ih }}
+                >
+                  {/* Live gradient preview canvas */}
+                  <canvas
+                    ref={(canvas) => {
+                      if (!canvas) return;
+                      canvas.width = iw;
+                      canvas.height = ih;
+                      const ctx = canvas.getContext('2d');
+                      if (!ctx) return;
+                      ctx.clearRect(0, 0, iw, ih);
+
+                      if (drawingTool === 'linear-gradient') {
+                        const grad = ctx.createLinearGradient(sx, sy, ex, ey);
+                        grad.addColorStop(0, 'rgba(255, 50, 50, 0.45)');
+                        grad.addColorStop(1, 'rgba(255, 50, 50, 0)');
+                        ctx.fillStyle = grad;
+                        ctx.fillRect(0, 0, iw, ih);
+                      } else {
+                        // Radial gradient — ellipse via scaled context
+                        const rx = Math.abs(ex - sx);
+                        const ry = Math.abs(ey - sy);
+                        if (rx > 2 && ry > 2) {
+                          ctx.save();
+                          ctx.translate(sx, sy);
+                          ctx.scale(1, ry / rx);
+                          const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, rx);
+                          grad.addColorStop(0, 'rgba(255, 50, 50, 0.45)');
+                          grad.addColorStop(1, 'rgba(255, 50, 50, 0)');
+                          ctx.fillStyle = grad;
+                          ctx.fillRect(-rx * 4, -rx * 4 / (ry / rx), rx * 8, rx * 8 / (ry / rx));
+                          ctx.restore();
+                        }
+                      }
+                    }}
+                    className="absolute inset-0"
+                    style={{ width: iw, height: ih }}
                   />
-                ) : (
-                  <line
-                    x1={drawState.start.x * imageTransform.width}
-                    y1={drawState.start.y * imageTransform.height}
-                    x2={drawState.current.x * imageTransform.width}
-                    y2={drawState.current.y * imageTransform.height}
-                    stroke="rgba(255, 50, 50, 0.8)"
-                    strokeWidth="2"
-                    strokeDasharray="4 4"
-                  />
-                )}
-                <circle cx={drawState.start.x * imageTransform.width} cy={drawState.start.y * imageTransform.height} r="4" fill="white" />
-                {drawingTool !== 'radial-gradient' && (
-                  <circle cx={drawState.current.x * imageTransform.width} cy={drawState.current.y * imageTransform.height} r="4" fill="white" />
-                )}
-              </svg>
-            )}
+
+                  {/* Control handles on top */}
+                  <svg className="absolute inset-0 w-full h-full overflow-visible pointer-events-none">
+                    {drawingTool === 'radial-gradient' ? (
+                      <ellipse
+                        cx={sx} cy={sy}
+                        rx={Math.abs(ex - sx)} ry={Math.abs(ey - sy)}
+                        stroke="rgba(255,255,255,0.7)" strokeWidth="1.5" strokeDasharray="5 3"
+                        fill="none"
+                      />
+                    ) : (
+                      <line
+                        x1={sx} y1={sy} x2={ex} y2={ey}
+                        stroke="rgba(255,255,255,0.8)" strokeWidth="1.5" strokeDasharray="5 3"
+                      />
+                    )}
+                    <circle cx={sx} cy={sy} r="5" fill="white" stroke="rgba(0,0,0,0.4)" strokeWidth="1" />
+                    {drawingTool !== 'radial-gradient' && (
+                      <circle cx={ex} cy={ey} r="5" fill="white" stroke="rgba(0,0,0,0.4)" strokeWidth="1" />
+                    )}
+                  </svg>
+                </div>
+              );
+            })()}
           </div>
         )}
 
