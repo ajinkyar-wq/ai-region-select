@@ -326,10 +326,17 @@ export function Workspace() {
                   peopleEnabled={peopleEnabled}
                   backgroundEnabled={backgroundEnabled}
                   onUpdateTile={(updates) => {
-                    // Sync activeMask state if regions are being deselected
+                    // Sync activeMask state if regions are being deselected.
+                    // IMPORTANT: Don't clear activeMask if another region is concurrently being
+                    // selected in this same update (e.g. clicking Gradient B while Gradient A is
+                    // active). In that case, onActivateRegion will set the new activeMask — we
+                    // must not race it with null.
                     if (activeMask && updates.regions) {
                       const updatedActiveRegion = updates.regions.find(r => r.id === activeMask.id);
-                      if (updatedActiveRegion && !updatedActiveRegion.selected) {
+                      const someOtherRegionSelected = updates.regions.some(
+                        r => r.id !== activeMask.id && r.selected
+                      );
+                      if (updatedActiveRegion && !updatedActiveRegion.selected && !someOtherRegionSelected) {
                         setActiveMask(null);
                         setBrushActive(false);
                       }
