@@ -298,7 +298,7 @@ export function MaskListGroup(props: MaskListGroupProps) {
                                     }}
                                 />
 
-                                {/* Clip children */}
+                                {/* Clip children of individual members */}
                                 {isMemberExpanded && memberClipKids.length > 0 && (
                                     <div
                                         className="relative ml-6"
@@ -342,47 +342,44 @@ export function MaskListGroup(props: MaskListGroupProps) {
                             </div>
                         );
                     })}
+
+                    {/* Group-level clip children (gradients intersected with the whole group) */}
+                    {(clipChildrenByParent[groupId] || []).map((child) => {
+                        const childIndex = globalIndexRef.current++;
+                        return (
+                            <div key={child.id} className="relative flex items-center pl-5">
+                                <div className="absolute left-[18px] top-0 bottom-0 w-[1px]"
+                                    style={{ borderLeft: '1.5px dashed rgba(251,146,60,0.35)' }}
+                                />
+                                <div className="absolute left-[18px] top-1/2 w-3 h-px"
+                                    style={{ background: 'rgba(251,146,60,0.35)', top: '50%' }}
+                                />
+
+                                <div className="flex-1">
+                                    <MaskListItem
+                                        region={child}
+                                        index={childIndex}
+                                        onSelect={(multi, shift) => {
+                                            handleSelectRegion(child.id, multi, shift!);
+                                            if (!multi && !shift) {
+                                                onActivateRegion?.(child.id);
+                                            }
+                                        }}
+                                        onActivate={() => onActivateRegion?.(child.id)}
+                                        onToggleVis={() => onToggleVisibility(child.id)}
+                                        onDelete={() => onDeleteRegion(child.id)}
+                                        onDragStart={(e) => handleDragStart(e, child.id, child.type)}
+                                        onDragEnd={handleGlobalDragEnd}
+                                        onDragOver={(e) => handleDragOverItem(e, child.id, false, child.type)}
+                                        onDrop={(e) => handleDropItem(e, child.id, child.type)}
+                                        isClipChild={true}
+                                    />
+                                </div>
+                            </div>
+                        );
+                    })}
                 </div>
             )}
-
-
-
-
-            {/* Intersected Gradients (Clip Children of the Group) */}
-            {isExpanded && (clipChildrenByParent[groupId] || []).map((child) => {
-                const childIndex = globalIndexRef.current++;
-                return (
-                    <div key={child.id} className="relative flex items-center pl-5">
-                        <div className="absolute left-[18px] top-0 bottom-0 w-[1px]"
-                            style={{ borderLeft: '1.5px dashed rgba(251,146,60,0.35)' }}
-                        />
-                        <div className="absolute left-[18px] top-1/2 w-3 h-px"
-                            style={{ background: 'rgba(251,146,60,0.35)', top: '50%' }}
-                        />
-
-                        <div className="flex-1">
-                            <MaskListItem
-                                region={child}
-                                index={childIndex}
-                                onSelect={(multi, shift) => {
-                                    handleSelectRegion(child.id, multi, shift!);
-                                    if (!multi && !shift) {
-                                        onActivateRegion?.(child.id);
-                                    }
-                                }}
-                                onActivate={() => onActivateRegion?.(child.id)}
-                                onToggleVis={() => onToggleVisibility(child.id)}
-                                onDelete={() => onDeleteRegion(child.id)}
-                                onDragStart={(e) => handleDragStart(e, child.id, child.type)}
-                                onDragEnd={handleGlobalDragEnd}
-                                onDragOver={(e) => handleDragOverItem(e, child.id, false, child.type)}
-                                onDrop={(e) => handleDropItem(e, child.id, child.type)}
-                                isClipChild={true}
-                            />
-                        </div>
-                    </div>
-                );
-            })}
 
             {/* Insertion Line Bottom */}
             {isDropTarget && dropTarget.position === 'bottom' && (
