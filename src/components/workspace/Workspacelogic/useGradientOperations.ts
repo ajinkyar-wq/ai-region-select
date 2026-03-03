@@ -229,16 +229,32 @@ export function useGradientOperations({
 
         setImage(prev => {
             if (!prev) return prev;
+
+            // Collect all selected gradients (the dragged one + any others shift-selected).
+            // onClick does NOT fire during a drag, so shift-selection is still intact.
+            const draggedGrad = prev.regions.find(r => r.id === gradientId);
+            const gradientsToClip = draggedGrad?.selected
+                ? prev.regions
+                    .filter(r => r.selected && (r.type === 'linear-gradient' || r.type === 'radial-gradient'))
+                    .map(r => r.id)
+                : [gradientId];
+
+            const clipSet = new Set(gradientsToClip);
             return {
                 ...prev,
                 regions: prev.regions.map(r =>
-                    r.id === gradientId
-                        ? { ...r, clipParentId: targetId, groupId: undefined }
+                    clipSet.has(r.id)
+                        // FIX B4/B11: deselect the gradient after clipping so it's no longer
+                        // highlighted as an active standalone gradient on the canvas
+                        ? { ...r, clipParentId: targetId, groupId: undefined, selected: false }
                         : r
                 )
             };
         });
     }, [image, setImage]);
+
+
+
 
     return {
         handleCreateLinearGradient,

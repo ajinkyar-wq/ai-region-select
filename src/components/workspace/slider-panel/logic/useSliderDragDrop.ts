@@ -5,6 +5,7 @@ interface UseSliderDragDropProps {
     editedRegions: Region[];
     topLevelItems: (Region | { type: 'group'; id: string; regions: Region[] })[];
     onMoveRegion?: (id: string, targetGroupId: string | undefined, targetIndex?: number) => void;
+    onGroupSelected?: (targetGroupId: string) => void;
     onIntersectGradient?: (gradientId: string, targetId: string) => void;
 }
 
@@ -12,6 +13,7 @@ export function useSliderDragDrop({
     editedRegions,
     topLevelItems,
     onMoveRegion,
+    onGroupSelected,
     onIntersectGradient
 }: UseSliderDragDropProps) {
     const [dropTarget, setDropTarget] = useState<{ id: string | null; position: 'top' | 'bottom' | 'inside' | null }>({ id: null, position: null });
@@ -74,6 +76,7 @@ export function useSliderDragDrop({
         e.stopPropagation();
 
         const isGradientDrag = !!draggingGradientId;
+        // FIX F2: Only block intersect if the gradient is already clipped (clipParentId set), NOT just grouped
         const draggingGradientIsClipped = !!editedRegions.find(r => r.id === draggingGradientId)?.clipParentId;
 
         const isValidIntersectTarget = isGradientDrag &&
@@ -86,10 +89,12 @@ export function useSliderDragDrop({
             const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
             const y = e.clientY - rect.top;
             const h = rect.height;
-            const edgeThreshold = h * 0.3;
+            // 20% top/bottom for reordering, 60% center for intersect
+            const edgeThreshold = h * 0.2;
 
             if (y < edgeThreshold || y > h - edgeThreshold) {
                 clearAllIntersect();
+                setGroupingHoverTarget(null);
                 setDropTarget({ id, position: y < h / 2 ? 'top' : 'bottom' });
                 return;
             }
@@ -99,7 +104,10 @@ export function useSliderDragDrop({
                 setIntersectHoverTarget(id);
                 clearIntersectHold();
                 setIntersectTarget(null);
+                // Show grouping badge immediately; switch to amber after hold
+                setGroupingHoverTarget(id);
                 intersectHoldTimerRef.current = setTimeout(() => {
+                    setGroupingHoverTarget(null);
                     setIntersectTarget(id);
                 }, INTERSECT_HOLD_MS);
             }
@@ -114,23 +122,46 @@ export function useSliderDragDrop({
         const height = rect.height;
 
         const isPlainItemDrag = !draggingGradientId;
-        const isPlainMaskTarget = targetRegionType &&
-            targetRegionType !== 'linear-gradient' &&
-            targetRegionType !== 'radial-gradient';
+        // Any typed item can be a group target — gradients included
+        const isPlainMaskTarget = !!targetRegionType;
+        // Gradient dragged over another gradient — allow grouping via center zone
+        const isGradientOverGradient = isGradientDrag &&
+            (targetRegionType === 'linear-gradient' || targetRegionType === 'radial-gradient');
 
         if (isGroup) {
-            const edgeThreshold = height * 0.3;
+            // Group headers: 20% reorder, 60% group-join
+            const edgeThreshold = height * 0.2;
             if (y < edgeThreshold) setDropTarget({ id, position: 'top' });
             else if (y > height - edgeThreshold) setDropTarget({ id, position: 'bottom' });
-            else setDropTarget({ id, position: 'inside' });
-        } else if (isPlainItemDrag && isPlainMaskTarget && id !== draggingItemId) {
+            else {
+                // FIX B7: Only show grouping hover for non-gradient drags on group headers
+                if (!isGradientDrag) {
+                    setGroupingHoverTarget(id);
+                }
+                setDropTarget({ id, position: 'inside' });
+            }
+        } else if (isGradientOverGradient && id !== draggingItemId) {
+            // Gradient dragged over another gradient — allow grouping
+            const edgeThreshold = height * 0.25;
+            if (y < edgeThreshold) {
+                setGroupingHoverTarget(null);
+                setDropTarget({ id, position: 'top' });
+            } else if (y > height - edgeThreshold) {
+                setGroupingHoverTarget(null);
+                setDropTarget({ id, position: 'bottom' });
+            } else {
+                // FIX B7: Only show grouping hover badge for non-gradient items
+                setGroupingHoverTarget(null);
+                setDropTarget({ id, position: 'inside' });
+            }
+        } else if ((isPlainItemDrag || isGradientDrag) && isPlainMaskTarget && id !== draggingItemId) {
             const draggedAlreadyInGroup = !!draggingItemSourceGroupId;
             const targetRegionGroupId = editedRegions.find(r => r.id === id)?.groupId;
             const targetAlreadyInGroup = !!targetRegionGroupId;
 
-            if (!draggedAlreadyInGroup) {
-                // Standalone item being dragged — can join groups OR create new groups
-                const edgeThreshold = height * 0.25;
+            if (!draggedAlreadyInGroup && !targetAlreadyInGroup) {
+                // Standalone item dragged onto standalone item — can create new groups
+                const edgeThreshold = height * 0.2;
                 if (y < edgeThreshold) {
                     setGroupingHoverTarget(null);
                     setDropTarget({ id, position: 'top' });
@@ -138,16 +169,16 @@ export function useSliderDragDrop({
                     setGroupingHoverTarget(null);
                     setDropTarget({ id, position: 'bottom' });
                 } else {
-                    // Center zone: join existing group or create new group
-                    setGroupingHoverTarget(id);
+                    // Center zone: create new group
+                    // FIX B7: Only show grouping hover for non-gradient drags
+                    if (!isGradientDrag) {
+                        setGroupingHoverTarget(id);
+                    }
                     setDropTarget({ id, position: 'inside' });
                 }
-            } else if (!targetAlreadyInGroup) {
-                // Grouped item dragged onto standalone — just reorder
-                setGroupingHoverTarget(null);
-                setDropTarget({ id, position: y < height / 2 ? 'top' : 'bottom' });
             } else {
-                // Both already in groups — no nested groups, just reorder
+                // Either dragged is already grouped, or target is already grouped.
+                // Don't allow creating nested groups or swallowing standalone items via members.
                 setGroupingHoverTarget(null);
                 setDropTarget({ id, position: y < height / 2 ? 'top' : 'bottom' });
             }
@@ -156,7 +187,13 @@ export function useSliderDragDrop({
         }
     }, [draggingGradientId, draggingItemId, draggingItemSourceGroupId, editedRegions, intersectHoverTarget, clearAllIntersect, clearIntersectHold]);
 
-    const handleDragLeave = useCallback(() => {
+    // FIX B2 + B13: Only fire drag leave if cursor genuinely left the row element
+    const handleDragLeave = useCallback((e: React.DragEvent) => {
+        const related = e.relatedTarget as Node | null;
+        if (e.currentTarget && related && (e.currentTarget as HTMLElement).contains(related)) {
+            // Still inside the element — ignore the bubbled leave
+            return;
+        }
         setDropTarget({ id: null, position: null });
         setGroupingHoverTarget(null);
         clearAllIntersect();
@@ -182,14 +219,22 @@ export function useSliderDragDrop({
 
         const gradId = e.dataTransfer.getData('gradient-intersect');
         const draggedId = e.dataTransfer.getData('text/plain');
+        // isValidTarget: only non-gradient targets are valid for INTERSECT
         const isValidTarget = targetRegionType &&
             targetRegionType !== 'linear-gradient' &&
             targetRegionType !== 'radial-gradient';
+        // isAnyTarget: any typed target is valid for GROUPING (including gradients)
+        const isAnyTarget = !!targetRegionType;
 
-        if (gradId && isValidTarget && dropTarget.position === 'inside') {
-            if (intersectTarget === targetId) {
+        // ── Gradient drag ──────────────────────────────────────────────────────────
+        if (gradId && dropTarget.position === 'inside') {
+            if (isValidTarget && intersectTarget === targetId) {
+                // INTERSECT: amber hold fired — clip gradient to exactly the target dropped on.
+                // Do NOT escalate to groupId — if the user dropped on an individual member,
+                // the clipParentId should be that member's id, not the group's id.
                 onIntersectGradient?.(gradId, targetId);
             } else {
+                // GROUP: quick drop (no amber) or gradient-over-gradient — group them
                 handleDrop(e, targetId);
             }
             setIntersectTarget(null);
@@ -197,20 +242,37 @@ export function useSliderDragDrop({
             return;
         }
 
-        // Non-gradient plain item dropped in center of another item:
-        // - onto standalone target → create new group
-        // - onto grouped target → join that existing group
-        // Blocked only if the DRAGGED item is already in a group (no nested groups)
+        // ── Plain item (or gradient) dropped in center of any item ─────────────────
         const draggedAlreadyInGroup = !!editedRegions.find(r => r.id === draggedId)?.groupId;
-        if (!gradId && isValidTarget && dropTarget.position === 'inside' && draggedId && draggedId !== targetId
+        const anyOtherSelected = editedRegions.some(r => r.selected && r.id !== draggedId && !r.clipParentId);
+
+        if (isAnyTarget && dropTarget.position === 'inside' && draggedId && draggedId !== targetId
             && !draggedAlreadyInGroup) {
             const targetExistingGroupId = editedRegions.find(r => r.id === targetId)?.groupId;
+
             if (targetExistingGroupId) {
                 // Target is already in a group — join that group
-                onMoveRegion?.(draggedId, targetExistingGroupId);
+                if (anyOtherSelected) {
+                    onGroupSelected?.(targetExistingGroupId);
+                } else {
+                    onMoveRegion?.(draggedId, targetExistingGroupId);
+                }
             } else {
-                // Target is standalone — create a new group between the two
+                // Target is standalone — create a new group between dragged + target
                 onMoveRegion?.(draggedId, targetId);
+            }
+            setIntersectTarget(null);
+            setDropTarget({ id: null, position: null });
+            return;
+        }
+
+        // ── Group header drop (inside) — join that group ───────────────────────────
+        if (targetRegionType === 'group' && dropTarget.position === 'inside' && draggedId) {
+            const targetGroupId = targetId; // group header id IS the groupId
+            if (anyOtherSelected) {
+                onGroupSelected?.(targetGroupId);
+            } else {
+                onMoveRegion?.(draggedId, targetGroupId);
             }
             setIntersectTarget(null);
             setDropTarget({ id: null, position: null });
@@ -226,28 +288,72 @@ export function useSliderDragDrop({
         if (position === 'inside') {
             handleDrop(e, targetId);
         } else {
-            let targetIndex = editedRegions.findIndex(r => r.id === targetId || r.groupId === targetId);
-
-            if (targetIndex !== -1) {
-                if (position === 'bottom') {
-                    const targetIsGroup = topLevelItems.find(i => 'type' in i && i.type === 'group' && i.id === targetId);
-                    if (targetIsGroup) {
-                        const groupMembers = editedRegions.filter(r => r.groupId === targetId);
-                        targetIndex += groupMembers.length;
-                    } else {
-                        targetIndex += 1;
-                    }
+            // FIX B1: Derive insert index from the display-ordered topLevelItems, not raw editedRegions
+            // This correctly handles group headers whose ID != any region.id
+            const flatDisplayOrder: string[] = [];
+            topLevelItems.forEach(item => {
+                if ('type' in item && item.type === 'group') {
+                    flatDisplayOrder.push(item.id); // group header pseudo-id
+                    item.regions.forEach(r => flatDisplayOrder.push(r.id));
+                } else {
+                    flatDisplayOrder.push((item as Region).id);
                 }
+            });
+
+            const displayIdx = flatDisplayOrder.indexOf(targetId);
+
+            let targetIndex: number;
+            if (position === 'bottom') {
+                // Insert after the target (and after all its group members if it's a group)
+                const targetIsGroup = topLevelItems.find(i => 'type' in i && i.type === 'group' && i.id === targetId);
+                if (targetIsGroup) {
+                    // Insert after last member in flatDisplayOrder
+                    const groupItem = targetIsGroup as { type: 'group'; id: string; regions: Region[] };
+                    const lastMemberId = groupItem.regions.length > 0
+                        ? groupItem.regions[groupItem.regions.length - 1].id
+                        : targetId;
+                    targetIndex = flatDisplayOrder.indexOf(lastMemberId) + 1;
+                } else {
+                    targetIndex = displayIdx !== -1 ? displayIdx + 1 : flatDisplayOrder.length;
+                }
+            } else {
+                // top — insert before
+                targetIndex = displayIdx !== -1 ? displayIdx : 0;
             }
 
-            const targetIsGroupHeader = topLevelItems.some(i => 'type' in i && i.type === 'group' && i.id === targetId);
-            const newGroupId = targetIsGroupHeader
-                ? undefined
-                : editedRegions.find(r => r.id === targetId)?.groupId;
+            // Now map display index to editedRegions index for the move operation
+            // We use the anchor region at flatDisplayOrder[targetIndex] (or end)
+            let anchorId = flatDisplayOrder[targetIndex];
 
-            handleDrop(e, newGroupId, targetIndex);
+            // FIX: If the anchor ID is a group header, we must drop it right before the first member of that group
+            // because group headers themselves aren't real items in `editedRegions`
+            const anchorGroupNode = topLevelItems.find(i => 'type' in i && i.type === 'group' && i.id === anchorId) as { type: 'group'; id: string; regions: Region[] } | undefined;
+            if (anchorGroupNode && anchorGroupNode.regions.length > 0) {
+                anchorId = anchorGroupNode.regions[0].id;
+            }
+
+            const anchorRegionIdx = anchorId
+                ? editedRegions.findIndex(r => r.id === anchorId)
+                : -1;
+            const insertIdx = anchorRegionIdx !== -1 ? anchorRegionIdx : editedRegions.length;
+
+            // Determine what groupId the dragged item should inherit at the drop position
+            const targetIsGroupHeader = topLevelItems.some(i => 'type' in i && i.type === 'group' && i.id === targetId);
+            let newGroupId: string | undefined;
+            if (targetIsGroupHeader) {
+                // If dropping exactly on the group header...
+                if (position === 'bottom') {
+                    newGroupId = targetId; // Join the group
+                } else {
+                    newGroupId = undefined; // Drop before group
+                }
+            } else {
+                newGroupId = editedRegions.find(r => r.id === targetId)?.groupId;
+            }
+
+            handleDrop(e, newGroupId, insertIdx);
         }
-    }, [clearIntersectHold, dropTarget, intersectTarget, onIntersectGradient, onMoveRegion, handleDrop, editedRegions, topLevelItems]);
+    }, [clearIntersectHold, dropTarget, intersectTarget, onIntersectGradient, onMoveRegion, onGroupSelected, handleDrop, editedRegions, topLevelItems]);
 
     return {
         dropTarget,

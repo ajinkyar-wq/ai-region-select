@@ -17,12 +17,16 @@ export function useSliderSelection({
     const [lastSelectedId, setLastSelectedId] = useState<string | null>(null);
 
     const getVisibleItems = useCallback(() => {
+        // FIX B10: Only include real region IDs — never pseudo expansion-state keys like 'single-${id}'.
+        // Group header IDs are kept as anchors but filtered out during range selection.
         const items: string[] = [];
         topLevelItems.forEach(item => {
             if ('type' in item && item.type === 'group') {
-                items.push(item.id); // Group Header
+                items.push(item.id); // Group Header (filtered out later in range selection)
                 // Default to expanded (true) if undefined.
                 if (expandedGroups[item.id] !== false) {
+                    // Only push member region IDs — clip children are shown under their parent
+                    // but are NOT independently selectable via range-select
                     item.regions.forEach(r => items.push(r.id));
                 }
             } else {
