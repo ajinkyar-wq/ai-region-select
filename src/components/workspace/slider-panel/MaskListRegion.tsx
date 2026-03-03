@@ -19,6 +19,7 @@ interface MaskListRegionProps {
     // Handlers
     handleDragStart: (e: React.DragEvent, id: string, type?: string) => void;
     handleDragOverItem: (e: React.DragEvent, id: string, isGroup: boolean, type?: string) => void;
+    handleDragLeave: (e: React.DragEvent) => void;
     handleGlobalDragEnd: () => void;
     handleDropItem: (e: React.DragEvent, targetId: string, targetType?: string) => void;
 
@@ -35,7 +36,7 @@ export function MaskListRegion(props: MaskListRegionProps) {
     const {
         region, clipChildrenByParent, expandedGroups, toggleGroup, globalIndexRef,
         dropTarget, intersectTarget, intersectHoverTarget, draggingItemId, draggingGradientId,
-        handleDragStart, handleDragOverItem, handleGlobalDragEnd, handleDropItem,
+        handleDragStart, handleDragOverItem, handleDragLeave, handleGlobalDragEnd, handleDropItem,
         onSelectBatchRegions, handleSelectRegion, onActivateRegion,
         onToggleVisibility, onDeleteRegion, onInvertMask
     } = props;
@@ -67,6 +68,7 @@ export function MaskListRegion(props: MaskListRegionProps) {
                 onDragStart={(e) => handleDragStart(e, region.id, region.type)}
                 onDragEnd={handleGlobalDragEnd}
                 onDragOver={(e) => handleDragOverItem(e, region.id, false, region.type)}
+                onDragLeave={handleDragLeave}
                 onDrop={(e) => handleDropItem(e, region.id, region.type)}
                 dropTarget={isDropTarget ? dropTarget.position : null}
                 isIntersectTarget={intersectTarget === region.id}
@@ -117,10 +119,6 @@ export function MaskListRegion(props: MaskListRegionProps) {
                                 onActivate={() => onActivateRegion?.(child.id)}
                                 onToggleVis={() => onToggleVisibility(child.id)}
                                 onDelete={() => onDeleteRegion(child.id)}
-                                onDragStart={(e) => handleDragStart(e, child.id, child.type)}
-                                onDragEnd={handleGlobalDragEnd}
-                                onDragOver={(e) => handleDragOverItem(e, child.id, false, child.type)}
-                                onDrop={(e) => handleDropItem(e, child.id, child.type)}
                                 isClipChild={true}
                             />
                         </div>

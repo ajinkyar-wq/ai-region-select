@@ -466,12 +466,13 @@ export function Workspace() {
                   // if this deletion will leave that group with 0 members.
                   const directClipChildren = prev.regions.filter(r => r.clipParentId === id);
 
-                  // Check if deleting this region empties its group entirely
+                  // Check if deleting this region will empty its group
                   const groupId = region.groupId;
                   const groupClipChildren = groupId
                     ? (() => {
                       const survivors = prev.regions.filter(r => r.groupId === groupId && r.id !== id);
-                      // Only cascade group-level clips when the group will be empty after this delete
+                      // Only remove group-level clip children when the group will be fully empty.
+                      // While the group still has remaining members, the gradient stays on the group.
                       return survivors.length === 0
                         ? prev.regions.filter(r => r.clipParentId === groupId)
                         : [];

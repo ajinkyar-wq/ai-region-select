@@ -45,7 +45,7 @@ export function MaskListItem({
     onDragStart?: (e: React.DragEvent) => void;
     onDrop?: (e: React.DragEvent) => void;
     onDragOver?: (e: React.DragEvent) => void;
-    onDragLeave?: () => void;
+    onDragLeave?: (e: React.DragEvent) => void;
     onDragEnd?: () => void;
     isChild?: boolean;
     dropTarget?: 'top' | 'bottom' | 'inside' | null;
@@ -158,6 +158,7 @@ export function MaskListItem({
           ${!region.selected && !isIntersectTarget && 'hover:bg-[#353535] text-[#ABABAB]'}
           ${isChild ? 'pl-6' : ''}
           ${isClipChild ? 'pl-3' : ''}
+          [&>*]:pointer-events-none [&_button]:pointer-events-auto
         `}
             >
                 <div className="flex items-center gap-2 overflow-hidden min-w-0">

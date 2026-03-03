@@ -27,7 +27,7 @@ interface MaskListGroupProps {
     // Handlers
     handleDragStart: (e: React.DragEvent, id: string, type?: string) => void;
     handleDragOverItem: (e: React.DragEvent, id: string, isGroup: boolean, type?: string) => void;
-    handleDragLeave: () => void;
+    handleDragLeave: (e: React.DragEvent) => void;
     handleGlobalDragEnd: () => void;
     handleDropItem: (e: React.DragEvent, targetId: string, targetType?: string) => void;
     clearAllIntersect: () => void;
@@ -110,6 +110,7 @@ export function MaskListGroup(props: MaskListGroupProps) {
             ${!isGroupSelected && isDropTarget && dropTarget.position === 'inside' ? 'ring-2 ring-blue-500 ring-inset' : ''}
             ${intersectTarget === groupId ? 'ring-2 ring-orange-400 ring-inset' : ''}
             ${!isGroupSelected && 'hover:bg-[#353535]'}
+            [&>*]:pointer-events-none [&_button]:pointer-events-auto
           `}
                 draggable={true}
                 onDragStart={(e) => handleDragStart(e, groupId)}
@@ -214,6 +215,30 @@ export function MaskListGroup(props: MaskListGroupProps) {
                             <Contrast className="h-3.5 w-3.5" />
                         </button>
 
+                        {/* F3: Ungroup All — moves all members back to root */}
+                        <button
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                if (onMoveRegion) {
+                                    // Move each member out to undefined (root) in order
+                                    groupRegions.forEach(r => onMoveRegion(r.id, undefined));
+                                }
+                            }}
+                            className="p-1 text-[#666] hover:text-blue-400 transition-colors"
+                            title="Ungroup all"
+                        >
+                            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-current">
+                                <rect x="1" y="1" width="5" height="5" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
+                                <rect x="10" y="1" width="5" height="5" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
+                                <rect x="1" y="10" width="5" height="5" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
+                                <rect x="10" y="10" width="5" height="5" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
+                                <line x1="8" y1="3.5" x2="10" y2="3.5" stroke="currentColor" strokeWidth="1.4" strokeDasharray="1 1" />
+                                <line x1="8" y1="12.5" x2="10" y2="12.5" stroke="currentColor" strokeWidth="1.4" strokeDasharray="1 1" />
+                                <line x1="3.5" y1="6" x2="3.5" y2="10" stroke="currentColor" strokeWidth="1.4" strokeDasharray="1 1" />
+                                <line x1="12.5" y1="6" x2="12.5" y2="10" stroke="currentColor" strokeWidth="1.4" strokeDasharray="1 1" />
+                            </svg>
+                        </button>
+
                         <button
                             onClick={(e) => {
                                 e.stopPropagation();
@@ -239,7 +264,7 @@ export function MaskListGroup(props: MaskListGroupProps) {
 
             {/* Group Children */}
             {isExpanded && (
-                <div className="flex flex-col">
+                <div className="flex flex-col ml-5">
                     {/* Standard Group Members */}
                     {groupRegions.map((region) => {
                         const itemIndex = globalIndexRef.current++;
@@ -271,8 +296,16 @@ export function MaskListGroup(props: MaskListGroupProps) {
                                     onDrop={(e) => handleDropItem(e, region.id, region.type)}
                                     isChild={true}
                                     dropTarget={dropTarget.id === region.id ? dropTarget.position : null}
-                                    isIntersectTarget={intersectTarget === region.id}
-                                    isIntersectHover={intersectHoverTarget === region.id && intersectTarget !== region.id}
+                                    isIntersectTarget={
+                                        // B6: member row shows amber if it is directly targeted
+                                        // OR if the whole group is the intersect target
+                                        intersectTarget === region.id || intersectTarget === groupId
+                                    }
+                                    isIntersectHover={
+                                        (intersectHoverTarget === region.id || intersectHoverTarget === groupId)
+                                        && intersectTarget !== region.id
+                                        && intersectTarget !== groupId
+                                    }
                                     isGroupingHover={groupingHoverTarget === region.id}
                                     isDraggingGradient={!!draggingGradientId}
                                     isDragSource={draggingItemId === region.id}
@@ -316,10 +349,6 @@ export function MaskListGroup(props: MaskListGroupProps) {
                                                             onActivate={() => onActivateRegion?.(child.id)}
                                                             onToggleVis={() => onToggleVisibility(child.id)}
                                                             onDelete={() => onDeleteRegion(child.id)}
-                                                            onDragStart={(e) => handleDragStart(e, child.id, child.type)}
-                                                            onDragEnd={handleGlobalDragEnd}
-                                                            onDragOver={(e) => handleDragOverItem(e, child.id, false, child.type)}
-                                                            onDrop={(e) => handleDropItem(e, child.id, child.type)}
                                                             isClipChild={true}
                                                         />
                                                     </div>
@@ -361,10 +390,6 @@ export function MaskListGroup(props: MaskListGroupProps) {
                                         onActivate={() => onActivateRegion?.(child.id)}
                                         onToggleVis={() => onToggleVisibility(child.id)}
                                         onDelete={() => onDeleteRegion(child.id)}
-                                        onDragStart={(e) => handleDragStart(e, child.id, child.type)}
-                                        onDragEnd={handleGlobalDragEnd}
-                                        onDragOver={(e) => handleDragOverItem(e, child.id, false, child.type)}
-                                        onDrop={(e) => handleDropItem(e, child.id, child.type)}
                                         isClipChild={true}
                                     />
                                 </div>

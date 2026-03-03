@@ -244,7 +244,9 @@ export function useGradientOperations({
                 ...prev,
                 regions: prev.regions.map(r =>
                     clipSet.has(r.id)
-                        ? { ...r, clipParentId: targetId, groupId: undefined }
+                        // FIX B4/B11: deselect the gradient after clipping so it's no longer
+                        // highlighted as an active standalone gradient on the canvas
+                        ? { ...r, clipParentId: targetId, groupId: undefined, selected: false }
                         : r
                 )
             };

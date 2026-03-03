@@ -86,6 +86,7 @@ export function SliderPanel({
     intersectTarget,
     intersectHoverTarget,
     draggingItemSourceGroupId,
+    draggingItemType,
     groupingHoverTarget,
     handleDragStart,
     handleDrop,
@@ -284,7 +285,7 @@ export function SliderPanel({
             setDraggingGradientId(null);
             clearAllIntersect();
             setDropTarget({ id: null, position: null });
-            handleDrop(e, undefined, editedRegions.length);
+            handleDrop(e, undefined); // Omit targetIndex so it goes to the actual end of newRegions
           }}
         >
           {/* UNIFIED LIST RENDERING */}
@@ -352,6 +353,7 @@ export function SliderPanel({
 
                       handleDragStart={handleDragStart}
                       handleDragOverItem={handleDragOverItem}
+                      handleDragLeave={handleDragLeave}
                       handleGlobalDragEnd={handleGlobalDragEnd}
                       handleDropItem={handleDropItem}
 
