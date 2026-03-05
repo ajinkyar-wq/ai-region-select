@@ -105,15 +105,34 @@ export function Workspace() {
 
   const handleSelectBatchRegions = (ids: string[], multi: boolean, activeId?: string) => {
     if (!image) return;
+    let newRegions = image.regions.map(r => {
+      // If ID is in list, select it and mark as edited so it shows in panel
+      if (ids.includes(r.id)) return { ...r, selected: true, hasEdits: true };
+      return multi ? r : { ...r, selected: false };
+    });
+
+    // Auto-group if multiple are selected
+    const selectedStandalone = newRegions.filter(r => r.selected && !r.clipParentId);
+    if (selectedStandalone.length > 1) {
+      const firstGroup = selectedStandalone[0].groupId;
+      const allSameGroup = firstGroup && selectedStandalone.every(r => r.groupId === firstGroup);
+
+      if (!allSameGroup) {
+        const targetGroupId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+        newRegions = newRegions.map(r => {
+          if (r.selected && !r.clipParentId) {
+            return { ...r, groupId: targetGroupId };
+          }
+          return r;
+        });
+      }
+    }
+
+    newRegions = autoDissolveGroups(newRegions);
+
     setImage({
       ...image,
-      regions: image.regions.map(r => {
-        // If ID is in list, select it.
-        // If multi is false, deselect everything else.
-        // If multi is true, keep others as they are.
-        if (ids.includes(r.id)) return { ...r, selected: true };
-        return multi ? r : { ...r, selected: false };
-      })
+      regions: newRegions
     });
 
     // Sync Activation if activeId is provided (e.g. from single-click or Shift-Click)
@@ -398,10 +417,29 @@ export function Workspace() {
               regions={image?.regions || []}
               onSelectRegion={(id, multi) => {
                 if (!image) return;
-                const newRegions = image.regions.map(r => {
-                  if (r.id === id) return { ...r, selected: true };
+                let newRegions = image.regions.map(r => {
+                  if (r.id === id) return { ...r, selected: true, hasEdits: true };
                   return multi ? r : { ...r, selected: false };
                 });
+
+                const selectedStandalone = newRegions.filter(r => r.selected && !r.clipParentId);
+                if (selectedStandalone.length > 1) {
+                  const firstGroup = selectedStandalone[0].groupId;
+                  const allSameGroup = firstGroup && selectedStandalone.every(r => r.groupId === firstGroup);
+
+                  if (!allSameGroup) {
+                    const targetGroupId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+                    newRegions = newRegions.map(r => {
+                      if (r.selected && !r.clipParentId) {
+                        return { ...r, groupId: targetGroupId };
+                      }
+                      return r;
+                    });
+                  }
+                }
+
+                newRegions = autoDissolveGroups(newRegions);
+
                 // Only update selection state
                 setImage({ ...image, regions: newRegions });
 

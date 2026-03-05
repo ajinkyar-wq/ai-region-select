@@ -27,7 +27,7 @@ interface SliderPanelProps {
   onInvertMask?: (id?: string) => void;
   onApplyEdits?: () => void;
   onSelectBatchRegions?: (ids: string[], multi: boolean, activeId?: string) => void;
-  onMoveRegion?: (id: string, targetGroupId: string | undefined, targetIndex?: number) => void;
+  onMoveRegion?: (id: string, targetGroupId: string | undefined, anchorId?: string) => void;
   onGroupSelected?: (targetGroupId: string) => void;
   onDeleteGroup?: (groupId: string) => void;
   // New Prop for Activation (Double Click)
