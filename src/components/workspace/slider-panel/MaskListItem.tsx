@@ -245,16 +245,6 @@ export function MaskListItem({
 
                 {!isIntersectTarget && !isIntersectHover && !isGroupingHover && (
                     <div className="flex items-center gap-1 flex-shrink-0">
-                        {/* Ungroup button — always visible on child rows */}
-                        {onUngroup && (
-                            <button
-                                onClick={(e) => { e.stopPropagation(); onUngroup(); }}
-                                className="p-1 text-[#666] hover:text-blue-400 transition-colors"
-                                title="Remove from group"
-                            >
-                                <Ungroup className="h-3 w-3" />
-                            </button>
-                        )}
                         {onInvert && (
                             <button onClick={(e) => { e.stopPropagation(); onInvert(); }}
                                 className="p-1 text-[#ABABAB] opacity-0 group-hover:opacity-100 hover:text-white transition-colors" title="Invert Mask">

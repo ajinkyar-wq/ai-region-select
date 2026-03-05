@@ -22,7 +22,9 @@ export function useRegionManager({
     const autoDissolveGroups = useCallback((regions: Region[]): Region[] => {
         const groupCounts: Record<string, number> = {};
         regions.forEach(r => {
-            if (r.groupId) groupCounts[r.groupId] = (groupCounts[r.groupId] || 0) + 1;
+            if (r.groupId && !r.clipParentId) {
+                groupCounts[r.groupId] = (groupCounts[r.groupId] || 0) + 1;
+            }
         });
 
         const dissolving: Record<string, string | null> = {};
@@ -57,7 +59,7 @@ export function useRegionManager({
         });
     }, []);
 
-    const handleMoveRegion = useCallback((id: string, targetGroupId: string | undefined, targetIndex?: number) => {
+    const handleMoveRegion = useCallback((id: string, targetGroupId: string | undefined, anchorId?: string) => {
         if (!image) return;
 
         let movingRegionIds: string[] = [];
@@ -117,19 +119,26 @@ export function useRegionManager({
                         // Moving a whole group as a unit — preserve internal groupIds
                         return { ...r };
                     }
+                    // FIX: Gradients are strictly clip children, they can never join a group themselves.
+                    if (r.type === 'linear-gradient' || r.type === 'radial-gradient') {
+                        return { ...r, groupId: undefined };
+                    }
                     return { ...r, groupId: targetGroupId };
                 });
 
-                if (typeof targetIndex === 'number') {
-                    const insertIndex = Math.min(targetIndex, newRegions.length);
-                    newRegions.splice(insertIndex, 0, ...updatedMovingRegions);
+                if (anchorId) {
+                    const insertIndex = newRegions.findIndex(r => r.id === anchorId);
+                    if (insertIndex !== -1) {
+                        // Insert keeping the dragged items in their current internal relative order
+                        newRegions.splice(insertIndex, 0, ...updatedMovingRegions);
+                    } else {
+                        newRegions.push(...updatedMovingRegions);
+                    }
                 } else {
                     newRegions.push(...updatedMovingRegions);
                 }
 
                 newRegions = autoDissolveGroups(newRegions);
-                // removeOrphanedClipChildren cleans up any gradient whose clipParentId
-                // points to a group that no longer exists after dissolve
                 newRegions = removeOrphanedClipChildren(newRegions);
 
                 return { ...prev, regions: newRegions };

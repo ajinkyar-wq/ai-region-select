@@ -703,10 +703,31 @@ export function SmartMaskLayer({
         if (clickedRegion) {
             e.stopPropagation();
             const performSelectionUpdate = () => {
-                const updatedRegions = tile.regions.map(r => {
-                    if (isMultiToggle) return r.id === clickedRegion.id ? { ...r, selected: !r.selected } : r;
-                    return { ...r, selected: r.id === clickedRegion.id };
+                let updatedRegions = tile.regions.map(r => {
+                    if (isMultiToggle) {
+                        const isBecomingSelected = r.id === clickedRegion.id ? !r.selected : r.selected;
+                        return { ...r, selected: isBecomingSelected, hasEdits: isBecomingSelected ? true : r.hasEdits };
+                    }
+                    const isBecomingSelected = r.id === clickedRegion.id;
+                    return { ...r, selected: isBecomingSelected, hasEdits: isBecomingSelected ? true : r.hasEdits };
                 });
+
+                const selectedStandalone = updatedRegions.filter(r => r.selected && !r.clipParentId);
+                if (selectedStandalone.length > 1) {
+                    const firstGroup = selectedStandalone[0].groupId;
+                    const allSameGroup = firstGroup && selectedStandalone.every(r => r.groupId === firstGroup);
+
+                    if (!allSameGroup) {
+                        const targetGroupId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+                        updatedRegions = updatedRegions.map(r => {
+                            if (r.selected && !r.clipParentId) {
+                                return { ...r, groupId: targetGroupId };
+                            }
+                            return r;
+                        });
+                    }
+                }
+
                 onUpdateTile({ regions: updatedRegions });
             };
             if (!isMultiToggle && clickedRegion.selected) {

@@ -4,7 +4,7 @@ import type { Region } from '@/types/workspace';
 interface UseSliderDragDropProps {
     editedRegions: Region[];
     topLevelItems: (Region | { type: 'group'; id: string; regions: Region[] })[];
-    onMoveRegion?: (id: string, targetGroupId: string | undefined, targetIndex?: number) => void;
+    onMoveRegion?: (id: string, targetGroupId: string | undefined, anchorId?: string) => void;
     onGroupSelected?: (targetGroupId: string) => void;
     onIntersectGradient?: (gradientId: string, targetId: string) => void;
 }
@@ -58,11 +58,11 @@ export function useSliderDragDrop({
         e.dataTransfer.effectAllowed = 'move';
     }, []);
 
-    const handleDrop = useCallback((e: React.DragEvent, targetGroupId: string | undefined, targetIndex?: number) => {
+    const handleDrop = useCallback((e: React.DragEvent, targetGroupId: string | undefined, anchorId?: string) => {
         e.preventDefault();
         const id = e.dataTransfer.getData('text/plain');
         if (id) {
-            onMoveRegion?.(id, targetGroupId, targetIndex);
+            onMoveRegion?.(id, targetGroupId, anchorId);
         }
     }, [onMoveRegion]);
 
@@ -129,8 +129,8 @@ export function useSliderDragDrop({
             (targetRegionType === 'linear-gradient' || targetRegionType === 'radial-gradient');
 
         if (isGroup) {
-            // Group headers: 20% reorder, 60% group-join
-            const edgeThreshold = height * 0.2;
+            // Group headers: 25% reorder, 50% group-join
+            const edgeThreshold = height * 0.25;
             if (y < edgeThreshold) setDropTarget({ id, position: 'top' });
             else if (y > height - edgeThreshold) setDropTarget({ id, position: 'bottom' });
             else {
@@ -161,7 +161,7 @@ export function useSliderDragDrop({
 
             if (!draggedAlreadyInGroup && !targetAlreadyInGroup) {
                 // Standalone item dragged onto standalone item — can create new groups
-                const edgeThreshold = height * 0.2;
+                const edgeThreshold = height * 0.25;
                 if (y < edgeThreshold) {
                     setGroupingHoverTarget(null);
                     setDropTarget({ id, position: 'top' });
@@ -180,10 +180,12 @@ export function useSliderDragDrop({
                 // Either dragged is already grouped, or target is already grouped.
                 // Don't allow creating nested groups or swallowing standalone items via members.
                 setGroupingHoverTarget(null);
-                setDropTarget({ id, position: y < height / 2 ? 'top' : 'bottom' });
+                const edgeThreshold = height * 0.5;
+                setDropTarget({ id, position: y < edgeThreshold ? 'top' : 'bottom' });
             }
         } else {
-            setDropTarget({ id, position: y < height / 2 ? 'top' : 'bottom' });
+            const edgeThreshold = height * 0.5;
+            setDropTarget({ id, position: y < edgeThreshold ? 'top' : 'bottom' });
         }
     }, [draggingGradientId, draggingItemId, draggingItemSourceGroupId, editedRegions, intersectHoverTarget, clearAllIntersect, clearIntersectHold]);
 
@@ -340,7 +342,15 @@ export function useSliderDragDrop({
             // Determine what groupId the dragged item should inherit at the drop position
             const targetIsGroupHeader = topLevelItems.some(i => 'type' in i && i.type === 'group' && i.id === targetId);
             let newGroupId: string | undefined;
-            if (targetIsGroupHeader) {
+
+            // Optional: If dragged to far left, force ungrouping for an easy way to move items out of groups
+            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const forceUngroup = x < 24;
+
+            if (forceUngroup) {
+                newGroupId = undefined;
+            } else if (targetIsGroupHeader) {
                 // If dropping exactly on the group header...
                 if (position === 'bottom') {
                     newGroupId = targetId; // Join the group
@@ -351,7 +361,7 @@ export function useSliderDragDrop({
                 newGroupId = editedRegions.find(r => r.id === targetId)?.groupId;
             }
 
-            handleDrop(e, newGroupId, insertIdx);
+            handleDrop(e, newGroupId, anchorId);
         }
     }, [clearIntersectHold, dropTarget, intersectTarget, onIntersectGradient, onMoveRegion, onGroupSelected, handleDrop, editedRegions, topLevelItems]);
 

@@ -31,7 +31,7 @@ interface MaskListGroupProps {
     handleGlobalDragEnd: () => void;
     handleDropItem: (e: React.DragEvent, targetId: string, targetType?: string) => void;
     clearAllIntersect: () => void;
-    onMoveRegion?: (id: string, targetGroupId: string | undefined, targetIndex?: number) => void;
+    onMoveRegion?: (id: string, targetGroupId: string | undefined, anchorId?: string) => void;
 
     // Actions
     handleSelectRegion: (id: string, multi: boolean, shift: boolean, batchIds?: string[]) => void;
@@ -215,30 +215,6 @@ export function MaskListGroup(props: MaskListGroupProps) {
                             <Contrast className="h-3.5 w-3.5" />
                         </button>
 
-                        {/* F3: Ungroup All — moves all members back to root */}
-                        <button
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                if (onMoveRegion) {
-                                    // Move each member out to undefined (root) in order
-                                    groupRegions.forEach(r => onMoveRegion(r.id, undefined));
-                                }
-                            }}
-                            className="p-1 text-[#666] hover:text-blue-400 transition-colors"
-                            title="Ungroup all"
-                        >
-                            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-current">
-                                <rect x="1" y="1" width="5" height="5" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
-                                <rect x="10" y="1" width="5" height="5" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
-                                <rect x="1" y="10" width="5" height="5" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
-                                <rect x="10" y="10" width="5" height="5" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
-                                <line x1="8" y1="3.5" x2="10" y2="3.5" stroke="currentColor" strokeWidth="1.4" strokeDasharray="1 1" />
-                                <line x1="8" y1="12.5" x2="10" y2="12.5" stroke="currentColor" strokeWidth="1.4" strokeDasharray="1 1" />
-                                <line x1="3.5" y1="6" x2="3.5" y2="10" stroke="currentColor" strokeWidth="1.4" strokeDasharray="1 1" />
-                                <line x1="12.5" y1="6" x2="12.5" y2="10" stroke="currentColor" strokeWidth="1.4" strokeDasharray="1 1" />
-                            </svg>
-                        </button>
-
                         <button
                             onClick={(e) => {
                                 e.stopPropagation();
@@ -318,10 +294,6 @@ export function MaskListGroup(props: MaskListGroupProps) {
                                     hasChildren={memberClipKids.length > 0}
                                     isExpanded={isMemberExpanded}
                                     onToggleExpand={() => toggleGroup(memberItemId)}
-                                    onUngroup={() => {
-                                        const firstIdx = editedRegions.findIndex(r => r.groupId === groupId);
-                                        onMoveRegion?.(region.id, undefined, firstIdx >= 0 ? firstIdx : 0);
-                                    }}
                                 />
 
                                 {/* Clip children of individual members */}
