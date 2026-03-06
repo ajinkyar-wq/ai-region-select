@@ -7,6 +7,7 @@ import { generateMaskPreview } from '@/lib/mask-preview';
 interface UseMaskOperationsProps {
     image: ImageTileData | null;
     setImage: React.Dispatch<React.SetStateAction<ImageTileData | null>>;
+    activeMask: Region | null;
     setActiveMask: React.Dispatch<React.SetStateAction<Region | null>>;
     setBrushActive: React.Dispatch<React.SetStateAction<boolean>>;
     setDrawingTool: React.Dispatch<React.SetStateAction<'linear-gradient' | 'radial-gradient' | null>>;
@@ -16,6 +17,7 @@ interface UseMaskOperationsProps {
 export function useMaskOperations({
     image,
     setImage,
+    activeMask,
     setActiveMask,
     setBrushActive,
     setDrawingTool,
@@ -136,7 +138,7 @@ export function useMaskOperations({
             return {
                 ...prev,
                 regions: prev.regions.map(r => {
-                    if (r.selected && r.originalMaskData) {
+                    if ((r.selected || r.id === activeMask?.id) && r.originalMaskData) {
                         return {
                             ...r,
                             maskData: new Uint8Array(r.originalMaskData),

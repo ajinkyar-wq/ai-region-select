@@ -332,10 +332,12 @@ export function DraggableToolbar({
                 </button>
               ))}
 
-              {/* Separator / Size Indicator (from Figma) */}
-              {/* Figma has a size circle "50" */}
+              {/* Size indicator — selected when settings panel is open */}
               <div
-                className="flex items-center justify-center size-[36px] shrink-0 cursor-pointer hover:bg-white/5 rounded-[4px]"
+                className={cn(
+                  'flex items-center justify-center size-[36px] shrink-0 cursor-pointer rounded-[4px] transition-colors',
+                  showSettings ? 'bg-[#27272a]' : 'hover:bg-white/5'
+                )}
                 onClick={(e) => {
                   e.stopPropagation();
                   setShowSettings(!showSettings);
@@ -346,14 +348,14 @@ export function DraggableToolbar({
                 </div>
               </div>
 
-              {/* Undo (from Figma) -> repurposed to Reset Mask */}
+              {/* Reset Mask */}
               <button
                 className={getItemClasses(false)}
                 onClick={(e) => {
                   e.stopPropagation();
                   onResetMask?.();
                 }}
-                title="Reset Mask (Undo)"
+                title="Reset Mask"
               >
                 <RotateCcw className="h-[20px] w-[20px]" />
               </button>

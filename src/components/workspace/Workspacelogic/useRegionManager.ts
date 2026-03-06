@@ -22,7 +22,7 @@ export function useRegionManager({
     const autoDissolveGroups = useCallback((regions: Region[]): Region[] => {
         const groupCounts: Record<string, number> = {};
         regions.forEach(r => {
-            if (r.groupId && !r.clipParentId) {
+            if (r.groupId) {
                 groupCounts[r.groupId] = (groupCounts[r.groupId] || 0) + 1;
             }
         });
@@ -110,32 +110,35 @@ export function useRegionManager({
                 if (!prev) return prev;
 
                 let newRegions = [...prev.regions];
-                const movingRegions = newRegions.filter(r => movingRegionIds.includes(r.id));
+                const movingRegionsData = newRegions.filter(r => movingRegionIds.includes(r.id));
 
-                newRegions = newRegions.filter(r => !movingRegionIds.includes(r.id));
+                // ── Update Moving Regions AND their Clip Children ──────────
+                // Map ALL regions to update group IDs where applicable
+                newRegions = newRegions.map(r => {
+                    const isDirectlyMoving = movingRegionIds.includes(r.id);
+                    const isClippedToMoving = r.clipParentId && movingRegionIds.includes(r.clipParentId);
 
-                const updatedMovingRegions = movingRegions.map(r => {
-                    if (isGroupDrag) {
-                        // Moving a whole group as a unit — preserve internal groupIds
-                        return { ...r };
+                    if (isDirectlyMoving || isClippedToMoving) {
+                        if (isGroupDrag && isDirectlyMoving) return r;
+                        return { ...r, groupId: targetGroupId };
                     }
-                    // FIX: Gradients are strictly clip children, they can never join a group themselves.
-                    if (r.type === 'linear-gradient' || r.type === 'radial-gradient') {
-                        return { ...r, groupId: undefined };
-                    }
-                    return { ...r, groupId: targetGroupId };
+                    return r;
                 });
+
+                // Now extract the updated versions of the moving items to re-insert them
+                const updatedMoving = newRegions.filter(r => movingRegionIds.includes(r.id));
+                // Remove them from the list so they can be re-inserted at the target/anchor
+                newRegions = newRegions.filter(r => !movingRegionIds.includes(r.id));
 
                 if (anchorId) {
                     const insertIndex = newRegions.findIndex(r => r.id === anchorId);
                     if (insertIndex !== -1) {
-                        // Insert keeping the dragged items in their current internal relative order
-                        newRegions.splice(insertIndex, 0, ...updatedMovingRegions);
+                        newRegions.splice(insertIndex, 0, ...updatedMoving);
                     } else {
-                        newRegions.push(...updatedMovingRegions);
+                        newRegions.push(...updatedMoving);
                     }
                 } else {
-                    newRegions.push(...updatedMovingRegions);
+                    newRegions.push(...updatedMoving);
                 }
 
                 newRegions = autoDissolveGroups(newRegions);

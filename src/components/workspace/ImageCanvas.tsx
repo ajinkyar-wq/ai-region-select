@@ -41,6 +41,7 @@ interface ImageCanvasProps {
   onEditingModeChange?: (isEditing: boolean) => void;
   canvasInteractionsEnabled?: boolean;
   onActionComplete?: () => void;
+
 }
 
 export function ImageCanvas({
@@ -67,10 +68,18 @@ export function ImageCanvas({
   const mainCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const { isWalkthroughActive, isWaveStopped, stopWave, completeWalkthrough, resetWalkthrough } = useWalkthrough();
+  const { isWalkthroughActive, isWaveStopped, stopWaveCount, stopWave, completeWalkthrough, resetWalkthrough } = useWalkthrough();
 
   const [walkthroughClickPos, setWalkthroughClickPos] = useState<{ x: number; y: number } | null>(null);
   const lastMousePosRef = useRef<{ x: number; y: number } | null>(null);
+  const viewDimensionsRef = useRef<{ width: number; height: number } | null>(null);
+
+  // When wave is stopped from slider panel, re-anchor tooltip to image center on every click
+  useEffect(() => {
+    if (isWaveStopped && viewDimensionsRef.current) {
+      setWalkthroughClickPos({ x: viewDimensionsRef.current.width / 2, y: viewDimensionsRef.current.height / 2 });
+    }
+  }, [stopWaveCount]);
 
   const [showScan, setShowScan] = useState(true);
   const [imageTransform, setImageTransform] = useState<{
@@ -178,6 +187,7 @@ export function ImageCanvas({
     const width = container.offsetWidth;
     const height = container.offsetHeight;
 
+    viewDimensionsRef.current = { width, height };
     setViewDimensions({ width, height });
 
     mainCanvas.width = width;
@@ -400,6 +410,12 @@ export function ImageCanvas({
               setEditingRegion(r);
             }}
             canvasInteractionsEnabled={canvasInteractionsEnabled}
+            isManualToolActive={
+              !!brushActive ||
+              activeMask?.type === 'manual' ||
+              activeEditingRegion?.type === 'linear-gradient' ||
+              activeEditingRegion?.type === 'radial-gradient'
+            }
           />
         )}
 
@@ -490,12 +506,10 @@ export function ImageCanvas({
                 }
               }
 
-              // 4. Recompute background as the exact complement of the person union.
-              //    background[i] = 255 - max(person masks)[i]
-              //    This runs after any person change so background always fills the
-              //    non-person area automatically (erasing a person expands background,
-              //    adding to a person shrinks background).
-              if (anyPersonUpdated) {
+              // 4. Recompute background as complement of person union — but only when
+              //    background was NOT explicitly provided in the updates (e.g. person-only edits).
+              //    If background is in updates it means the editor painted it directly; trust that.
+              if (anyPersonUpdated && !anyBackgroundUpdated) {
                 const freshPersons = newRegions.filter(r => r.type === 'person');
                 const bgIdx = newRegions.findIndex(r => r.type === 'background');
 

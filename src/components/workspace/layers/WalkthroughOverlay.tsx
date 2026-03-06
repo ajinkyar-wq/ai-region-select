@@ -312,7 +312,7 @@ export function WalkthroughOverlay({
                             color: '#474747',
                             lineHeight: '12px',
                         }}>
-                            Double click to edit
+                            Double click on Mask or list to edit
                         </span>
                     </div>
                 </div>

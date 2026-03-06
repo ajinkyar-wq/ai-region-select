@@ -225,7 +225,7 @@ export function SliderPanel({
                 </span>
               </button>
 
-              {/* Object */}
+              {/* Object 
               <button
                 onClick={() => setShowAddMaskMenu(false)}
                 className="flex w-full items-center gap-[6px] px-2 py-2 text-left hover:bg-white/10 rounded"
@@ -237,7 +237,7 @@ export function SliderPanel({
                   <rect x="9.5" y="9.5" width="6" height="6" rx="0.5" stroke="currentColor" />
                 </svg>
                 <span className="text-[12px] font-normal leading-[1.33] text-[#ABABAB]">Object</span>
-              </button>
+              </button>*/}
 
               {/* Linear Gradient */}
               <button

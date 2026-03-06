@@ -2,6 +2,7 @@ import React from 'react';
 import { ChevronDown, ChevronRight, Eye, EyeOff, Trash2, Contrast } from 'lucide-react';
 import type { Region } from '@/types/workspace';
 import { MaskListItem } from './MaskListItem';
+import { ClipChildTree } from './ClipChildTree';
 
 interface MaskListGroupProps {
     groupId: string;
@@ -46,12 +47,11 @@ interface MaskListGroupProps {
 
 export function MaskListGroup(props: MaskListGroupProps) {
     const {
-        groupId, groupRegions, expandedGroups, toggleGroup, clipChildrenByParent, editedRegions,
-        globalIndexRef, dropTarget, setDropTarget, intersectTarget, intersectHoverTarget,
-        groupingHoverTarget,
-        draggingItemSourceGroupId, draggingItemId, draggingGradientId, setDraggingItemId, setDraggingGradientId,
+        groupId, groupRegions, expandedGroups, toggleGroup, clipChildrenByParent,
+        globalIndexRef, dropTarget, intersectTarget, intersectHoverTarget,
+        groupingHoverTarget, draggingItemId, draggingGradientId,
         handleDragStart, handleDragOverItem, handleDragLeave, handleGlobalDragEnd, handleDropItem,
-        clearAllIntersect, onMoveRegion, handleSelectRegion, onSelectBatchRegions, onActivateRegion,
+        handleSelectRegion, onActivateRegion,
         onToggleVisibility, onToggleBatchVisibility, onDeleteRegion, onDeleteGroup, onInvertMask
     } = props;
 
@@ -66,14 +66,12 @@ export function MaskListGroup(props: MaskListGroupProps) {
     return (
         <div key={groupId} className="flex flex-col relative">
 
-
-
-            {/* Insertion Lines for Group */}
+            {/* Insertion Line Top */}
             {isDropTarget && dropTarget.position === 'top' && (
                 <div className="absolute top-0 left-0 right-0 h-[2px] bg-blue-500 z-50" />
             )}
 
-            {/* ── INTERACTION STATES (Copied from OutlinerItem) ── */}
+            {/* ── INTERACTION STATES ── */}
 
             {/* 1. Full-row amber flash/wipe (Intersect Target) */}
             {intersectTarget === groupId && (
@@ -122,14 +120,11 @@ export function MaskListGroup(props: MaskListGroupProps) {
                     const multi = e.metaKey || e.ctrlKey;
                     const shift = e.shiftKey;
 
-                    // Collect all IDs to select: Group members + Intersected Gradients
-                    // Include clip children of the GROUP and of each individual member.
                     const memberIds = groupRegions.map(r => r.id);
                     const groupClipChildIds = (clipChildrenByParent[groupId] || []).map(c => c.id);
                     const memberClipChildIds = groupRegions.flatMap(r => (clipChildrenByParent[r.id] || []).map(c => c.id));
                     const allIdsToSelect = [...memberIds, ...groupClipChildIds, ...memberClipChildIds];
 
-                    // Route through handleSelectRegion so lastSelectedId is tracked for shift-range-select
                     handleSelectRegion(groupId, multi, shift, allIdsToSelect);
                 }}
             >
@@ -139,16 +134,15 @@ export function MaskListGroup(props: MaskListGroupProps) {
                             e.stopPropagation();
                             toggleGroup(groupId);
                         }}
-                        className="p-0.5 hover:bg-white/10 rounded"
+                        className="p-1 text-[#ABABAB] hover:text-white transition-colors"
                     >
                         {isExpanded ? (
-                            <ChevronDown className="h-3 w-3 text-[#ABABAB]" />
+                            <ChevronDown className="h-3.5 w-3.5" />
                         ) : (
-                            <ChevronRight className="h-3 w-3 text-[#ABABAB]" />
+                            <ChevronRight className="h-3.5 w-3.5" />
                         )}
                     </button>
 
-                    {/* Group Icon */}
                     <div className="w-4 h-4 flex-shrink-0 flex items-center justify-center">
                         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-[#E2E2E2]">
                             <path d="M1.75 3.5C2 3.5 1.75 3.5 1.75 3.5H5.25L6.125 4.375H12.25V10.5H1.75V3.5Z" fill="currentColor" fillOpacity="0.8" stroke="currentColor" strokeWidth="1" />
@@ -156,7 +150,6 @@ export function MaskListGroup(props: MaskListGroupProps) {
                     </div>
                     <span className="text-[13px] text-[#E2E2E2] truncate">Mask Group</span>
 
-                    {/* CLIP COUNT BADGE — includes group-level + member-level clip children */}
                     {(() => {
                         const totalClipCount =
                             (clipChildrenByParent[groupId] || []).length +
@@ -172,7 +165,6 @@ export function MaskListGroup(props: MaskListGroupProps) {
                     })()}
                 </div>
 
-                {/* HOVER BADGES */}
                 {intersectHoverTarget === groupId && intersectTarget !== groupId && (
                     <div
                         className="absolute inset-0 flex items-center justify-center pointer-events-none z-30"
@@ -201,7 +193,6 @@ export function MaskListGroup(props: MaskListGroupProps) {
                     </div>
                 )}
 
-                {/* Normal Controls */}
                 {!intersectTarget && !intersectHoverTarget && (
                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button
@@ -214,7 +205,6 @@ export function MaskListGroup(props: MaskListGroupProps) {
                         >
                             <Contrast className="h-3.5 w-3.5" />
                         </button>
-
                         <button
                             onClick={(e) => {
                                 e.stopPropagation();
@@ -224,7 +214,6 @@ export function MaskListGroup(props: MaskListGroupProps) {
                         >
                             <Trash2 className="h-3.5 w-3.5" />
                         </button>
-
                         <button
                             onClick={(e) => {
                                 e.stopPropagation();
@@ -238,10 +227,8 @@ export function MaskListGroup(props: MaskListGroupProps) {
                 )}
             </div>
 
-            {/* Group Children */}
             {isExpanded && (
                 <div className="flex flex-col ml-5">
-                    {/* Standard Group Members */}
                     {groupRegions.map((region) => {
                         const itemIndex = globalIndexRef.current++;
                         const memberClipKids = clipChildrenByParent[region.id] || [];
@@ -272,16 +259,8 @@ export function MaskListGroup(props: MaskListGroupProps) {
                                     onDrop={(e) => handleDropItem(e, region.id, region.type)}
                                     isChild={true}
                                     dropTarget={dropTarget.id === region.id ? dropTarget.position : null}
-                                    isIntersectTarget={
-                                        // B6: member row shows amber if it is directly targeted
-                                        // OR if the whole group is the intersect target
-                                        intersectTarget === region.id || intersectTarget === groupId
-                                    }
-                                    isIntersectHover={
-                                        (intersectHoverTarget === region.id || intersectHoverTarget === groupId)
-                                        && intersectTarget !== region.id
-                                        && intersectTarget !== groupId
-                                    }
+                                    isIntersectTarget={intersectTarget === region.id || intersectTarget === groupId}
+                                    isIntersectHover={(intersectHoverTarget === region.id || intersectHoverTarget === groupId) && intersectTarget !== region.id && intersectTarget !== groupId}
                                     isGroupingHover={groupingHoverTarget === region.id}
                                     isDraggingGradient={!!draggingGradientId}
                                     isDragSource={draggingItemId === region.id}
@@ -296,39 +275,30 @@ export function MaskListGroup(props: MaskListGroupProps) {
                                     onToggleExpand={() => toggleGroup(memberItemId)}
                                 />
 
-                                {/* Clip children of individual members */}
-                                {isMemberExpanded && memberClipKids.length > 0 && (
-                                    <div
-                                        className="relative ml-6"
-                                        style={{ borderLeft: '1.5px dashed rgba(251,146,60,0.4)' }}
-                                    >
-                                        {memberClipKids.map((child) => {
-                                            const childIndex = globalIndexRef.current++;
-                                            return (
-                                                <div key={child.id} className="relative flex items-center">
-                                                    <div
-                                                        className="absolute left-0 top-1/2 w-3.5 flex-shrink-0"
-                                                        style={{ height: '1px', background: 'rgba(251,146,60,0.4)' }}
-                                                    />
-                                                    <div className="flex-1 pl-3.5">
-                                                        <MaskListItem
-                                                            region={child}
-                                                            index={childIndex}
-                                                            onSelect={(multi, shift) => {
-                                                                handleSelectRegion(child.id, multi, shift!);
-                                                                if (!multi && !shift) onActivateRegion?.(child.id);
-                                                            }}
-                                                            onActivate={() => onActivateRegion?.(child.id)}
-                                                            onToggleVis={() => onToggleVisibility(child.id)}
-                                                            onDelete={() => onDeleteRegion(child.id)}
-                                                            isClipChild={true}
-                                                        />
-                                                    </div>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                )}
+                                <ClipChildTree
+                                    parentId={region.id}
+                                    level={1}
+                                    isParentExpanded={isMemberExpanded}
+                                    clipChildrenByParent={clipChildrenByParent}
+                                    globalIndexRef={globalIndexRef}
+                                    expandedGroups={expandedGroups}
+                                    toggleGroup={toggleGroup}
+                                    handleSelectRegion={handleSelectRegion}
+                                    onActivateRegion={onActivateRegion}
+                                    onToggleVisibility={onToggleVisibility}
+                                    onDeleteRegion={onDeleteRegion}
+                                    handleDragStart={handleDragStart}
+                                    handleGlobalDragEnd={handleGlobalDragEnd}
+                                    handleDragOverItem={handleDragOverItem}
+                                    handleDragLeave={handleDragLeave}
+                                    handleDropItem={handleDropItem}
+                                    dropTarget={dropTarget}
+                                    intersectTarget={intersectTarget}
+                                    intersectHoverTarget={intersectHoverTarget}
+                                    draggingItemId={draggingItemId}
+                                    draggingGradientId={draggingGradientId}
+                                    isInsideGroupMember={true}
+                                />
 
                                 {dropTarget.id === region.id && dropTarget.position === 'bottom' && (
                                     <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-blue-500 z-50" />
@@ -337,41 +307,32 @@ export function MaskListGroup(props: MaskListGroupProps) {
                         );
                     })}
 
-                    {/* Group-level clip children (gradients intersected with the whole group) */}
-                    {(clipChildrenByParent[groupId] || []).map((child) => {
-                        const childIndex = globalIndexRef.current++;
-                        return (
-                            <div key={child.id} className="relative flex items-center pl-5">
-                                <div className="absolute left-[18px] top-0 bottom-0 w-[1px]"
-                                    style={{ borderLeft: '1.5px dashed rgba(251,146,60,0.35)' }}
-                                />
-                                <div className="absolute left-[18px] top-1/2 w-3 h-px"
-                                    style={{ background: 'rgba(251,146,60,0.35)', top: '50%' }}
-                                />
-
-                                <div className="flex-1">
-                                    <MaskListItem
-                                        region={child}
-                                        index={childIndex}
-                                        onSelect={(multi, shift) => {
-                                            handleSelectRegion(child.id, multi, shift!);
-                                            if (!multi && !shift) {
-                                                onActivateRegion?.(child.id);
-                                            }
-                                        }}
-                                        onActivate={() => onActivateRegion?.(child.id)}
-                                        onToggleVis={() => onToggleVisibility(child.id)}
-                                        onDelete={() => onDeleteRegion(child.id)}
-                                        isClipChild={true}
-                                    />
-                                </div>
-                            </div>
-                        );
-                    })}
+                    <ClipChildTree
+                        parentId={groupId}
+                        level={1}
+                        isParentExpanded={isExpanded}
+                        clipChildrenByParent={clipChildrenByParent}
+                        globalIndexRef={globalIndexRef}
+                        expandedGroups={expandedGroups}
+                        toggleGroup={toggleGroup}
+                        handleSelectRegion={handleSelectRegion}
+                        onActivateRegion={onActivateRegion}
+                        onToggleVisibility={onToggleVisibility}
+                        onDeleteRegion={onDeleteRegion}
+                        handleDragStart={handleDragStart}
+                        handleGlobalDragEnd={handleGlobalDragEnd}
+                        handleDragOverItem={handleDragOverItem}
+                        handleDragLeave={handleDragLeave}
+                        handleDropItem={handleDropItem}
+                        dropTarget={dropTarget}
+                        intersectTarget={intersectTarget}
+                        intersectHoverTarget={intersectHoverTarget}
+                        draggingItemId={draggingItemId}
+                        draggingGradientId={draggingGradientId}
+                    />
                 </div>
             )}
 
-            {/* Insertion Line Bottom */}
             {isDropTarget && dropTarget.position === 'bottom' && (
                 <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-blue-500 z-50" />
             )}

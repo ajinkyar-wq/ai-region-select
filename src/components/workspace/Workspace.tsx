@@ -14,6 +14,7 @@ import { useKeyboardShortcuts } from './Workspacelogic/useKeyboardShortcuts';
 import { useRegionManager } from './Workspacelogic/useRegionManager';
 import { useMaskOperations } from './Workspacelogic/useMaskOperations';
 import { useGradientOperations } from './Workspacelogic/useGradientOperations';
+import { useWalkthrough } from './Workspacelogic/useWalkthrough';
 import { generateMaskPreview } from '@/lib/mask-preview';
 
 export function Workspace() {
@@ -39,6 +40,8 @@ export function Workspace() {
 
   // Canvas Interactions Toggle — when false, new canvas drawing (gradient drag) is disabled
   const [canvasInteractionsEnabled, setCanvasInteractionsEnabled] = useState(true);
+
+  const { isWalkthroughActive, isWaveStopped, stopWave, completeWalkthrough } = useWalkthrough();
 
   // Clipboard State
   const [clipboard, setClipboard] = useState<Region[]>([]);
@@ -67,6 +70,7 @@ export function Workspace() {
   } = useMaskOperations({
     image,
     setImage,
+    activeMask,
     setActiveMask,
     setBrushActive,
     setDrawingTool,
@@ -134,6 +138,9 @@ export function Workspace() {
       ...image,
       regions: newRegions
     });
+
+    // Single click in slider panel: stop wave animation
+    if (isWalkthroughActive) stopWave();
 
     // Sync Activation if activeId is provided (e.g. from single-click or Shift-Click)
     if (activeId) {
@@ -277,7 +284,7 @@ export function Workspace() {
               {image && (brushActive || (isLocalEditing && activeMask && activeMask.type !== 'linear-gradient' && activeMask.type !== 'radial-gradient')) && (
                 <DraggableToolbar
                   containerRef={containerRef}
-                  activeId={(brushActive && activeMask?.type === 'manual') ? (brushMode === 'erase' ? 'eraser' : 'brush') : 'move'}
+                  activeId={brushMode === 'erase' ? 'eraser' : 'brush'}
                   onActiveChange={(id) => {
                     if (id === 'brush') {
                       setBrushActive(true);
@@ -458,6 +465,9 @@ export function Workspace() {
                 if (!image) return;
                 const region = image.regions.find(r => r.id === id);
                 if (!region) return;
+
+                // Double Click: complete walkthrough (parity with canvas double-click)
+                if (isWalkthroughActive) completeWalkthrough();
 
                 // Explicit Activation -> Edit Mode
                 setActiveMask(region);

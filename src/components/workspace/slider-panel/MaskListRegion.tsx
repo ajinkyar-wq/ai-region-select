@@ -1,6 +1,7 @@
 import React from 'react';
 import type { Region } from '@/types/workspace';
 import { MaskListItem } from './MaskListItem';
+import { ClipChildTree } from './ClipChildTree';
 
 interface MaskListRegionProps {
     region: Region;
@@ -86,45 +87,30 @@ export function MaskListRegion(props: MaskListRegionProps) {
                 onToggleExpand={() => toggleGroup(singleItemId)}
             />
 
-            {/* Render Clip Children (Intersected Gradients) for Single Item */}
-            {isSingleItemExpanded && clipKids.map((child, idx) => {
-                const childIndex = globalIndexRef.current++;
-                const isLastChild = idx === clipKids.length - 1;
-
-                return (
-                    <div key={child.id} className="relative flex items-center pl-5">
-                        {/* Vertical Line Segment */}
-                        <div
-                            className="absolute left-[8px] top-0 w-[1px]"
-                            style={{
-                                height: isLastChild ? '50%' : '100%',
-                                borderLeft: '1.5px dashed rgba(251,146,60,0.35)'
-                            }}
-                        />
-                        {/* Horizontal Line Segment */}
-                        <div className="absolute left-[8px] top-1/2 w-3 h-px"
-                            style={{ background: 'rgba(251,146,60,0.35)', top: '50%' }}
-                        />
-
-                        <div className="flex-1">
-                            <MaskListItem
-                                region={child}
-                                index={childIndex}
-                                onSelect={(multi, shift) => {
-                                    handleSelectRegion(child.id, multi, shift!);
-                                    if (!multi && !shift) {
-                                        onActivateRegion?.(child.id);
-                                    }
-                                }}
-                                onActivate={() => onActivateRegion?.(child.id)}
-                                onToggleVis={() => onToggleVisibility(child.id)}
-                                onDelete={() => onDeleteRegion(child.id)}
-                                isClipChild={true}
-                            />
-                        </div>
-                    </div>
-                );
-            })}
+            {/* Render Clip Children recursively */}
+            <ClipChildTree
+                parentId={region.id}
+                level={1}
+                isParentExpanded={isSingleItemExpanded}
+                clipChildrenByParent={clipChildrenByParent}
+                globalIndexRef={globalIndexRef}
+                expandedGroups={expandedGroups}
+                toggleGroup={toggleGroup}
+                handleSelectRegion={handleSelectRegion}
+                onActivateRegion={onActivateRegion}
+                onToggleVisibility={onToggleVisibility}
+                onDeleteRegion={onDeleteRegion}
+                handleDragStart={handleDragStart}
+                handleGlobalDragEnd={handleGlobalDragEnd}
+                handleDragOverItem={handleDragOverItem}
+                handleDragLeave={handleDragLeave}
+                handleDropItem={handleDropItem}
+                dropTarget={dropTarget}
+                intersectTarget={intersectTarget}
+                intersectHoverTarget={intersectHoverTarget}
+                draggingItemId={draggingItemId}
+                draggingGradientId={draggingGradientId}
+            />
 
             {isDropTarget && dropTarget.position === 'bottom' && (
                 <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-blue-500 z-50" />

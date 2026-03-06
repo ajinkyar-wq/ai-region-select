@@ -49,7 +49,7 @@ export function useSliderDragDrop({
         e.dataTransfer.setData('text/plain', id);
         setDraggingItemId(id);
         setDraggingItemType(regionType ?? null);
-        if (regionType === 'linear-gradient' || regionType === 'radial-gradient') {
+        if (regionType === 'linear-gradient' || regionType === 'radial-gradient' || regionType === 'manual') {
             e.dataTransfer.setData('gradient-intersect', id);
             setDraggingGradientId(id);
         } else {
@@ -76,11 +76,7 @@ export function useSliderDragDrop({
         e.stopPropagation();
 
         const isGradientDrag = !!draggingGradientId;
-        // FIX F2: Only block intersect if the gradient is already clipped (clipParentId set), NOT just grouped
-        const draggingGradientIsClipped = !!editedRegions.find(r => r.id === draggingGradientId)?.clipParentId;
-
         const isValidIntersectTarget = isGradientDrag &&
-            !(isGroup && draggingGradientIsClipped) &&
             targetRegionType &&
             targetRegionType !== 'linear-gradient' &&
             targetRegionType !== 'radial-gradient';
@@ -126,7 +122,7 @@ export function useSliderDragDrop({
         const isPlainMaskTarget = !!targetRegionType;
         // Gradient dragged over another gradient — allow grouping via center zone
         const isGradientOverGradient = isGradientDrag &&
-            (targetRegionType === 'linear-gradient' || targetRegionType === 'radial-gradient');
+            (targetRegionType === 'linear-gradient' || targetRegionType === 'radial-gradient' || targetRegionType === 'manual');
 
         if (isGroup) {
             // Group headers: 25% reorder, 50% group-join

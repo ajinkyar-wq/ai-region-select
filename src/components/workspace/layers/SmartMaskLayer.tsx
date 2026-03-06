@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import type { ImageTileData, Region } from '@/types/workspace';
 import { getMaskCenter } from '@/lib/mask-analysis';
 
@@ -22,6 +22,7 @@ interface SmartMaskLayerProps {
     onEnterLocalEdit?: (region: Region) => void;
     canvasInteractionsEnabled?: boolean;
     isWalkthroughActive?: boolean;
+    isManualToolActive?: boolean;
 }
 
 // ─── Erosion ──────────────────────────────────────────────────────────────────
@@ -334,6 +335,7 @@ export function SmartMaskLayer({
     onEnterLocalEdit,
     canvasInteractionsEnabled = true,
     isWalkthroughActive = false,
+    isManualToolActive = false,
 }: SmartMaskLayerProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     // Cache persists across renders; checksum-based invalidation handles mask edits
@@ -389,8 +391,10 @@ export function SmartMaskLayer({
             if (r.type === 'background' && !backgroundEnabled) return false;
             if (r.type === 'manual' || r.type === 'linear-gradient' || r.type === 'radial-gradient') return false;
             if (!canvasInteractionsEnabled) {
-                if (r.type === 'background' || r.type === 'people-group') return r.hasEdits !== false;
-                return !!r.hasEdits;
+                // When canvas is off, still show regions that have edits OR are currently selected
+                // (prevents selections made before toggle-off from disappearing visually)
+                if (r.type === 'background' || r.type === 'people-group') return r.hasEdits !== false || !!r.selected;
+                return !!r.hasEdits || !!r.selected;
             }
             return r.visible;
         });
@@ -398,7 +402,7 @@ export function SmartMaskLayer({
         // Pre-compute clip-children map: parentId -> gradient regions clipped to it
         const clipChildrenByParent: Record<string, Region[]> = {};
         tile.regions.forEach(r => {
-            if (r.clipParentId && (r.type === 'linear-gradient' || r.type === 'radial-gradient') && r.visible) {
+            if (r.clipParentId && (r.type === 'linear-gradient' || r.type === 'radial-gradient' || r.type === 'manual') && r.visible) {
                 if (!clipChildrenByParent[r.clipParentId]) clipChildrenByParent[r.clipParentId] = [];
                 clipChildrenByParent[r.clipParentId].push(r);
             }
@@ -407,7 +411,7 @@ export function SmartMaskLayer({
         // by resolving which group members have maskData
         const clipChildrenByGroup: Record<string, Region[]> = {};
         tile.regions.forEach(r => {
-            if (r.clipParentId && (r.type === 'linear-gradient' || r.type === 'radial-gradient') && r.visible) {
+            if (r.clipParentId && (r.type === 'linear-gradient' || r.type === 'radial-gradient' || r.type === 'manual') && r.visible) {
                 // Check if this clipParentId is actually a groupId
                 const isGroupId = !tile.regions.some(p => p.id === r.clipParentId) &&
                     tile.regions.some(p => p.groupId === r.clipParentId);
@@ -444,77 +448,104 @@ export function SmartMaskLayer({
                     : 1.5;                                                     // selected only: thin
 
 
-            // Collect all clip-children for this region (direct + via group)
-            const directClipKids = clipChildrenByParent[region.id] || [];
-            const groupClipKids = region.groupId ? (clipChildrenByGroup[region.groupId] || []) : [];
-            const allClipKids = [...directClipKids, ...groupClipKids];
+            // Helper to recursively compute the UNION of all effective branches starting from a set of clip-children.
+            const getUnionOfClipBranches = (kids: Region[], baseW: number, baseH: number): Uint8Array | null => {
+                if (kids.length === 0) return null;
 
-            if (allClipKids.length > 0) {
-                // ── Intersection rendering ──────────────────────────────────────
-                // Show the INTERSECTION of the parent mask with each gradient.
-                // For each clip-child: compute parent ∩ gradient and render it.
-                // This gives the user a clear view of the effective mask regions.
+                const union = new Uint8Array(baseW * baseH);
+                let hasData = false;
 
-                // First, render a dimmed version of the parent mask as context
-                // REMOVED per user request: "other side of gradient needs to be blank"
-                // renderMask(ctx, mask, w, h, rC, gC, bC, overlayAlpha * 0.3, destX, destY, destW, destH);
+                for (const kid of kids) {
+                    // Recursive call: what is the kid's own branch shape?
+                    const kidEffective = getEffectiveMaskUnion(kid.id, kid.maskData, kid.maskWidth, kid.maskHeight);
+                    const kW = kid.maskWidth;
+                    const kH = kid.maskHeight;
 
-                // Then render each intersection at full overlay alpha
-                allClipKids.forEach(child => {
-                    // Compute intersection: min(parent[pixel], gradient[pixel]) at each pixel
-                    // We need to resample both masks to the same resolution.
-                    // Use the parent mask dimensions as the target.
-                    const iW = w;
-                    const iH = h;
-                    const intersected = new Uint8Array(iW * iH);
-
-                    const cW = child.maskWidth;
-                    const cH = child.maskHeight;
-
-                    for (let py = 0; py < iH; py++) {
-                        for (let px = 0; px < iW; px++) {
-                            // Parent mask value at this pixel
-                            const parentVal = mask[py * iW + px];
-                            if (parentVal <= 0) continue;
-
-                            // Sample child mask at corresponding position
-                            const cx = Math.min(Math.floor((px / iW) * cW), cW - 1);
-                            const cy = Math.min(Math.floor((py / iH) * cH), cH - 1);
-                            const childVal = child.maskData[cy * cW + cx];
-
-                            // Intersection = min of both
-                            intersected[py * iW + px] = Math.min(parentVal, childVal);
+                    for (let py = 0; py < baseH; py++) {
+                        for (let px = 0; px < baseW; px++) {
+                            const cx = Math.min(Math.floor((px / baseW) * kW), kW - 1);
+                            const cy = Math.min(Math.floor((py / baseH) * kH), kH - 1);
+                            const val = kidEffective[cy * kW + cx];
+                            if (val > 0) {
+                                union[py * baseW + px] = Math.max(union[py * baseW + px], val);
+                                hasData = true;
+                            }
                         }
                     }
+                }
+                return hasData ? union : null;
+            };
 
-                    // Render the intersection using the region's own color
-                    renderMask(ctx, intersected, iW, iH, rC, gC, bC, overlayAlpha, destX, destY, destW, destH);
+            // Pre-declare a helper to recursively compute the shape of a region as constrained by its own clip children.
+            const getEffectiveMaskUnion = (regionId: string, baseMask: Uint8Array, w: number, h: number): Uint8Array => {
+                const kids = clipChildrenByParent[regionId] || [];
+                if (kids.length === 0) return baseMask;
 
-                    // DELETED: renderContourStroke on intersected mask
-                    // Why? Because gradients produce ugly internal contour lines where they fade out.
-                    // The user wants "just the contour showcase only", which implies the clean original boundary.
-                });
+                const branchUnion = getUnionOfClipBranches(kids, w, h);
+                if (!branchUnion) return baseMask;
+
+                // Intersect the base mask with the union of its clip children
+                const result = new Uint8Array(w * h);
+                for (let i = 0; i < baseMask.length; i++) {
+                    result[i] = Math.min(baseMask[i], branchUnion[i]);
+                }
+                return result;
+            };
+
+            const directClipKids = clipChildrenByParent[region.id] || [];
+            const groupClipKids = region.groupId ? (clipChildrenByGroup[region.groupId] || []) : [];
+
+            // 1. Calculate the union of all group-level constraints
+            const groupUnion = getUnionOfClipBranches(groupClipKids, w, h);
+            // 2. Calculate the union of all direct-level constraints
+            const directUnion = getUnionOfClipBranches(directClipKids, w, h);
+
+            if (groupUnion || directUnion) {
+                const finalMask = new Uint8Array(w * h);
+                for (let i = 0; i < mask.length; i++) {
+                    const baseVal = mask[i];
+                    if (baseVal <= 0) continue;
+
+                    let effectiveVal = baseVal;
+                    // Intersect with Group Union if it exists
+                    if (groupUnion) effectiveVal = Math.min(effectiveVal, groupUnion[i]);
+                    // Intersect with Direct Union if it exists
+                    if (directUnion) effectiveVal = Math.min(effectiveVal, directUnion[i]);
+
+                    finalMask[i] = effectiveVal;
+                }
+
+                if (finalMask.some(v => v > 0)) {
+                    renderMask(ctx, finalMask, w, h, rC, gC, bC, overlayAlpha, destX, destY, destW, destH);
+                }
             } else {
-                // Pass 1 — rubylith wash over the full mask (no clip-children or not selected)
+                // No clips at all — render base rubylith
                 renderMask(ctx, mask, w, h, rC, gC, bC, overlayAlpha, destX, destY, destW, destH);
             }
 
             // Pass 2 — soft contour
-            // The contour is now ALWAYS drawn if the region is actively rendering.
-            // Gradients (allClipKids) are passed in to dictate where the contour fades out visually.
-            const clipMasksPayload = allClipKids.map(k => ({ data: k.maskData, w: k.maskWidth, h: k.maskHeight }));
+            // The contour must be clipped by the EXACT SAME combined constraints as the fill.
+            // We pass a single composite clip mask to renderContourStroke.
+            let compositeContourClip: { data: Uint8Array, w: number, h: number } | undefined = undefined;
+
+            if (groupUnion || directUnion) {
+                const combined = new Uint8Array(w * h);
+                for (let i = 0; i < combined.length; i++) {
+                    let val = 255;
+                    if (groupUnion) val = Math.min(val, groupUnion[i]);
+                    if (directUnion) val = Math.min(val, directUnion[i]);
+                    combined[i] = val;
+                }
+                compositeContourClip = { data: combined, w, h };
+            }
+
+            const clipMasksPayload = compositeContourClip ? [compositeContourClip] : [];
 
             if (region.type === 'person') {
-                // Soft, solid line using the Adobe mask's inherent color (rC, gC, bC)
-                // Drawn on the eroded mask edge to visualize the exact hit-detection 
-                // threshold between the outer (group) and inner (individual) selection logic.
                 const entry = getOrBuildErodedEntry(region, erodeCache.current);
                 const contourMask = entry && entry.eroded ? entry.eroded : mask;
                 renderContourStroke(ctx, contourMask, w, h, rC, gC, bC, contourAlpha255, destX, destY, destW, destH, clipMasksPayload, contourLineWidth);
             } else if (region.type === 'people-group') {
-                // The group mask shouldn't have its own massive outer contour.
-                // Instead, it should draw the *exact same inner contours* that the individual
-                // person masks draw, to show exactly what makes up the group.
                 tile.regions.forEach(ch => {
                     if (ch.type === 'person') {
                         const entry = getOrBuildErodedEntry(ch, erodeCache.current);
@@ -559,10 +590,14 @@ export function SmartMaskLayer({
             const pg = tile.regions.find(r => r.type === 'people-group');
 
             if (!canvasInteractionsEnabled) {
-                // Return the most specific on-list candidate
+                // Return the most specific on-list or selected candidate
                 if (hit === 'inner' && isOnList(region)) return region;
                 if (pg && isOnList(pg)) return pg;
                 if (isOnList(region)) return region;
+                // Also match regions that are currently selected (made before toggle-off)
+                if (hit === 'inner' && region.selected) return region;
+                if (pg && pg.selected) return pg;
+                if (region.selected) return region;
                 return null;
             }
 
@@ -587,17 +622,50 @@ export function SmartMaskLayer({
     const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const hoverAnchorRef = useRef<{ x: number, y: number } | null>(null);
 
-    const handleMouseLeaveCanvas = () => {
+    // ── Shift-key tracking for Manual Tool Mode ───────────────────────────────
+    // Hover is gated behind Shift only when a manual tool (brush/gradient) is active.
+    const isShiftHeldRef = useRef(false);
+
+    const handleMouseLeaveCanvas = useCallback(() => {
         if (hoverTimeoutRef.current) {
             clearTimeout(hoverTimeoutRef.current);
             hoverTimeoutRef.current = null;
         }
         hoverAnchorRef.current = null;
         onHoverChange(null);
-    };
+    }, [onHoverChange]);
+
+    useEffect(() => {
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Shift' && !isShiftHeldRef.current) {
+                isShiftHeldRef.current = true;
+            }
+        };
+        const onKeyUp = (e: KeyboardEvent) => {
+            if (e.key === 'Shift') {
+                isShiftHeldRef.current = false;
+                // If we were gating hover behind Shift and it's released, clear hover
+                if (isManualToolActive) {
+                    onHoverChange(null);
+                }
+            }
+        };
+        window.addEventListener('keydown', onKeyDown);
+        window.addEventListener('keyup', onKeyUp);
+        return () => {
+            window.removeEventListener('keydown', onKeyDown);
+            window.removeEventListener('keyup', onKeyUp);
+        };
+    }, [onHoverChange, isManualToolActive]);
 
     const handleMouseMove = (e: React.MouseEvent) => {
         if (isEditing) return;
+
+        // When a manual tool is active, gate hover behind the Shift key
+        if (isManualToolActive && !isShiftHeldRef.current) {
+            return;
+        }
+
         const coords = toImageCoords(e);
 
         if (!coords) {
@@ -613,11 +681,13 @@ export function SmartMaskLayer({
         }
 
         let isTargetingTool = false;
-        for (const handle of toolHandlesRef.current) {
-            const handleDist = Math.hypot(coords.x - handle.x, coords.y - handle.y);
-            if (handleDist < 80) { // 80px magnetic halo
-                isTargetingTool = true;
-                break;
+        if (!isManualToolActive) {
+            for (const handle of toolHandlesRef.current) {
+                const handleDist = Math.hypot(coords.x - handle.x, coords.y - handle.y);
+                if (handleDist < 80) { // 80px magnetic halo
+                    isTargetingTool = true;
+                    break;
+                }
             }
         }
 
@@ -694,13 +764,14 @@ export function SmartMaskLayer({
         const isMultiToggle = e.ctrlKey || e.metaKey || e.shiftKey;
         const coords = toImageCoords(e);
         if (!coords) {
-            if (!isMultiToggle) onUpdateTile({ regions: tile.regions.map(r => ({ ...r, selected: false })) });
+            // When canvas is off, don't deselect-all from an off-canvas click
+            if (!isMultiToggle && canvasInteractionsEnabled) onUpdateTile({ regions: tile.regions.map(r => ({ ...r, selected: false })) });
             return;
         }
 
         const clickedRegion = resolveHit(coords.x, coords.y);
 
-        if (clickedRegion) {
+        if (clickedRegion && !isManualToolActive) {
             e.stopPropagation();
             const performSelectionUpdate = () => {
                 let updatedRegions = tile.regions.map(r => {
@@ -739,7 +810,11 @@ export function SmartMaskLayer({
             const isDeselecting = isMultiToggle && clickedRegion.selected;
             if (!isDeselecting) onEditRegion(clickedRegion);
         } else {
-            if (!isMultiToggle) onUpdateTile({ regions: tile.regions.map(r => ({ ...r, selected: false })) });
+            // When canvas is off, don't wipe selections on a miss — only panel-listed
+            // items show on canvas and clicking non-listed space should be inert.
+            if (canvasInteractionsEnabled && !isMultiToggle) {
+                onUpdateTile({ regions: tile.regions.map(r => ({ ...r, selected: false })) });
+            }
         }
     };
 

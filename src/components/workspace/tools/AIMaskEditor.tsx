@@ -31,6 +31,10 @@ const GROUP_VIRTUAL_ID = '__group_union__';
 // For every pixel, stores the index into `persons` that "owns" it.
 // Pixels with existing coverage → highest-value person wins.
 // Empty pixels → BFS expansion from covered pixels (nearest-neighbor Voronoi).
+// Max BFS expansion in pixels beyond actual person coverage.
+// Pixels further than this stay -1 (unowned) and the brush ignores them.
+const VORONOI_MAX_RADIUS = 30;
+
 function buildOwnershipMap(
     persons: Array<{ maskData: Uint8Array; maskWidth: number; maskHeight: number }>,
     maskWidth: number,
@@ -38,8 +42,9 @@ function buildOwnershipMap(
 ): Int16Array {
     const size = maskWidth * maskHeight;
     const ownerMap = new Int16Array(size).fill(-1);
+    const depth = new Int32Array(size).fill(-1);
 
-    // Pass 1: assign pixels where a person has coverage
+    // Pass 1: assign pixels where a person has actual coverage — depth 0
     for (let i = 0; i < size; i++) {
         let bestIdx = -1;
         let bestVal = 0;
@@ -47,10 +52,10 @@ function buildOwnershipMap(
             const v = persons[pi].maskData[i];
             if (v > bestVal) { bestVal = v; bestIdx = pi; }
         }
-        if (bestIdx >= 0) ownerMap[i] = bestIdx;
+        if (bestIdx >= 0) { ownerMap[i] = bestIdx; depth[i] = 0; }
     }
 
-    // Pass 2: BFS outward from owned pixels to fill empty space (Voronoi)
+    // Pass 2: BFS outward up to VORONOI_MAX_RADIUS pixels from actual coverage
     const queue: number[] = [];
     for (let i = 0; i < size; i++) {
         if (ownerMap[i] >= 0) queue.push(i);
@@ -60,6 +65,8 @@ function buildOwnershipMap(
     let head = 0;
     while (head < queue.length) {
         const idx = queue[head++];
+        const d = depth[idx];
+        if (d >= VORONOI_MAX_RADIUS) continue;
         const owner = ownerMap[idx];
         const x = idx % maskWidth;
 
@@ -70,15 +77,13 @@ function buildOwnershipMap(
             if (offset === 1 && x === maskWidth - 1) continue;
             if (ownerMap[ni] === -1) {
                 ownerMap[ni] = owner;
+                depth[ni] = d + 1;
                 queue.push(ni);
             }
         }
     }
 
-    // Fallback: if still unassigned (no persons at all), default to 0
-    for (let i = 0; i < size; i++) {
-        if (ownerMap[i] === -1) ownerMap[i] = 0;
-    }
+    // Pixels beyond radius stay -1 — brush will skip them
 
     return ownerMap;
 }
@@ -115,6 +120,8 @@ export function AIMaskEditor({
     const personEntriesRef = useRef<PersonEntry[]>([]);
     // Voronoi ownership map — index into personEntriesRef
     const ownerMapRef = useRef<Int16Array>(new Int16Array(0));
+    // Mutable background mask buffer for direct edits (background edit mode only)
+    const bgMaskRef = useRef<Uint8Array | null>(null);
 
     // For rendering preview
     // Group mode  → GROUP_VIRTUAL_ID → union mask
@@ -160,33 +167,13 @@ export function AIMaskEditor({
             const union = buildUnion();
             maskDataRefs.current.set(GROUP_VIRTUAL_ID, union);
         } else if (isBackgroundEdit) {
-            // Background edit mode: we operate on person masks (background = 255 - union).
-            // Load ALL persons as neighbors — brush modifies them, background is derived.
-            // ADD on background → erase from nearest person (background claims space)
-            // ERASE on background → add to nearest person (persons reclaim space)
-            const bgPersonEntries = allPersons.map(pr => ({
-                id: pr.id,
-                maskData: new Uint8Array(pr.maskData),
-                maskWidth: pr.maskWidth,
-                maskHeight: pr.maskHeight,
-                isActive: false,
-            }));
-            personEntriesRef.current = bgPersonEntries;
-
-            // Always derive the background preview as 255 - union(persons).
-            // Never use backgroundRegion.maskData directly — it may be stale or all-zeros.
-            if (backgroundRegion && bgPersonEntries.length > 0) {
-                const { maskWidth, maskHeight } = bgPersonEntries[0];
-                const size = maskWidth * maskHeight;
-                const bgPreview = new Uint8Array(size);
-                for (let i = 0; i < size; i++) {
-                    let maxPerson = 0;
-                    for (const e of bgPersonEntries) {
-                        if (e.maskData[i] > maxPerson) maxPerson = e.maskData[i];
-                    }
-                    bgPreview[i] = 255 - maxPerson;
+            // Background edit: just paint the background mask directly. No persons, no Voronoi.
+            personEntriesRef.current = [];
+            if (backgroundRegion) {
+                if (!bgMaskRef.current) {
+                    bgMaskRef.current = new Uint8Array(backgroundRegion.maskData);
                 }
-                maskDataRefs.current.set(backgroundRegion.id, bgPreview);
+                maskDataRefs.current.set(backgroundRegion.id, bgMaskRef.current);
             }
         } else {
             // Single-person mode: active person(s) + all other persons as neighbors.
@@ -318,9 +305,12 @@ export function AIMaskEditor({
         end: { x: number, y: number }
     ) => {
         const entries = personEntriesRef.current;
-        if (entries.length === 0) return;
+        const isBackgroundOnlyMode = bgMaskRef.current !== null && entries.length === 0;
 
-        const { maskWidth, maskHeight } = entries[0];
+        if (entries.length === 0 && !isBackgroundOnlyMode) return;
+
+        const refRegion = (isBackgroundOnlyMode && backgroundRegion) ? backgroundRegion : entries[0];
+        const { maskWidth, maskHeight } = refRegion;
         const scaleX = maskWidth / imageTransform.width;
         const scaleY = maskHeight / imageTransform.height;
 
@@ -365,7 +355,19 @@ export function AIMaskEditor({
                     if (brushStrength === 0) continue;
 
                     const idx = py * maskWidth + px;
-                    const ownerIdx = ownerMap.length > idx ? ownerMap[idx] : 0;
+
+                    // Background edit mode: paint directly, no Voronoi
+                    if (isBackgroundOnlyMode) {
+                        if (mode === 'add') {
+                            bgMaskRef.current![idx] = Math.max(bgMaskRef.current![idx], brushStrength);
+                        } else {
+                            bgMaskRef.current![idx] = Math.min(bgMaskRef.current![idx], 255 - brushStrength);
+                        }
+                        continue;
+                    }
+
+                    const ownerIdx = ownerMap.length > idx ? ownerMap[idx] : -1;
+                    if (ownerIdx === -1) continue;
                     const owner = entries[ownerIdx] ?? entries[0];
 
                     if (isGroupEdit) {
@@ -375,16 +377,6 @@ export function AIMaskEditor({
                         } else {
                             const limit = 255 - brushStrength;
                             owner.maskData[idx] = Math.min(owner.maskData[idx], limit);
-                        }
-                    } else if (entries.every(e => !e.isActive)) {
-                        // Background edit mode: all entries are persons (none are "active").
-                        // ADD on background = erase from the nearest person (background claims space)
-                        // ERASE on background = add to the nearest person (persons reclaim space)
-                        if (mode === 'add') {
-                            const limit = 255 - brushStrength;
-                            owner.maskData[idx] = Math.min(owner.maskData[idx], limit);
-                        } else {
-                            owner.maskData[idx] = Math.max(owner.maskData[idx], brushStrength);
                         }
                     } else {
                         // Single-person mode
@@ -439,20 +431,8 @@ export function AIMaskEditor({
         // Update preview
         if (isGroupEdit) {
             maskDataRefs.current.set(GROUP_VIRTUAL_ID, buildUnion());
-        } else if (entries.every(e => !e.isActive)) {
-            // Background edit mode: rebuild background preview as complement of updated persons
-            if (backgroundRegion) {
-                const size = entries.length > 0 ? entries[0].maskData.length : 0;
-                const bgPreview = new Uint8Array(size);
-                for (let i = 0; i < size; i++) {
-                    let maxPerson = 0;
-                    for (const e of entries) {
-                        if (e.maskData[i] > maxPerson) maxPerson = e.maskData[i];
-                    }
-                    bgPreview[i] = Math.max(0, 255 - maxPerson);
-                }
-                maskDataRefs.current.set(backgroundRegion.id, bgPreview);
-            }
+        } else if (isBackgroundOnlyMode) {
+            // bgMaskRef is already mutated in-place by the brush above — nothing to do here.
         } else {
             // Refresh active mask previews
             for (const e of entries) {
@@ -471,9 +451,18 @@ export function AIMaskEditor({
     // ── Commit: emit all modified masks ──────────────────────────────────────
     const commitUpdates = () => {
         const updates: { id: string; maskData: Uint8Array }[] = [];
-        // Always emit all person entries (active + neighbors) since any may have been modified
-        for (const e of personEntriesRef.current) {
-            updates.push({ id: e.id, maskData: new Uint8Array(e.maskData) });
+        const isBackgroundOnlyCommit = personEntriesRef.current.every(e => !e.isActive);
+        if (isBackgroundOnlyCommit) {
+            // Background edit mode: only emit the background mask — do NOT emit persons.
+            // Emitting persons would cause the parent to re-init bgMaskRef from fresh props,
+            // wiping any direct edits made beyond the Voronoi radius.
+            if (backgroundRegion && bgMaskRef.current) {
+                updates.push({ id: backgroundRegion.id, maskData: new Uint8Array(bgMaskRef.current) });
+            }
+        } else {
+            for (const e of personEntriesRef.current) {
+                updates.push({ id: e.id, maskData: new Uint8Array(e.maskData) });
+            }
         }
         onMasksUpdate(updates);
     };
