@@ -1,5 +1,6 @@
 /**
- * YOLOv8 Instance Segmentation
+ * YOLOv8 Instance Segmentation with Face Filtering
+ * Only returns person segments where a face is detected overlapping the person bbox.
  */
 import * as ort from 'onnxruntime-web';
 import type { Region } from '@/types/workspace';
@@ -24,10 +25,22 @@ const IOU_THRESHOLD = 0.45;
 const SCORE_THRESHOLD = 0.25;
 const NUM_CLASS = YOLO_LABELS.length;
 
+const FACE_CONF_THRESHOLD = 0.35;
+const FACE_NMS_IOU_THRESHOLD = 0.45;
+
 let yoloSession: ort.InferenceSession | null = null;
 let nmsSession: ort.InferenceSession | null = null;
 let maskSession: ort.InferenceSession | null = null;
+let faceSession: ort.InferenceSession | null = null;
 let isOpenCVReady = false;
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+// All BBoxes are in MODEL space (0..640 range, after letterbox padding).
+// This is the coordinate system the seg model and face model both use natively.
+type BBox = { x1: number; y1: number; x2: number; y2: number };
+
+// ─── OpenCV ───────────────────────────────────────────────────────────────────
 
 function waitForOpenCV(): Promise<void> {
   return new Promise((resolve) => {
@@ -36,7 +49,6 @@ function waitForOpenCV(): Promise<void> {
       resolve();
       return;
     }
-
     const checkInterval = setInterval(() => {
       if (typeof window !== 'undefined' && (window as any).cv && (window as any).cv.Mat) {
         isOpenCVReady = true;
@@ -47,34 +59,43 @@ function waitForOpenCV(): Promise<void> {
   });
 }
 
+// ─── Model Init ───────────────────────────────────────────────────────────────
+
 async function initializeYOLO() {
-  if (yoloSession && nmsSession && maskSession) {
-    return { yoloSession, nmsSession, maskSession };
+  if (yoloSession && nmsSession && maskSession && faceSession) {
+    return { yoloSession, nmsSession, maskSession, faceSession };
   }
 
   try {
     await waitForOpenCV();
 
-    const [yolo, nms, mask] = await Promise.all([
-      ort.InferenceSession.create('/model/yolov8n-seg.onnx'),
+    const [yolo, nms, mask, face] = await Promise.all([
+      ort.InferenceSession.create('/model/yolov8s-seg.onnx'),
       ort.InferenceSession.create('/model/nms-yolov8.onnx'),
       ort.InferenceSession.create('/model/mask-yolov8-seg.onnx'),
+      ort.InferenceSession.create('/model/yolov8n-face-lindevs.onnx'),
     ]);
 
-    const tensor = new ort.Tensor('float32', new Float32Array(640 * 640 * 3), MODEL_INPUT_SHAPE);
-    await yolo.run({ images: tensor });
+    const warmup = new ort.Tensor('float32', new Float32Array(640 * 640 * 3), MODEL_INPUT_SHAPE);
+    await yolo.run({ images: warmup });
 
     yoloSession = yolo;
     nmsSession = nms;
     maskSession = mask;
+    faceSession = face;
 
-    console.log('YOLOv8 models loaded');
-    return { yoloSession, nmsSession, maskSession };
+    console.log('YOLOv8 seg + face models loaded');
+    console.log('Face model input names:', face.inputNames);
+    console.log('Face model output names:', face.outputNames);
+
+    return { yoloSession, nmsSession, maskSession, faceSession };
   } catch (error) {
     console.error('Failed to load YOLOv8 models:', error);
     throw error;
   }
 }
+
+// ─── Preprocessing ────────────────────────────────────────────────────────────
 
 function preprocessing(
   imageElement: HTMLImageElement,
@@ -124,6 +145,128 @@ function divStride(stride: number, width: number, height: number): [number, numb
   return [fit(width), fit(height)];
 }
 
+// ─── Face Detection ───────────────────────────────────────────────────────────
+
+function iou(a: BBox, b: BBox): number {
+  const ix1 = Math.max(a.x1, b.x1);
+  const iy1 = Math.max(a.y1, b.y1);
+  const ix2 = Math.min(a.x2, b.x2);
+  const iy2 = Math.min(a.y2, b.y2);
+  const interW = Math.max(0, ix2 - ix1);
+  const interH = Math.max(0, iy2 - iy1);
+  const interArea = interW * interH;
+  const aArea = (a.x2 - a.x1) * (a.y2 - a.y1);
+  const bArea = (b.x2 - b.x1) * (b.y2 - b.y1);
+  return interArea / (aArea + bArea - interArea + 1e-6);
+}
+
+function nmsBoxes(detections: { bbox: BBox; conf: number }[], iouThresh: number): BBox[] {
+  detections.sort((a, b) => b.conf - a.conf);
+  const kept: BBox[] = [];
+  const suppressed = new Set<number>();
+  for (let i = 0; i < detections.length; i++) {
+    if (suppressed.has(i)) continue;
+    kept.push(detections[i].bbox);
+    for (let j = i + 1; j < detections.length; j++) {
+      if (!suppressed.has(j) && iou(detections[i].bbox, detections[j].bbox) > iouThresh) {
+        suppressed.add(j);
+      }
+    }
+  }
+  return kept;
+}
+
+/**
+ * Returns face bboxes in MODEL space (0..640).
+ * The face model outputs cx,cy,w,h already in 640x640 space — we just
+ * convert center→corner format. No ratio scaling needed.
+ */
+async function detectFaces(imageElement: HTMLImageElement): Promise<BBox[]> {
+  if (!faceSession) return [];
+
+  const { input } = preprocessing(imageElement, 640, 640);
+  const tensor = new ort.Tensor('float32', input.data32F, MODEL_INPUT_SHAPE);
+
+  const outputMap = await faceSession.run({ images: tensor });
+  input.delete();
+
+  const outKey = Object.keys(outputMap)[0];
+  const out = outputMap[outKey];
+  const data = out.data as Float32Array;
+  const dims = out.dims;
+
+  console.log('Face output key:', outKey, 'dims:', JSON.stringify(dims));
+
+  // Layout detection: [1, 20, 8400] transposed vs [1, 8400, 20] normal
+  let numAnchors: number;
+  let numFeatures: number;
+  let isTransposed: boolean;
+
+  if (dims.length === 3) {
+    if (dims[1] < dims[2]) {
+      isTransposed = true;
+      numFeatures = dims[1];
+      numAnchors = dims[2];
+    } else {
+      isTransposed = false;
+      numAnchors = dims[1];
+      numFeatures = dims[2];
+    }
+  } else {
+    isTransposed = false;
+    numAnchors = dims[0];
+    numFeatures = dims[1] ?? 20;
+  }
+
+  const get = (i: number, f: number): number =>
+    isTransposed ? data[f * numAnchors + i] : data[i * numFeatures + f];
+
+  const detections: { bbox: BBox; conf: number }[] = [];
+
+  for (let i = 0; i < numAnchors; i++) {
+    const conf = get(i, 4);
+    if (conf < FACE_CONF_THRESHOLD) continue;
+
+    const cx = get(i, 0);
+    const cy = get(i, 1);
+    const w = get(i, 2);
+    const h = get(i, 3);
+
+    // Coords are already in 640x640 model space — just convert center→corner
+    detections.push({
+      bbox: { x1: cx - w / 2, y1: cy - h / 2, x2: cx + w / 2, y2: cy + h / 2 },
+      conf,
+    });
+  }
+
+  console.log(`Face detections before NMS: ${detections.length}`);
+  const faces = nmsBoxes(detections, FACE_NMS_IOU_THRESHOLD);
+  console.log(`Face detections after NMS: ${faces.length}`);
+  faces.forEach((f, i) => console.log(`  Face ${i}: x1=${f.x1.toFixed(1)} y1=${f.y1.toFixed(1)} x2=${f.x2.toFixed(1)} y2=${f.y2.toFixed(1)}`));
+
+  return faces;
+}
+
+// ─── Face ↔ Person Overlap ────────────────────────────────────────────────────
+
+/**
+ * Both personBox and faces are in MODEL space (0..640).
+ * personBox here is the RAW box before xRatio scaling — i.e. [x, y, w, h]
+ * from the seg model output which is also in model/maxSize space.
+ */
+function personHasFace(personBox: BBox, faces: BBox[]): boolean {
+  for (const face of faces) {
+    const ix1 = Math.max(personBox.x1, face.x1);
+    const iy1 = Math.max(personBox.y1, face.y1);
+    const ix2 = Math.min(personBox.x2, face.x2);
+    const iy2 = Math.min(personBox.y2, face.y2);
+    if (ix2 > ix1 && iy2 > iy1) return true;
+  }
+  return false;
+}
+
+// ─── Mask Utilities ───────────────────────────────────────────────────────────
+
 function overflowBoxes(box: number[], maxSize: number): number[] {
   box[0] = Math.max(0, box[0]);
   box[1] = Math.max(0, box[1]);
@@ -139,32 +282,20 @@ function hexToRgba(hex: string, alpha: number): number[] {
     : [0, 0, 0, alpha];
 }
 
-/**
- * Winner-takes-all pixel ownership across person regions.
- * Now works correctly with soft 0-255 alpha values instead of binary masks.
- * The winning region keeps its value; all others are zeroed at that pixel.
- */
 function enforcePixelOwnership(regions: Region[]) {
-  if (regions.length <= 1) return regions;
-
+  if (regions.length <= 1) return;
   const size = regions[0].maskWidth * regions[0].maskHeight;
-
   for (let i = 0; i < size; i++) {
     let bestRegion = -1;
     let bestValue = 0;
-
     for (let r = 0; r < regions.length; r++) {
-      const v = regions[r].maskData[i];
-      if (v > bestValue) {
-        bestValue = v;
+      if (regions[r].maskData[i] > bestValue) {
+        bestValue = regions[r].maskData[i];
         bestRegion = r;
       }
     }
-
     for (let r = 0; r < regions.length; r++) {
-      if (r !== bestRegion) {
-        regions[r].maskData[i] = 0;
-      }
+      if (r !== bestRegion) regions[r].maskData[i] = 0;
     }
   }
 }
@@ -172,18 +303,15 @@ function enforcePixelOwnership(regions: Region[]) {
 function unionPersonMasks(personRegions: Region[]): Uint8Array {
   const size = personRegions[0].maskWidth * personRegions[0].maskHeight;
   const out = new Uint8Array(size);
-
   for (const region of personRegions) {
     for (let i = 0; i < size; i++) {
-      // Take max — preserves soft alpha values correctly
-      if (region.maskData[i] > out[i]) {
-        out[i] = region.maskData[i];
-      }
+      if (region.maskData[i] > out[i]) out[i] = region.maskData[i];
     }
   }
-
   return out;
 }
+
+// ─── Main Export ──────────────────────────────────────────────────────────────
 
 export async function segmentImage(
   imageElement: HTMLImageElement,
@@ -207,11 +335,16 @@ export async function segmentImage(
     const { output0, output1 } = await yoloSession.run({ images: tensor });
     const { selected } = await nmsSession.run({ detection: output0, config: config });
 
-    const regions: Region[] = [];
+    // Kick off face detection in parallel
+    const facesPromise = detectFaces(imageElement);
 
     const scale = Math.min(canvas.width / imageElement.width, canvas.height / imageElement.height);
     const scaledWidth = Math.floor(imageElement.width * scale);
     const scaledHeight = Math.floor(imageElement.height * scale);
+
+    const allPersonRegions: Region[] = [];
+    // Store person bboxes in MODEL space (rawBox coords) for face comparison
+    const allPersonBoxesModelSpace: BBox[] = [];
 
     for (let idx = 0; idx < selected.dims[1]; idx++) {
       const data = selected.data.slice(idx * selected.dims[2], (idx + 1) * selected.dims[2]) as any;
@@ -224,29 +357,41 @@ export async function segmentImage(
 
       if (label !== 'person') continue;
 
-      const color = '#FF5050';
-
-      box = overflowBoxes(
+      // rawBox is in MODEL space (0..maxSize ~= 0..640)
+      // This is the SAME space the face model outputs coords in
+      const rawBox = overflowBoxes(
         [box[0] - 0.5 * box[2], box[1] - 0.5 * box[3], box[2], box[3]],
         maxSize
       );
+
+      // Store model-space bbox for face overlap check
+      const personBBoxModelSpace: BBox = {
+        x1: rawBox[0],
+        y1: rawBox[1],
+        x2: rawBox[0] + rawBox[2],
+        y2: rawBox[1] + rawBox[3],
+      };
+
+      // Scaled box for mask processing (image pixel space)
       const [x, y, w, h] = overflowBoxes(
         [
-          Math.floor(box[0] * xRatio),
-          Math.floor(box[1] * yRatio),
-          Math.floor(box[2] * xRatio),
-          Math.floor(box[3] * yRatio),
+          Math.floor(rawBox[0] * xRatio),
+          Math.floor(rawBox[1] * yRatio),
+          Math.floor(rawBox[2] * xRatio),
+          Math.floor(rawBox[3] * yRatio),
         ],
         maxSize
       );
 
+      console.log(`Person ${idx} model-space bbox: x1=${personBBoxModelSpace.x1.toFixed(1)} y1=${personBBoxModelSpace.y1.toFixed(1)} x2=${personBBoxModelSpace.x2.toFixed(1)} y2=${personBBoxModelSpace.y2.toFixed(1)}`);
+
       const maskInput = new ort.Tensor(
         'float32',
-        new Float32Array([...box, ...data.slice(4 + NUM_CLASS)])
+        new Float32Array([...rawBox, ...data.slice(4 + NUM_CLASS)])
       );
       const maskConfig = new ort.Tensor(
         'float32',
-        new Float32Array([maxSize, x, y, w, h, ...hexToRgba(color, 255)])
+        new Float32Array([maxSize, x, y, w, h, ...hexToRgba('#FF5050', 255)])
       );
 
       const { mask_filter } = await maskSession.run({
@@ -258,34 +403,43 @@ export async function segmentImage(
       const mH = mask_filter.dims[0];
       const mW = mask_filter.dims[1];
       const rawMask = new Uint8Array(mH * mW);
-
       for (let i = 0; i < mH * mW; i++) {
-        const alphaValue = mask_filter.data[i * 4 + 3];
-        rawMask[i] = Math.min(255, Math.max(0, Number(alphaValue) || 0));
+        rawMask[i] = Math.min(255, Math.max(0, Number(mask_filter.data[i * 4 + 3]) || 0));
       }
 
-      // Step 1: Resize to display resolution using bilinear interpolation.
-      // INTER_LINEAR produces soft 0-255 values at edges — we preserve these.
       const srcMat = cv.matFromArray(mH, mW, cv.CV_8UC1, rawMask);
       const dstMat = new cv.Mat();
       cv.resize(srcMat, dstMat, new cv.Size(scaledWidth, scaledHeight), 0, 0, cv.INTER_LINEAR);
-
-      // Step 2: Gaussian blur to smooth jagged model output edges.
-      // 5x5 kernel, sigma 1.5 — softens without meaningfully shrinking the selection.
       const blurMat = new cv.Mat();
       cv.GaussianBlur(dstMat, blurMat, new cv.Size(5, 5), 1.5, 1.5, cv.BORDER_DEFAULT);
 
-      // Preserve the soft 0-255 alpha values — NO binary threshold.
-      const scaledMask = new Uint8Array(blurMat.data);
+      // Morphological closing: bridges gaps between disconnected body parts
+      // (e.g. upper body and leg separated by a drum kit).
+      // Kernel size controls how large a gap gets bridged — 60px covers
+      // typical occlusion gaps at display resolution without bleeding too far.
+      const closedMat = new cv.Mat();
+      const kernel = cv.getStructuringElement(
+        cv.MORPH_ELLIPSE,
+        new cv.Size(60, 60)
+      );
+      cv.morphologyEx(blurMat, closedMat, cv.MORPH_CLOSE, kernel);
+      kernel.delete();
 
+      // Re-apply blur after closing to smooth the newly filled edges
+      const finalMat = new cv.Mat();
+      cv.GaussianBlur(closedMat, finalMat, new cv.Size(5, 5), 1.5, 1.5, cv.BORDER_DEFAULT);
+
+      const scaledMask = new Uint8Array(finalMat.data);
       srcMat.delete();
       dstMat.delete();
       blurMat.delete();
+      closedMat.delete();
+      finalMat.delete();
 
-      regions.push({
+      allPersonRegions.push({
         id: `person-${idx}-${Date.now()}`,
         type: 'person',
-        label: `Person ${regions.filter(r => r.type === 'person').length + 1}`,
+        label: `Person ${allPersonRegions.length + 1}`,
         originalMaskData: new Uint8Array(scaledMask),
         maskData: scaledMask,
         maskWidth: scaledWidth,
@@ -295,25 +449,30 @@ export async function segmentImage(
         selected: false,
         hovered: false,
       });
+
+      allPersonBoxesModelSpace.push(personBBoxModelSpace);
     }
 
-    const personRegions = regions.filter(r => r.type === 'person');
+    input.delete();
 
-    // Enforce pixel ownership — works correctly with soft values
+    const faces = await facesPromise;
+    console.log('Detected faces:', faces.length);
+
+    // Filter: keep only persons where a face overlaps in MODEL space
+    const personRegions: Region[] = [];
+    for (let i = 0; i < allPersonRegions.length; i++) {
+      const hasFace = personHasFace(allPersonBoxesModelSpace[i], faces);
+      console.log(`Person ${i} model bbox:`, JSON.stringify(allPersonBoxesModelSpace[i]), hasFace ? 'KEPT' : 'DROPPED');
+      if (hasFace) personRegions.push(allPersonRegions[i]);
+    }
+
+    console.log(`Kept ${personRegions.length} / ${allPersonRegions.length} persons`);
+
+    personRegions.forEach((r, i) => { r.label = `Person ${i + 1}`; });
     enforcePixelOwnership(personRegions);
 
-    // Write back after ownership pass
-    for (let i = 0; i < regions.length; i++) {
-      if (regions[i].type === 'person') {
-        const updated = personRegions.find(p => p.id === regions[i].id);
-        if (updated) regions[i] = updated;
-      }
-    }
-
-    // Build people-group region
     let peopleGroupRegion: Region | null = null;
-
-    if (personRegions.length > 0) {
+    if (personRegions.length > 1) {
       const unionMask = unionPersonMasks(personRegions);
       peopleGroupRegion = {
         id: `people-group-${Date.now()}`,
@@ -330,25 +489,20 @@ export async function segmentImage(
       };
     }
 
-    input.delete();
+    const orderedRegions: Region[] = [];
+    if (peopleGroupRegion) orderedRegions.push(peopleGroupRegion);
+    orderedRegions.push(...personRegions);
 
-    // Step 3: Build background mask as a proportional soft inverse of all person masks.
-    // bgMask[i] = 255 - max(personMasks[i]) so the background edge is the
-    // exact soft complement of the person edges — no hard seam.
     if (personRegions.length > 0) {
       const bgMask = new Uint8Array(scaledWidth * scaledHeight);
-
       for (let i = 0; i < bgMask.length; i++) {
-        let maxPersonAlpha = 0;
-        for (const region of personRegions) {
-          if (region.maskData[i] > maxPersonAlpha) {
-            maxPersonAlpha = region.maskData[i];
-          }
+        let maxAlpha = 0;
+        for (const r of personRegions) {
+          if (r.maskData[i] > maxAlpha) maxAlpha = r.maskData[i];
         }
-        bgMask[i] = 255 - maxPersonAlpha;
+        bgMask[i] = 255 - maxAlpha;
       }
-
-      regions.push({
+      orderedRegions.push({
         id: `background-${Date.now()}`,
         type: 'background',
         label: 'Background',
@@ -363,19 +517,7 @@ export async function segmentImage(
       });
     }
 
-    const orderedRegions: Region[] = [];
-
-    if (peopleGroupRegion) orderedRegions.push(peopleGroupRegion);
-    orderedRegions.push(...personRegions);
-
-    const backgroundRegion = regions.find(r => r.type === 'background');
-    if (backgroundRegion) orderedRegions.push(backgroundRegion);
-
-    console.log(
-      'Created regions:',
-      orderedRegions.map(r => `${r.type}:${r.id}`)
-    );
-
+    console.log('Final regions:', orderedRegions.map(r => `${r.type}:${r.id}`));
     return orderedRegions;
   } catch (error) {
     console.error('Segmentation failed:', error);
@@ -384,5 +526,6 @@ export async function segmentImage(
 }
 
 export function isSegmenterReady(): boolean {
-  return yoloSession !== null && nmsSession !== null && maskSession !== null && isOpenCVReady;
+  return yoloSession !== null && nmsSession !== null && maskSession !== null
+    && faceSession !== null && isOpenCVReady;
 }

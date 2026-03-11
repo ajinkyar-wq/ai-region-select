@@ -5,10 +5,18 @@ export function useRegionHierarchy(regions: Region[]) {
     return useMemo(() => {
         // 1. Filter regions: Show masks with edits OR default system masks (Background/People Group) - UNLESS hasEdits is explicitly false (deleted)
         const editedRegions = regions.filter(r => {
-            // Standard masks: Must have edits
-            if (r.type !== 'people-group' && r.type !== 'background') return r.hasEdits;
-
-            // Default masks: Show if hasEdits is true OR undefined. Hide if explicitly false (Soft Deleted).
+            if (r.type === 'people-group') {
+                const personCount = regions.filter(p => p.type === 'person').length;
+                if (personCount <= 1) return false;
+                return r.hasEdits !== false;
+            }
+            // When only 1 person, show that person by default (no hasEdits required)
+            if (r.type === 'person') {
+                const personCount = regions.filter(p => p.type === 'person').length;
+                if (personCount === 1) return r.hasEdits !== false;
+                return r.hasEdits;
+            }
+            if (r.type !== 'background') return r.hasEdits;
             return r.hasEdits !== false;
         });
 

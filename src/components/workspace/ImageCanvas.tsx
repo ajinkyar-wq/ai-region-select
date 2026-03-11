@@ -467,66 +467,10 @@ export function ImageCanvas({
             canvasWidth={mainCanvasRef.current.width}
             canvasHeight={mainCanvasRef.current.height}
             onMasksUpdate={(updates) => {
-              // AIMaskEditor emits person-level and/or background updates.
-              // Rules:
-              //   1. people-group = union(all persons)  — always recomputed
-              //   2. background cannot overlap persons  — clamp to 0 where any person has coverage
-
-              let newRegions = [...tile.regions];
-
-              // 1. Apply all updates
-              updates.forEach(u => {
-                const idx = newRegions.findIndex(r => r.id === u.id);
-                if (idx !== -1) {
-                  newRegions[idx] = { ...newRegions[idx], maskData: u.maskData };
-                }
+              const newRegions = tile.regions.map(r => {
+                const u = updates.find(u => u.id === r.id);
+                return u ? { ...r, maskData: u.maskData } : r;
               });
-
-              // 2. Determine what changed
-              const updatedTypes = new Set(
-                updates.map(u => tile.regions.find(r => r.id === u.id)?.type)
-              );
-              const anyPersonUpdated = updatedTypes.has('person');
-              const anyBackgroundUpdated = updatedTypes.has('background');
-
-              // 3. Recompute people-group union whenever any person mask changed
-              if (anyPersonUpdated) {
-                const freshPersons = newRegions.filter(r => r.type === 'person');
-                const groupIdx = newRegions.findIndex(r => r.type === 'people-group');
-
-                if (freshPersons.length > 0 && groupIdx !== -1) {
-                  const size = freshPersons[0].maskData.length;
-                  const unionMask = new Uint8Array(size);
-                  for (const pr of freshPersons) {
-                    for (let i = 0; i < size; i++) {
-                      if (pr.maskData[i] > unionMask[i]) unionMask[i] = pr.maskData[i];
-                    }
-                  }
-                  newRegions[groupIdx] = { ...newRegions[groupIdx], maskData: unionMask };
-                }
-              }
-
-              // 4. Recompute background as complement of person union — but only when
-              //    background was NOT explicitly provided in the updates (e.g. person-only edits).
-              //    If background is in updates it means the editor painted it directly; trust that.
-              if (anyPersonUpdated && !anyBackgroundUpdated) {
-                const freshPersons = newRegions.filter(r => r.type === 'person');
-                const bgIdx = newRegions.findIndex(r => r.type === 'background');
-
-                if (freshPersons.length > 0 && bgIdx !== -1) {
-                  const size = freshPersons[0].maskData.length;
-                  const bgMask = new Uint8Array(size);
-                  for (let i = 0; i < size; i++) {
-                    let maxPerson = 0;
-                    for (const pr of freshPersons) {
-                      if (pr.maskData[i] > maxPerson) maxPerson = pr.maskData[i];
-                    }
-                    bgMask[i] = 255 - maxPerson;
-                  }
-                  newRegions[bgIdx] = { ...newRegions[bgIdx], maskData: bgMask };
-                }
-              }
-
               onUpdateTile({ regions: newRegions });
             }}
             mode={brushMode}
