@@ -21,12 +21,12 @@ const YOLO_LABELS = [
 
 const MODEL_INPUT_SHAPE = [1, 3, 640, 640];
 const TOPK = 100;
-const IOU_THRESHOLD = 0.45;
-const SCORE_THRESHOLD = 0.25;
+const IOU_THRESHOLD = 0.80;
+const SCORE_THRESHOLD = 0.01;
 const NUM_CLASS = YOLO_LABELS.length;
 
-const FACE_CONF_THRESHOLD = 0.35;
-const FACE_NMS_IOU_THRESHOLD = 0.45;
+const FACE_CONF_THRESHOLD = 0.1;
+const FACE_NMS_IOU_THRESHOLD = 0.1;
 
 let yoloSession: ort.InferenceSession | null = null;
 let nmsSession: ort.InferenceSession | null = null;
@@ -69,12 +69,18 @@ async function initializeYOLO() {
   try {
     await waitForOpenCV();
 
+    const sessionOptions = {
+      executionProviders: ['webgpu', 'webgl', 'wasm']
+    };
+
+
     const [yolo, nms, mask, face] = await Promise.all([
-      ort.InferenceSession.create('/model/yolov8s-seg.onnx'),
-      ort.InferenceSession.create('/model/nms-yolov8.onnx'),
-      ort.InferenceSession.create('/model/mask-yolov8-seg.onnx'),
-      ort.InferenceSession.create('/model/yolov8n-face-lindevs.onnx'),
+      ort.InferenceSession.create('/model/yolov8s-seg.onnx', sessionOptions),
+      ort.InferenceSession.create('/model/nms-yolov8.onnx', sessionOptions),
+      ort.InferenceSession.create('/model/mask-yolov8-seg.onnx', sessionOptions),
+      ort.InferenceSession.create('/model/yolov8n-face-lindevs.onnx', sessionOptions),
     ]);
+
 
     const warmup = new ort.Tensor('float32', new Float32Array(640 * 640 * 3), MODEL_INPUT_SHAPE);
     await yolo.run({ images: warmup });
@@ -335,9 +341,6 @@ export async function segmentImage(
     const { output0, output1 } = await yoloSession.run({ images: tensor });
     const { selected } = await nmsSession.run({ detection: output0, config: config });
 
-    // Kick off face detection in parallel
-    const facesPromise = detectFaces(imageElement);
-
     const scale = Math.min(canvas.width / imageElement.width, canvas.height / imageElement.height);
     const scaledWidth = Math.floor(imageElement.width * scale);
     const scaledHeight = Math.floor(imageElement.height * scale);
@@ -455,7 +458,7 @@ export async function segmentImage(
 
     input.delete();
 
-    const faces = await facesPromise;
+    const faces = await detectFaces(imageElement);
     console.log('Detected faces:', faces.length);
 
     // Filter: keep only persons where a face overlaps in MODEL space
