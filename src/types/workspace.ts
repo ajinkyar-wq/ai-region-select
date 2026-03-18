@@ -1,4 +1,4 @@
-export type RegionType = 'person' | 'background' | 'manual' | 'people-group' | 'linear-gradient' | 'radial-gradient';
+export type RegionType = 'person' | 'background' | 'manual' | 'people-group' | 'linear-gradient' | 'radial-gradient' | 'subject' | 'landscape';
 
 export interface Region {
   id: string;
@@ -99,7 +99,9 @@ export const DEFAULT_ADJUSTMENTS: RegionAdjustments = {
 
 export const REGION_COLORS: Record<string, string> = {
   person: '#FF5050',
+  subject: '#FF5050',
   background: '#5050FF',
+  landscape: '#5050FF',
   manual: '#50FF50',
   'people-group': '#FF5050',
 };

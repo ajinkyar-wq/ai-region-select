@@ -108,7 +108,11 @@ export function ImageCanvas({
     if (editingRegion) {
       const fresh = tile.regions.find(r => r.id === editingRegion.id);
       if (fresh) {
-        if (fresh !== editingRegion) {
+        // For gradients: exit edit mode when deselected
+        const isGradient = fresh.type === 'linear-gradient' || fresh.type === 'radial-gradient';
+        if (isGradient && !fresh.selected) {
+          setEditingRegion(null);
+        } else if (fresh !== editingRegion) {
           setEditingRegion(fresh);
         }
       } else {
@@ -159,9 +163,11 @@ export function ImageCanvas({
   // DERIVE active editing region from props OR local state (Replaces useEffect sync)
   const activeEditingRegion = editingRegion || (
     brushActive && activeMask && (
-      activeMask.type === 'person' ||
-      activeMask.type === 'people-group' ||
-      activeMask.type === 'background'
+activeMask.type === 'person' ||
+activeMask.type === 'people-group' ||
+activeMask.type === 'background' ||
+activeMask.type === 'subject' ||
+activeMask.type.startsWith('background-')
     ) ? activeMask : null
   );
 
@@ -413,6 +419,8 @@ export function ImageCanvas({
             isManualToolActive={
               !!brushActive ||
               activeMask?.type === 'manual' ||
+              activeMask?.type === 'linear-gradient' ||
+              activeMask?.type === 'radial-gradient' ||
               activeEditingRegion?.type === 'linear-gradient' ||
               activeEditingRegion?.type === 'radial-gradient'
             }
@@ -457,7 +465,10 @@ export function ImageCanvas({
         {activeEditingRegion && activeEditingRegion.type !== 'linear-gradient' && activeEditingRegion.type !== 'radial-gradient' && activeEditingRegion.type !== 'manual' && imageTransform && mainCanvasRef.current && (
           <AIMaskEditor
             // Pass ALL selected AI masks as active targets
-            activeRegions={tile.regions.filter(r => r.selected && (r.type === 'person' || r.type === 'background' || r.type === 'people-group'))}
+            activeRegions={tile.regions.filter(r => r.selected && (r.type === 'person' || r.type === 'people-group' ||
+r.type === 'background' || r.type === 'subject' ||
+r.type.startsWith('background-')
+))}
             // All person regions — needed to redirect people-group edits to individual persons
             allPersonRegions={tile.regions.filter(r => r.type === 'person')}
             // Background region — always a neighbor so it retreats/advances with person edits

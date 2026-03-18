@@ -388,12 +388,12 @@ export function SmartMaskLayer({
 
         const visibleRegions = tile.regions.filter(r => {
             if (r.type === 'person' && !peopleEnabled) return false;
-            if (r.type === 'background' && !backgroundEnabled) return false;
+            if ((r.type === 'background' || r.type.startsWith('background-')) && !backgroundEnabled) return false;
             if (r.type === 'manual' || r.type === 'linear-gradient' || r.type === 'radial-gradient') return false;
             if (!canvasInteractionsEnabled) {
                 // When canvas is off, still show regions that have edits OR are currently selected
                 // (prevents selections made before toggle-off from disappearing visually)
-                if (r.type === 'background' || r.type === 'people-group') return r.hasEdits !== false || !!r.selected;
+                if (r.type === 'background' || r.type.startsWith('background-') || r.type === 'people-group') return r.hasEdits !== false || !!r.selected;
                 return !!r.hasEdits || !!r.selected;
             }
             return r.visible;
@@ -542,9 +542,12 @@ export function SmartMaskLayer({
             const clipMasksPayload = compositeContourClip ? [compositeContourClip] : [];
 
             if (region.type === 'person') {
-                const entry = getOrBuildErodedEntry(region, erodeCache.current);
-                const contourMask = entry && entry.eroded ? entry.eroded : mask;
-                renderContourStroke(ctx, contourMask, w, h, rC, gC, bC, contourAlpha255, destX, destY, destW, destH, clipMasksPayload, contourLineWidth);
+                const hasMultiplePeople = tile.regions.filter(r => r.type === 'person').length > 1;
+                if (hasMultiplePeople) {
+                    const entry = getOrBuildErodedEntry(region, erodeCache.current);
+                    const contourMask = entry && entry.eroded ? entry.eroded : mask;
+                    renderContourStroke(ctx, contourMask, w, h, rC, gC, bC, contourAlpha255, destX, destY, destW, destH, clipMasksPayload, contourLineWidth);
+                }
             } else if (region.type === 'people-group') {
                 tile.regions.forEach(ch => {
                     if (ch.type === 'person') {
@@ -553,7 +556,23 @@ export function SmartMaskLayer({
                         renderContourStroke(ctx, contourMask, ch.maskWidth, ch.maskHeight, rC, gC, bC, contourAlpha255, destX, destY, destW, destH, clipMasksPayload, contourLineWidth);
                     }
                 });
+            } else if (region.type.startsWith('background-')) {
+                const hasMultipleChildren = tile.regions.filter(r => r.type.startsWith('background-')).length > 1;
+                if (hasMultipleChildren) {
+                    const entry = getOrBuildErodedEntry(region, erodeCache.current);
+                    const contourMask = entry && entry.eroded ? entry.eroded : mask;
+                    renderContourStroke(ctx, contourMask, w, h, rC, gC, bC, contourAlpha255, destX, destY, destW, destH, clipMasksPayload, contourLineWidth);
+                }
+            } else if (region.type === 'background') {
+                tile.regions.forEach(ch => {
+                    if (ch.type.startsWith('background-')) {
+                        const entry = getOrBuildErodedEntry(ch, erodeCache.current);
+                        const contourMask = entry && entry.eroded ? entry.eroded : ch.maskData;
+                        renderContourStroke(ctx, contourMask, ch.maskWidth, ch.maskHeight, rC, gC, bC, contourAlpha255, destX, destY, destW, destH, clipMasksPayload, contourLineWidth);
+                    }
+                });
             }
+            // subject: fill only, no contour
         });
 
     }, [tile.regions, imageTransform, hoveredRegionId, isEditing, peopleEnabled, backgroundEnabled, width, height, canvasInteractionsEnabled]);
@@ -573,7 +592,7 @@ export function SmartMaskLayer({
     };
 
     const isOnList = (r: Region) => {
-        if (r.type === 'background' || r.type === 'people-group') return r.hasEdits !== false;
+        if (r.type === 'background' || r.type.startsWith('background-') || r.type === 'people-group') return r.hasEdits !== false;
         return !!r.hasEdits;
     };
 
@@ -582,36 +601,60 @@ export function SmartMaskLayer({
 
         for (let i = tile.regions.length - 1; i >= 0; i--) {
             const region = tile.regions[i];
-            if (region.type !== 'person' || !peopleEnabled) continue;
-            // Always hit-test — never skip. Filter the result after.
-            const hit = hitTestPerson(x, y, region, imageTransform, erodeCache.current);
-            if (!hit) continue;
 
-            const pg = tile.regions.find(r => r.type === 'people-group');
+            if (region.type === 'manual' || region.type === 'linear-gradient' || region.type === 'radial-gradient') continue;
 
-            if (!canvasInteractionsEnabled) {
-                // Return the most specific on-list or selected candidate
-                if (hit === 'inner' && isOnList(region)) return region;
-                if (pg && isOnList(pg)) return pg;
-                if (isOnList(region)) return region;
-                // Also match regions that are currently selected (made before toggle-off)
-                if (hit === 'inner' && region.selected) return region;
-                if (pg && pg.selected) return pg;
-                if (region.selected) return region;
-                return null;
+            if (region.type === 'person') {
+                if (!peopleEnabled) continue;
+                const hit = hitTestPerson(x, y, region, imageTransform, erodeCache.current);
+                if (!hit) continue;
+
+                const pg = tile.regions.find(r => r.type === 'people-group');
+
+                if (!canvasInteractionsEnabled) {
+                    if (hit === 'inner' && isOnList(region)) return region;
+                    if (pg && isOnList(pg)) return pg;
+                    if (isOnList(region)) return region;
+                    if (hit === 'inner' && region.selected) return region;
+                    if (pg && pg.selected) return pg;
+                    if (region.selected) return region;
+                    return null;
+                }
+
+                if (hit === 'inner') return region;
+                return pg ?? region;
             }
 
-            if (hit === 'inner') return region;
-            return pg ?? region;
+            // Skip background in main loop — handle after landscape
+            if (region.type === 'background') continue;
+
+            if (region.type.startsWith('background-')) {
+                const hit = hitTestPerson(x, y, region, imageTransform, erodeCache.current);
+                if (!hit) continue;
+                if (hit === 'inner') return region;
+                const bg = tile.regions.find(r => r.type === 'background');
+                return bg ?? region;
+            }
+
+            // subject and people-group — simple pixel test
+            if (!region.visible) continue;
+            if (!canvasInteractionsEnabled && !isOnList(region) && !region.selected) continue;
+            const scaleX = region.maskWidth / imageTransform.width;
+            const scaleY = region.maskHeight / imageTransform.height;
+            const idx = Math.floor(y * scaleY) * region.maskWidth + Math.floor(x * scaleX);
+            if (idx >= 0 && idx < region.maskData.length && region.maskData[idx] > 30) return region;
         }
 
-        const bg = tile.regions.find(r => r.type === 'background');
-        if (bg && backgroundEnabled) {
-            if (!canvasInteractionsEnabled && !isOnList(bg)) return null;
-            const scaleX = bg.maskWidth / imageTransform.width;
-            const scaleY = bg.maskHeight / imageTransform.height;
-            const idx = Math.floor(y * scaleY) * bg.maskWidth + Math.floor(x * scaleX);
-            if (idx >= 0 && idx < bg.maskData.length && bg.maskData[idx] > 30) return bg;
+        // Background fallback — only if no landscape inner hit claimed the click
+        if (backgroundEnabled) {
+            const bg = tile.regions.find(r => r.type === 'background');
+            if (bg) {
+                if (!canvasInteractionsEnabled && !isOnList(bg) && !bg.selected) return null;
+                const scaleX = bg.maskWidth / imageTransform.width;
+                const scaleY = bg.maskHeight / imageTransform.height;
+                const idx = Math.floor(y * scaleY) * bg.maskWidth + Math.floor(x * scaleX);
+                if (idx >= 0 && idx < bg.maskData.length && bg.maskData[idx] > 30) return bg;
+            }
         }
 
         return null;
@@ -691,7 +734,7 @@ export function SmartMaskLayer({
             }
         }
 
-        if (hit.type !== 'background') {
+        if (hit.type !== 'background' && !hit.type.startsWith('background-')) {
             if (hoverTimeoutRef.current) {
                 clearTimeout(hoverTimeoutRef.current);
                 hoverTimeoutRef.current = null;
@@ -703,7 +746,7 @@ export function SmartMaskLayer({
             return;
         }
 
-        // --- Environmental / Background Logic ---
+        // --- Environmental / Background + Landscape Logic ---
 
         if (isTargetingTool) {
             if (hoverTimeoutRef.current) {
@@ -761,6 +804,7 @@ export function SmartMaskLayer({
     const clickTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const handleCanvasClick = (e: React.MouseEvent) => {
+        if (isManualToolActive && !e.shiftKey) return;
         const isMultiToggle = e.ctrlKey || e.metaKey || e.shiftKey;
         const coords = toImageCoords(e);
         if (!coords) {
@@ -771,7 +815,7 @@ export function SmartMaskLayer({
 
         const clickedRegion = resolveHit(coords.x, coords.y);
 
-        if (clickedRegion && !isManualToolActive) {
+        if (clickedRegion) {
             e.stopPropagation();
             const performSelectionUpdate = () => {
                 let updatedRegions = tile.regions.map(r => {
@@ -810,9 +854,8 @@ export function SmartMaskLayer({
             const isDeselecting = isMultiToggle && clickedRegion.selected;
             if (!isDeselecting) onEditRegion(clickedRegion);
         } else {
-            // When canvas is off, don't wipe selections on a miss — only panel-listed
-            // items show on canvas and clicking non-listed space should be inert.
-            if (canvasInteractionsEnabled && !isMultiToggle) {
+            // When canvas is off or a manual tool is active, don't wipe selections on a miss.
+            if (canvasInteractionsEnabled && !isMultiToggle && !isManualToolActive) {
                 onUpdateTile({ regions: tile.regions.map(r => ({ ...r, selected: false })) });
             }
         }

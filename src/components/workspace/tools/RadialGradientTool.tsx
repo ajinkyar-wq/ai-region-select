@@ -41,13 +41,14 @@ export function RadialGradientTool({
 }: RadialGradientToolProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
+    const [ringCursor, setRingCursor] = useState<string>('nwse-resize');
 
     // Local state for smooth dragging
     const [dragState, setDragState] = useState<{
         center: { x: number, y: number }; // Pixel coords
         radius: { x: number, y: number }; // Pixel radii
         feather: number; // 0-1 Ratio
-        isDragging: 'move-center' | 'resize-outer-n' | 'resize-outer-s' | 'resize-outer-e' | 'resize-outer-w' | 'resize-inner-n' | 'resize-inner-s' | 'resize-inner-e' | 'resize-inner-w' | null;
+        isDragging: 'move-center' | 'resize-outer-n' | 'resize-outer-s' | 'resize-outer-e' | 'resize-outer-w' | 'resize-outer-free' | 'resize-inner-n' | 'resize-inner-s' | 'resize-inner-e' | 'resize-inner-w' | null;
         initialClickOffset?: { x: number; y: number }; // For relative move
         initialRadius?: { x: number, y: number };
         initialCenter?: { x: number, y: number }; // For calculating total delta
@@ -262,6 +263,10 @@ export function RadialGradientTool({
             case 'resize-outer-n': // Top -> Modifies Y
                 newRadius.y = Math.max(5, Math.abs(dy));
                 break;
+            case 'resize-outer-free': // Ring drag -> Modifies both X and Y
+                newRadius.x = Math.max(5, Math.abs(dx));
+                newRadius.y = Math.max(5, Math.abs(dy));
+                break;
 
             // --- Inner Resizing (Feather) ---
             case 'resize-inner-e':
@@ -465,11 +470,32 @@ export function RadialGradientTool({
             <canvas ref={canvasRef} width={imageTransform.width} height={imageTransform.height} className="absolute inset-0 pointer-events-none" />
 
             <svg className="absolute inset-0 w-full h-full visible overflow-visible pointer-events-none">
-                {/* Outer Ring */}
+                {/* Outer Ring — visual */}
                 <ellipse
                     cx={dragState.center.x} cy={dragState.center.y}
                     rx={Math.max(0, dragState.radius.x)} ry={Math.max(0, dragState.radius.y)}
                     fill="none" stroke="rgba(255,255,255,0.8)" strokeWidth="1"
+                />
+                {/* Outer Ring — fat invisible hit area, pick nearest axis to resize */}
+                <ellipse
+                    cx={dragState.center.x} cy={dragState.center.y}
+                    rx={Math.max(0, dragState.radius.x)} ry={Math.max(0, dragState.radius.y)}
+                    fill="none" stroke="transparent" strokeWidth="24"
+                    style={{ pointerEvents: 'stroke', cursor: ringCursor }}
+                    onPointerMove={(e) => {
+                        const rect = containerRef.current?.getBoundingClientRect();
+                        if (!rect || !dragState) return;
+                        const x = e.clientX - rect.left;
+                        const y = e.clientY - rect.top;
+                        const angle = Math.atan2(y - dragState.center.y, x - dragState.center.x) * 180 / Math.PI;
+                        const a = ((angle % 180) + 180) % 180; // 0-180
+                        if (a < 22.5 || a >= 157.5) setRingCursor('ew-resize');
+                        else if (a < 67.5) setRingCursor('nwse-resize');
+                        else if (a < 112.5) setRingCursor('ns-resize');
+                        else setRingCursor('nesw-resize');
+                    }}
+                    onPointerDown={(e) => handlePointerDown(e as any, 'resize-outer-free')}
+                    onClick={(e) => e.stopPropagation()}
                 />
                 {/* Inner Ring */}
                 <ellipse

@@ -476,7 +476,9 @@ export function Workspace() {
                 if (region.type === 'manual') {
                   setBrushActive(true);
                   setBrushMode('add');
-                } else if (region.type === 'person' || region.type === 'people-group' || region.type === 'background') {
+                } else if (region.type === 'person' || region.type === 'people-group' ||
+region.type === 'background' || region.type === 'subject' ||
+region.type.startsWith('background-')) {
                   // AI Masks: Signal Intent to Edit (ImageTile will pick up brushActive + AI type -> Enter Local Editor)
                   setBrushActive(true);
                   setBrushMode('add');

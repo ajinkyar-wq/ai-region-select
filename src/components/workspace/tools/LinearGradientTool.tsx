@@ -369,6 +369,17 @@ export function LinearGradientTool({
     const startLine = getPerpendicularLineCoords(dragState.start, dragState.start, dragState.end);
     const endLine = getPerpendicularLineCoords(dragState.end, dragState.start, dragState.end);
 
+    // Cursor for the perpendicular lines based on their angle
+    const perpAngle = Math.atan2(
+        dragState.end.y - dragState.start.y,
+        dragState.end.x - dragState.start.x
+    ) * 180 / Math.PI;
+    const a = ((perpAngle % 180) + 180) % 180;
+    const lineCursor = a < 22.5 || a >= 157.5 ? 'ew-resize'
+        : a < 67.5 ? 'nwse-resize'
+        : a < 112.5 ? 'ns-resize'
+        : 'nesw-resize';
+
     // Short line for indicator: 80px total length
     const rotateIndicator = getPerpendicularLineCoords(center, dragState.start, dragState.end, 80);
 
@@ -473,10 +484,17 @@ export function LinearGradientTool({
                 <line
                     x1={startLine.x1} y1={startLine.y1}
                     x2={startLine.x2} y2={startLine.y2}
-                    stroke="rgba(200,200,200,0.8)" strokeWidth="1"
-                    className="cursor-move pointer-events-auto hover:stroke-white"
+                    stroke="transparent" strokeWidth="20"
+                    className="pointer-events-auto"
+                    style={{ cursor: lineCursor }}
                     onPointerDown={(e) => handlePointerDown(e, 'rotate-start')}
                     onClick={(e) => e.stopPropagation()}
+                />
+                <line
+                    x1={startLine.x1} y1={startLine.y1}
+                    x2={startLine.x2} y2={startLine.y2}
+                    stroke="rgba(200,200,200,0.8)" strokeWidth="1"
+                    className="pointer-events-none hover:stroke-white"
                 />
 
                 {/* Center Line */}
@@ -500,10 +518,17 @@ export function LinearGradientTool({
                 <line
                     x1={endLine.x1} y1={endLine.y1}
                     x2={endLine.x2} y2={endLine.y2}
-                    stroke="rgba(200,200,200,0.8)" strokeWidth="1"
-                    className="cursor-move pointer-events-auto hover:stroke-white"
+                    stroke="transparent" strokeWidth="20"
+                    className="pointer-events-auto"
+                    style={{ cursor: lineCursor }}
                     onPointerDown={(e) => handlePointerDown(e, 'rotate-end')}
                     onClick={(e) => e.stopPropagation()}
+                />
+                <line
+                    x1={endLine.x1} y1={endLine.y1}
+                    x2={endLine.x2} y2={endLine.y2}
+                    stroke="rgba(200,200,200,0.8)" strokeWidth="1"
+                    className="pointer-events-none hover:stroke-white"
                 />
             </svg>
 
