@@ -1,6 +1,6 @@
 /**
  * Segmentation Pipeline
- * Stage 1: Face detection (working YOLO base) → if faces found → SAM masks per person
+ * Stage 1: Face detection → YOLO instance seg masks per person (face-filtered)
  * Stage 2: U2Net fallback (only if no faces found) → subject mask
  * Stage 3: SegFormer → environment regions (always runs)
  */
@@ -32,7 +32,6 @@ const NUM_CLASS = YOLO_LABELS.length;
 const FACE_CONF_THRESHOLD = 0.65;
 const FACE_NMS_IOU_THRESHOLD = 0.15;
 
-const SAM_SIZE = 1024;
 const U2NET_SIZE = 320;
 const SEGFORMER_SIZE = 1024;
 
@@ -47,9 +46,9 @@ const ENVIRONMENT_CLASSES: Record<number, string> = {
   8: 'vegetation',
   2: 'architecture', 3: 'architecture', 4: 'architecture',
 };
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-// All BBoxes are in MODEL space (0..640 after letterbox padding).
 type BBox = { x1: number; y1: number; x2: number; y2: number };
 
 // ─── Sessions ─────────────────────────────────────────────────────────────────
@@ -58,8 +57,6 @@ let yoloSession: ort.InferenceSession | null = null;
 let nmsSession: ort.InferenceSession | null = null;
 let maskSession: ort.InferenceSession | null = null;
 let faceSession: ort.InferenceSession | null = null;
-let samEncoderSession: ort.InferenceSession | null = null;
-let samDecoderSession: ort.InferenceSession | null = null;
 let u2netSession: ort.InferenceSession | null = null;
 let segformerSession: ort.InferenceSession | null = null;
 let isOpenCVReady = false;
@@ -83,21 +80,17 @@ function waitForOpenCV(): Promise<void> {
 
 async function initSessions() {
   if (yoloSession && nmsSession && maskSession && faceSession &&
-      samEncoderSession && samDecoderSession && u2netSession && segformerSession) return;
+      u2netSession && segformerSession) return;
 
   await waitForOpenCV();
 
   const sessionOptions = { executionProviders: ['webgpu', 'webgl', 'wasm'] };
 
-  // Load all models except U2Net together, then U2Net separately.
-  // U2Net needs wasm-only (ceil_mode MaxPool), and having two different EP configs
-  // in a single Promise.all causes 'multiple calls to initWasm()'.
-const [yolo, nms, face, enc, dec, seg] = await Promise.all([
+  const [yolo, nms, mask, face, seg] = await Promise.all([
     ort.InferenceSession.create('/model/yolov8s-seg.onnx', sessionOptions),
     ort.InferenceSession.create('/model/nms-yolov8.onnx', sessionOptions),
+    ort.InferenceSession.create('/model/mask-yolov8-seg.onnx', sessionOptions),
     ort.InferenceSession.create('/model/yolov8n-face-lindevs.onnx', sessionOptions),
-    ort.InferenceSession.create('/model/mobile_sam_encoder.onnx', sessionOptions),
-    ort.InferenceSession.create('/model/mobile_sam_decoder.onnx', sessionOptions),
     ort.InferenceSession.create('/model/segformer-cityscapes.onnx', sessionOptions),
   ]);
   const u2 = await ort.InferenceSession.create('/model/u2net.quant.onnx', { executionProviders: ['wasm'] });
@@ -105,8 +98,7 @@ const [yolo, nms, face, enc, dec, seg] = await Promise.all([
   const warmup = new ort.Tensor('float32', new Float32Array(640 * 640 * 3), MODEL_INPUT_SHAPE);
   await yolo.run({ images: warmup });
 
-yoloSession = yolo; nmsSession = nms; faceSession = face;
-  samEncoderSession = enc; samDecoderSession = dec;
+  yoloSession = yolo; nmsSession = nms; maskSession = mask; faceSession = face;
   u2netSession = u2; segformerSession = seg;
 
   console.log('All segmentation models loaded');
@@ -197,7 +189,6 @@ function unionPersonMasks(personRegions: Region[]): Uint8Array {
 }
 
 // ─── Face Detection ───────────────────────────────────────────────────────────
-// Returns face bboxes in MODEL space (0..640).
 
 async function detectFaces(imageElement: HTMLImageElement): Promise<BBox[]> {
   if (!faceSession) return [];
@@ -242,20 +233,29 @@ function personHasFace(personBox: BBox, faces: BBox[]): boolean {
   return false;
 }
 
-// ─── YOLO: person bboxes in model space ───────────────────────────────────────
+// ─── Stage 1: YOLO Instance Segmentation ─────────────────────────────────────
 
-async function detectPersonBoxes(imageElement: HTMLImageElement): Promise<BBox[]> {
-  if (!yoloSession || !nmsSession) return [];
+async function runYOLOMasks(
+  imageElement: HTMLImageElement,
+  faces: BBox[],
+  scaledW: number,
+  scaledH: number,
+): Promise<Region[]> {
+  if (!yoloSession || !nmsSession || !maskSession) return [];
+  const cv = (window as any).cv;
 
-  const { input } = preprocessing(imageElement, 640, 640);
+  const [modelWidth, modelHeight] = MODEL_INPUT_SHAPE.slice(2);
+  const maxSize = Math.max(modelWidth, modelHeight);
+
+  const { input, xRatio, yRatio } = preprocessing(imageElement, modelWidth, modelHeight);
   const tensor = new ort.Tensor('float32', input.data32F, MODEL_INPUT_SHAPE);
   const config = new ort.Tensor('float32', new Float32Array([NUM_CLASS, TOPK, IOU_THRESHOLD, SCORE_THRESHOLD]));
-  const { output0 } = await yoloSession.run({ images: tensor });
+
+  const { output0, output1 } = await yoloSession.run({ images: tensor });
   const { selected } = await nmsSession.run({ detection: output0, config });
   input.delete();
 
-  const maxSize = Math.max(...MODEL_INPUT_SHAPE.slice(2));
-  const boxes: BBox[] = [];
+  const personRegions: Region[] = [];
 
   for (let idx = 0; idx < selected.dims[1]; idx++) {
     const d = selected.data.slice(idx * selected.dims[2], (idx + 1) * selected.dims[2]) as any;
@@ -265,116 +265,59 @@ async function detectPersonBoxes(imageElement: HTMLImageElement): Promise<BBox[]
     if (label !== 'person') continue;
 
     const rawBox = overflowBoxes([d[0] - 0.5 * d[2], d[1] - 0.5 * d[3], d[2], d[3]], maxSize);
-    boxes.push({ x1: rawBox[0], y1: rawBox[1], x2: rawBox[0] + rawBox[2], y2: rawBox[1] + rawBox[3] });
-  }
+    const personBBox: BBox = {
+      x1: rawBox[0], y1: rawBox[1],
+      x2: rawBox[0] + rawBox[2], y2: rawBox[1] + rawBox[3],
+    };
 
-  console.log(`YOLO person boxes: ${boxes.length}`);
-  return boxes;
-}
+    if (!personHasFace(personBBox, faces)) continue;
 
-// ─── SAM helpers ──────────────────────────────────────────────────────────────
-// SAM uses ResizeLongestSide(1024): scale so the longest edge == 1024,
-// preserve aspect ratio, then pad the short side to 1024×1024.
-// point_coords fed to the decoder must be in this same resized+padded space.
+    const [x, y, w, h] = overflowBoxes(
+      [
+        Math.floor(rawBox[0] * xRatio),
+        Math.floor(rawBox[1] * yRatio),
+        Math.floor(rawBox[2] * xRatio),
+        Math.floor(rawBox[3] * yRatio),
+      ],
+      maxSize
+    );
 
-function samResizeLongestSide(imgW: number, imgH: number): { newW: number; newH: number; scale: number } {
-  const scale = SAM_SIZE / Math.max(imgW, imgH);
-  return {
-    newW: Math.round(imgW * scale),
-    newH: Math.round(imgH * scale),
-    scale,
-  };
-}
+    const maskInput = new ort.Tensor('float32', new Float32Array([...rawBox, ...d.slice(4 + NUM_CLASS)]));
+    const maskConfig = new ort.Tensor('float32', new Float32Array([maxSize, x, y, w, h, ...hexToRgba('#FF5050', 255)]));
+    const { mask_filter } = await maskSession.run({ detection: maskInput, mask: output1, config: maskConfig });
 
-// apply_coords: scale image-pixel coords → SAM resized space (uniform scale, same for x & y)
-function samApplyCoords(x: number, y: number, imgW: number, imgH: number): [number, number] {
-  const { scale } = samResizeLongestSide(imgW, imgH);
-  return [x * scale, y * scale];
-}
-
-// ─── SAM Encoder ──────────────────────────────────────────────────────────────
-// Resize longest-side → 1024, pad short side to 1024×1024, normalize.
-
-async function runSAMEncoder(imageElement: HTMLImageElement): Promise<ort.Tensor> {
-  const imgW = imageElement.naturalWidth;
-  const imgH = imageElement.naturalHeight;
-  const { newW, newH } = samResizeLongestSide(imgW, imgH);
-
-  // Draw resized image (aspect-ratio preserved) into top-left of 1024×1024 canvas
-  const oc = new OffscreenCanvas(SAM_SIZE, SAM_SIZE);
-  const ctx = oc.getContext('2d')!;
-  ctx.fillStyle = 'black';
-  ctx.fillRect(0, 0, SAM_SIZE, SAM_SIZE);
-  ctx.drawImage(imageElement, 0, 0, newW, newH);
-
-  const { data } = ctx.getImageData(0, 0, SAM_SIZE, SAM_SIZE);
-  const SAM_MEAN = [123.675, 116.28, 103.53];
-  const SAM_STD  = [58.395,  57.12,  57.375];
-  const t = new Float32Array(3 * SAM_SIZE * SAM_SIZE);
-  for (let i = 0; i < SAM_SIZE * SAM_SIZE; i++) {
-    t[i]                           = (data[i * 4]     - SAM_MEAN[0]) / SAM_STD[0];
-    t[i + SAM_SIZE * SAM_SIZE]     = (data[i * 4 + 1] - SAM_MEAN[1]) / SAM_STD[1];
-    t[i + 2 * SAM_SIZE * SAM_SIZE] = (data[i * 4 + 2] - SAM_MEAN[2]) / SAM_STD[2];
-  }
-  const tensor = new ort.Tensor('float32', t, [1, 3, SAM_SIZE, SAM_SIZE]);
-  const res = await samEncoderSession!.run({ [samEncoderSession!.inputNames[0]]: tensor });
-  return res[samEncoderSession!.outputNames[0]];
-}
-
-// ─── SAM Decoder ──────────────────────────────────────────────────────────────
-// personBox is in YOLO model space (0..640, letterboxed). Steps:
-//   1. Undo YOLO letterbox → original image pixel coords
-//   2. apply_coords: scale by (1024 / max(imgW,imgH)) — same uniform scale SAM encoder used
-//   3. orig_im_size = [imgH, imgW] (original, before any SAM transform) — SAM upsamples to this
-//   4. Threshold logits at > 0.0 (not sigmoid), then downsample to canvas size
-
-async function runSAMDecoder(
-  embedding: ort.Tensor,
-  personBox: BBox,
-  imgW: number, imgH: number,
-  scaledW: number, scaledH: number,
-): Promise<Uint8Array> {
-  // Step 1: undo YOLO letterbox → image pixel coords
-  const [snappedW, snappedH] = divStride(32, imgW, imgH);
-  const maxSize = Math.max(snappedW, snappedH);
-  const x1img = (personBox.x1 / 640) * maxSize * (imgW / snappedW);
-  const y1img = (personBox.y1 / 640) * maxSize * (imgH / snappedH);
-  const x2img = (personBox.x2 / 640) * maxSize * (imgW / snappedW);
-  const y2img = (personBox.y2 / 640) * maxSize * (imgH / snappedH);
-
-  console.log(`SAM box (image px): (${x1img.toFixed(0)},${y1img.toFixed(0)}) → (${x2img.toFixed(0)},${y2img.toFixed(0)}) in ${imgW}x${imgH}`);
-
-  // Step 2: apply_coords → SAM resized+padded 1024 space (uniform scale)
-  const [x1s, y1s] = samApplyCoords(x1img, y1img, imgW, imgH);
-  const [x2s, y2s] = samApplyCoords(x2img, y2img, imgW, imgH);
-
-  console.log(`SAM box (SAM space): (${x1s.toFixed(1)},${y1s.toFixed(1)}) → (${x2s.toFixed(1)},${y2s.toFixed(1)})`);
-
-  const feeds = {
-    image_embeddings: embedding,
-    point_coords:   new ort.Tensor('float32', new Float32Array([x1s, y1s, x2s, y2s]), [1, 2, 2]),
-    point_labels:   new ort.Tensor('float32', new Float32Array([2, 3]), [1, 2]), // 2=TL, 3=BR
-    mask_input:     new ort.Tensor('float32', new Float32Array(256 * 256), [1, 1, 256, 256]),
-    has_mask_input: new ort.Tensor('float32', new Float32Array([0]), [1]),
-    // Step 3: original image size — SAM decoder upsamples mask to this
-    orig_im_size:   new ort.Tensor('float32', new Float32Array([imgH, imgW]), [2]),
-  };
-
-  const res = await samDecoderSession!.run(feeds);
-  const maskTensor = res[samDecoderSession!.outputNames[0]];
-  const [, , mH, mW] = maskTensor.dims;
-  const mdata = maskTensor.data as Float32Array;
-
-  // Step 4: threshold logits at > 0.0, then downsample from imgW×imgH → scaledW×scaledH
-  const out = new Uint8Array(scaledW * scaledH);
-  for (let y = 0; y < scaledH; y++) {
-    for (let x = 0; x < scaledW; x++) {
-      const mx = Math.min(Math.floor(x * mW / scaledW), mW - 1);
-      const my = Math.min(Math.floor(y * mH / scaledH), mH - 1);
-      out[y * scaledW + x] = mdata[my * mW + mx] > 0.0 ? 255 : 0;
+    const mH = mask_filter.dims[0];
+    const mW = mask_filter.dims[1];
+    const rawMask = new Uint8Array(mH * mW);
+    for (let i = 0; i < mH * mW; i++) {
+      rawMask[i] = Math.min(255, Math.max(0, Number(mask_filter.data[i * 4 + 3]) || 0));
     }
+
+    const srcMat = cv.matFromArray(mH, mW, cv.CV_8UC1, rawMask);
+    const dstMat = new cv.Mat();
+    cv.resize(srcMat, dstMat, new cv.Size(scaledW, scaledH), 0, 0, cv.INTER_LINEAR);
+    const blurMat = new cv.Mat();
+    cv.GaussianBlur(dstMat, blurMat, new cv.Size(5, 5), 1.5, 1.5, cv.BORDER_DEFAULT);
+    const closedMat = new cv.Mat();
+    const kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(60, 60));
+    cv.morphologyEx(blurMat, closedMat, cv.MORPH_CLOSE, kernel);
+    kernel.delete();
+    const finalMat = new cv.Mat();
+    cv.GaussianBlur(closedMat, finalMat, new cv.Size(5, 5), 1.5, 1.5, cv.BORDER_DEFAULT);
+
+    const scaledMask = new Uint8Array(finalMat.data);
+    srcMat.delete(); dstMat.delete(); blurMat.delete(); closedMat.delete(); finalMat.delete();
+
+    personRegions.push({
+      id: `person-${idx}-${Date.now()}`, type: 'person', label: `Person ${personRegions.length + 1}`,
+      maskData: scaledMask, originalMaskData: new Uint8Array(scaledMask),
+      maskWidth: scaledW, maskHeight: scaledH,
+      color: REGION_COLORS.person, visible: true, selected: false, hovered: false,
+    });
   }
-  return out;
+
+  console.log(`YOLO person masks: ${personRegions.length}`);
+  return personRegions;
 }
 
 // ─── Stage 2: U2Net ───────────────────────────────────────────────────────────
@@ -385,7 +328,7 @@ async function runU2Net(imageElement: HTMLImageElement, scaledW: number, scaledH
   const { data } = oc.getContext('2d')!.getImageData(0, 0, U2NET_SIZE, U2NET_SIZE);
   const t = new Float32Array(3 * U2NET_SIZE * U2NET_SIZE);
   for (let i = 0; i < U2NET_SIZE * U2NET_SIZE; i++) {
-    t[i]                           = (data[i * 4]     / 255 - U2NET_MEAN[0]) / U2NET_STD[0];
+    t[i]                               = (data[i * 4]     / 255 - U2NET_MEAN[0]) / U2NET_STD[0];
     t[i + U2NET_SIZE * U2NET_SIZE]     = (data[i * 4 + 1] / 255 - U2NET_MEAN[1]) / U2NET_STD[1];
     t[i + 2 * U2NET_SIZE * U2NET_SIZE] = (data[i * 4 + 2] / 255 - U2NET_MEAN[2]) / U2NET_STD[2];
   }
@@ -464,6 +407,7 @@ async function runSegFormer(
     }
     classPixels.set(cls, mask);
   }
+
   const minPixels = scaledW * scaledH * 0.005;
   const labelMasks: Map<string, Uint8Array> = new Map();
   for (const [cls, mask] of classPixels) {
@@ -508,35 +452,18 @@ export async function segmentImage(
     const scaledWidth  = Math.floor(imgW * scale);
     const scaledHeight = Math.floor(imgH * scale);
 
-    // Faces first — no point running YOLO if there are no faces
     const faces = await detectFaces(imageElement);
     console.log(`Faces detected: ${faces.length}`);
-
-    let matchedBoxes: BBox[] = [];
-    if (faces.length > 0) {
-      const personBoxes = await detectPersonBoxes(imageElement);
-      matchedBoxes = personBoxes.filter(box => personHasFace(box, faces));
-      console.log(`YOLO person boxes: ${personBoxes.length}, face-matched: ${matchedBoxes.length}`);
-    }
 
     const regions: Region[] = [];
     let foregroundMask = new Uint8Array(scaledWidth * scaledHeight);
 
-    if (matchedBoxes.length > 0) {
-      // Stage 1: SAM — one mask per matched person box
-      const embedding = await runSAMEncoder(imageElement);
-      const personRegions: Region[] = [];
+    if (faces.length > 0) {
+      const personRegions = await runYOLOMasks(imageElement, faces, scaledWidth, scaledHeight);
 
-      for (let i = 0; i < matchedBoxes.length; i++) {
-        const mask = await runSAMDecoder(embedding, matchedBoxes[i], imgW, imgH, scaledWidth, scaledHeight);
-        for (let j = 0; j < mask.length; j++) if (mask[j] > foregroundMask[j]) foregroundMask[j] = mask[j];
-        personRegions.push({
-          id: `person-${i}-${Date.now()}`, type: 'person', label: `Person ${i + 1}`,
-          maskData: mask, originalMaskData: new Uint8Array(mask),
-          maskWidth: scaledWidth, maskHeight: scaledHeight,
-          color: REGION_COLORS.person, visible: true, selected: false, hovered: false,
-        });
-      }
+      for (const r of personRegions)
+        for (let i = 0; i < r.maskData.length; i++)
+          if (r.maskData[i] > foregroundMask[i]) foregroundMask[i] = r.maskData[i];
 
       if (personRegions.length > 1) {
         const unionMask = unionPersonMasks(personRegions);
@@ -550,8 +477,7 @@ export async function segmentImage(
       regions.push(...personRegions);
 
     } else {
-      // Stage 2: U2Net fallback — no faces found
-      console.log('No people found — running U2Net...');
+      console.log('No faces found — running U2Net...');
       const subjectMask = await runU2Net(imageElement, scaledWidth, scaledHeight);
       foregroundMask = new Uint8Array(subjectMask);
       regions.push({
@@ -563,12 +489,9 @@ export async function segmentImage(
       });
     }
 
-    // Stage 3: SegFormer — always runs
-    const { envRegions, landscapeMask } = await runSegFormer(imageElement, scaledWidth, scaledHeight, foregroundMask);
+    const { envRegions } = await runSegFormer(imageElement, scaledWidth, scaledHeight, foregroundMask);
     regions.push(...envRegions);
 
-    // Background — full inverse of the foreground (subject/people).
-    // SegFormer landscape regions are subsets of this; background is the encompassing mask.
     const backgroundMask = new Uint8Array(scaledWidth * scaledHeight);
     for (let i = 0; i < backgroundMask.length; i++) {
       if (foregroundMask[i] <= 128) backgroundMask[i] = 255;
@@ -591,5 +514,5 @@ export async function segmentImage(
 
 export function isSegmenterReady(): boolean {
   return !!(yoloSession && nmsSession && maskSession && faceSession &&
-    samEncoderSession && samDecoderSession && u2netSession && segformerSession && isOpenCVReady);
+    u2netSession && segformerSession && isOpenCVReady);
 }
