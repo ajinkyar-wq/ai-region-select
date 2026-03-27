@@ -214,10 +214,8 @@ activeMask.type.startsWith('background-')
         onUpdateTile({ width: img.width, height: img.height });
       }
 
-      // Provide default width and height to prevent NaNs if image not loaded
-      const imgWidth = tile?.width || 800;
-      const imgHeight = tile?.height || 600;
-      const imageRegions = tile?.regions || [];
+      const imgWidth = img.naturalWidth;
+      const imgHeight = img.naturalHeight;
       const scale = Math.min(width / imgWidth, height / imgHeight);
       const scaledWidth = imgWidth * scale;
       const scaledHeight = imgHeight * scale;
@@ -412,7 +410,7 @@ activeMask.type.startsWith('background-')
             onEnterLocalEdit={(r) => { // Double Click: complete walkthrough, hide tooltip
               if (isWalkthroughActive) completeWalkthrough();
               setWalkthroughClickPos(null);
-              handleEditRegion(r.id);
+              if (onActivateBrush) onActivateBrush(r.id);
               setEditingRegion(r);
             }}
             canvasInteractionsEnabled={canvasInteractionsEnabled}

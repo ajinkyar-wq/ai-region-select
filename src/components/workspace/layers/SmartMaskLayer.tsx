@@ -35,13 +35,12 @@ function erodeMask(mask: Uint8Array, w: number, h: number, radius: number): Uint
         for (let x = 0; x < w; x++) {
             if (mask[y * w + x] <= 30) continue;
             let eroded = false;
-            const y0 = Math.max(0, y - radius);
-            const y1 = Math.min(h - 1, y + radius);
-            const x0 = Math.max(0, x - radius);
-            const x1 = Math.min(w - 1, x + radius);
-            outer: for (let ny = y0; ny <= y1; ny++) {
-                for (let nx = x0; nx <= x1; nx++) {
-                    if (mask[ny * w + nx] <= 30) { eroded = true; break outer; }
+            outer: for (let ny = y - radius; ny <= y + radius; ny++) {
+                for (let nx = x - radius; nx <= x + radius; nx++) {
+                    // out-of-bounds counts as empty — so edge pixels erode inward
+                    if (nx < 0 || ny < 0 || nx >= w || ny >= h || mask[ny * w + nx] <= 30) {
+                        eroded = true; break outer;
+                    }
                 }
             }
             if (!eroded) out[y * w + x] = mask[y * w + x];
@@ -390,12 +389,7 @@ export function SmartMaskLayer({
             if (r.type === 'person' && !peopleEnabled) return false;
             if ((r.type === 'background' || r.type.startsWith('background-')) && !backgroundEnabled) return false;
             if (r.type === 'manual' || r.type === 'linear-gradient' || r.type === 'radial-gradient') return false;
-            if (!canvasInteractionsEnabled) {
-                // When canvas is off, still show regions that have edits OR are currently selected
-                // (prevents selections made before toggle-off from disappearing visually)
-                if (r.type === 'background' || r.type.startsWith('background-') || r.type === 'people-group') return r.hasEdits !== false || !!r.selected;
-                return !!r.hasEdits || !!r.selected;
-            }
+            if (!canvasInteractionsEnabled) return r.id === hoveredRegionId;
             return r.visible;
         });
 
@@ -591,11 +585,6 @@ export function SmartMaskLayer({
         return { x, y };
     };
 
-    const isOnList = (r: Region) => {
-        if (r.type === 'background' || r.type.startsWith('background-') || r.type === 'people-group') return r.hasEdits !== false;
-        return !!r.hasEdits;
-    };
-
     const resolveHit = (x: number, y: number): Region | null => {
         if (!imageTransform) return null;
 
@@ -610,16 +599,6 @@ export function SmartMaskLayer({
                 if (!hit) continue;
 
                 const pg = tile.regions.find(r => r.type === 'people-group');
-
-                if (!canvasInteractionsEnabled) {
-                    if (hit === 'inner' && isOnList(region)) return region;
-                    if (pg && isOnList(pg)) return pg;
-                    if (isOnList(region)) return region;
-                    if (hit === 'inner' && region.selected) return region;
-                    if (pg && pg.selected) return pg;
-                    if (region.selected) return region;
-                    return null;
-                }
 
                 if (hit === 'inner') return region;
                 return pg ?? region;
@@ -638,7 +617,6 @@ export function SmartMaskLayer({
 
             // subject and people-group — simple pixel test
             if (!region.visible) continue;
-            if (!canvasInteractionsEnabled && !isOnList(region) && !region.selected) continue;
             const scaleX = region.maskWidth / imageTransform.width;
             const scaleY = region.maskHeight / imageTransform.height;
             const idx = Math.floor(y * scaleY) * region.maskWidth + Math.floor(x * scaleX);
@@ -649,7 +627,6 @@ export function SmartMaskLayer({
         if (backgroundEnabled) {
             const bg = tile.regions.find(r => r.type === 'background');
             if (bg) {
-                if (!canvasInteractionsEnabled && !isOnList(bg) && !bg.selected) return null;
                 const scaleX = bg.maskWidth / imageTransform.width;
                 const scaleY = bg.maskHeight / imageTransform.height;
                 const idx = Math.floor(y * scaleY) * bg.maskWidth + Math.floor(x * scaleX);
@@ -662,50 +639,16 @@ export function SmartMaskLayer({
 
     // ── Event handlers ────────────────────────────────────────────────────────
 
-    const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const hoverAnchorRef = useRef<{ x: number, y: number } | null>(null);
-
-    // ── Shift-key tracking for Manual Tool Mode ───────────────────────────────
-    // Hover is gated behind Shift only when a manual tool (brush/gradient) is active.
-    const isShiftHeldRef = useRef(false);
-
     const handleMouseLeaveCanvas = useCallback(() => {
-        if (hoverTimeoutRef.current) {
-            clearTimeout(hoverTimeoutRef.current);
-            hoverTimeoutRef.current = null;
-        }
-        hoverAnchorRef.current = null;
         onHoverChange(null);
     }, [onHoverChange]);
-
-    useEffect(() => {
-        const onKeyDown = (e: KeyboardEvent) => {
-            if (e.key === 'Shift' && !isShiftHeldRef.current) {
-                isShiftHeldRef.current = true;
-            }
-        };
-        const onKeyUp = (e: KeyboardEvent) => {
-            if (e.key === 'Shift') {
-                isShiftHeldRef.current = false;
-                // If we were gating hover behind Shift and it's released, clear hover
-                if (isManualToolActive) {
-                    onHoverChange(null);
-                }
-            }
-        };
-        window.addEventListener('keydown', onKeyDown);
-        window.addEventListener('keyup', onKeyUp);
-        return () => {
-            window.removeEventListener('keydown', onKeyDown);
-            window.removeEventListener('keyup', onKeyUp);
-        };
-    }, [onHoverChange, isManualToolActive]);
 
     const handleMouseMove = (e: React.MouseEvent) => {
         if (isEditing) return;
 
-        // When a manual tool is active, gate hover behind the Shift key
-        if (isManualToolActive && !isShiftHeldRef.current) {
+        // When something is selected in the right panel, gate hover behind Shift
+        if (tile.regions.some(r => r.selected) && !e.shiftKey) {
+            if (hoveredRegionId) onHoverChange(null);
             return;
         }
 
@@ -734,84 +677,23 @@ export function SmartMaskLayer({
             }
         }
 
-        if (hit.type !== 'background' && !hit.type.startsWith('background-')) {
-            if (hoverTimeoutRef.current) {
-                clearTimeout(hoverTimeoutRef.current);
-                hoverTimeoutRef.current = null;
-            }
-            hoverAnchorRef.current = null;
-            if (hit.id !== hoveredRegionId) {
-                onHoverChange(hit.id);
-            }
-            return;
-        }
-
-        // --- Environmental / Background + Landscape Logic ---
-
         if (isTargetingTool) {
-            if (hoverTimeoutRef.current) {
-                clearTimeout(hoverTimeoutRef.current);
-                hoverTimeoutRef.current = null;
-            }
-            hoverAnchorRef.current = null;
             if (hoveredRegionId) onHoverChange(null);
             return;
         }
 
-        if (hoveredRegionId === hit.id) {
-            // Already actively hovering the background
-            return;
-        }
-
-        // If we were hovering a non-background region (e.g. a person mask), clear it
-        // immediately — don't let the background debounce timer delay the exit.
-        if (hoveredRegionId && hoveredRegionId !== hit.id) {
-            onHoverChange(null);
-        }
-
-        // We are on the background, but NOT hovering it yet.
-        // We use a simple 200ms spatial timer. If they move out of a 20px radius, restart the timer.
-        // If they twitch erratically inside the 20px radius, the timer completes and turns it on.
-
-        if (!hoverAnchorRef.current) {
-            hoverAnchorRef.current = { x: coords.x, y: coords.y };
-        }
-
-        const anchor = hoverAnchorRef.current;
-        const dist = Math.hypot(coords.x - anchor.x, coords.y - anchor.y);
-
-        if (dist > 15) {
-            // Broke the anchor boundary (transiting or slow course correction). Reset.
-            hoverAnchorRef.current = { x: coords.x, y: coords.y };
-            if (hoverTimeoutRef.current) {
-                clearTimeout(hoverTimeoutRef.current);
-            }
-            hoverTimeoutRef.current = setTimeout(() => {
-                onHoverChange(hit.id);
-                hoverTimeoutRef.current = null;
-                hoverAnchorRef.current = null;
-            }, 300);
-        } else if (!hoverTimeoutRef.current) {
-            // Inside boundary, but no timer running (initial entry)
-            hoverTimeoutRef.current = setTimeout(() => {
-                onHoverChange(hit.id);
-                hoverTimeoutRef.current = null;
-                hoverAnchorRef.current = null;
-            }, 300);
+        if (hit.id !== hoveredRegionId) {
+            onHoverChange(hit.id);
         }
     };
 
     const clickTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const handleCanvasClick = (e: React.MouseEvent) => {
-        if (isManualToolActive && !e.shiftKey) return;
-        const isMultiToggle = e.ctrlKey || e.metaKey || e.shiftKey;
+        if (tile.regions.some(r => r.selected) && !e.shiftKey) return;
+        const isMultiToggle = e.ctrlKey || e.metaKey;
         const coords = toImageCoords(e);
-        if (!coords) {
-            // When canvas is off, don't deselect-all from an off-canvas click
-            if (!isMultiToggle && canvasInteractionsEnabled) onUpdateTile({ regions: tile.regions.map(r => ({ ...r, selected: false })) });
-            return;
-        }
+        if (!coords) return;
 
         const clickedRegion = resolveHit(coords.x, coords.y);
 
@@ -853,11 +735,6 @@ export function SmartMaskLayer({
             }
             const isDeselecting = isMultiToggle && clickedRegion.selected;
             if (!isDeselecting) onEditRegion(clickedRegion);
-        } else {
-            // When canvas is off or a manual tool is active, don't wipe selections on a miss.
-            if (canvasInteractionsEnabled && !isMultiToggle && !isManualToolActive) {
-                onUpdateTile({ regions: tile.regions.map(r => ({ ...r, selected: false })) });
-            }
         }
     };
 
@@ -867,6 +744,7 @@ export function SmartMaskLayer({
         if (!coords) return;
         const hit = resolveHit(coords.x, coords.y);
         if (!hit) return;
+        onEditRegion(hit);
         if (onEnterLocalEdit) onEnterLocalEdit(hit);
         else onEditRegion(hit);
     };

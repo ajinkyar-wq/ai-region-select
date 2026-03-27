@@ -66,6 +66,8 @@ export function useRegionHierarchy(regions: Region[]) {
             }
         });
 
+        topLevelItems.reverse();
+
         return {
             editedRegions,
             topLevelItems,

@@ -1,9 +1,9 @@
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { SliderPanelContent } from './SliderPanelContent';
 import { generateMaskPreview } from '@/lib/mask-preview';
 import {
   SlidersHorizontal, Crop, ChevronDown, ChevronRight, Plus, PlusCircle,
-  Brush, ToggleLeft, ToggleRight,
+  Brush,
   Eye, EyeOff, Trash2, Contrast
 } from 'lucide-react';
 import type { Region, RegionAdjustments } from '@/types/workspace';
@@ -114,6 +114,64 @@ export function SliderPanel({
     onSelectBatchRegions
   });
 
+  // Anchor slot for shift+number range selection (persists across renders via ref)
+  const lastKeyboardSlotRef = useRef<number | null>(null);
+
+  // Number key shortcuts: press 1–9 to select the nth visible mask
+  // Shift+number extends selection from the last anchor to the pressed slot
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return;
+
+      const num = e.code.startsWith('Digit') ? parseInt(e.code.slice(5)) : NaN;
+      if (isNaN(num) || num < 1 || num > 9) return;
+
+      // Build ordered list of top-level items: each group counts as one slot, individual regions count as one slot
+      const selectableItems: Array<{ id: string; batchIds?: string[] }> = [];
+      topLevelItems.forEach(item => {
+        if ('type' in item && item.type === 'group') {
+          const memberIds = item.regions.map(r => r.id);
+          if (memberIds.length > 0) {
+            selectableItems.push({ id: memberIds[0], batchIds: memberIds });
+          }
+        } else {
+          selectableItems.push({ id: (item as Region).id });
+        }
+      });
+
+      const idx = num - 1;
+      if (idx >= selectableItems.length) return;
+
+      e.preventDefault();
+
+      if (e.shiftKey && lastKeyboardSlotRef.current !== null) {
+        // Range selection: collect all region IDs from anchor to current slot
+        const start = Math.min(lastKeyboardSlotRef.current, idx);
+        const end = Math.max(lastKeyboardSlotRef.current, idx);
+        const rangeIds: string[] = [];
+        for (let i = start; i <= end; i++) {
+          const slot = selectableItems[i];
+          if (slot.batchIds) {
+            rangeIds.push(...slot.batchIds);
+          } else {
+            rangeIds.push(slot.id);
+          }
+        }
+        onSelectBatchRegions?.(rangeIds, false, selectableItems[idx].id);
+        // Anchor stays fixed until a non-shift press
+      } else {
+        // Single selection — update anchor
+        lastKeyboardSlotRef.current = idx;
+        const { id, batchIds } = selectableItems[idx];
+        handleSelectRegion(id, false, false, batchIds);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [topLevelItems, expandedGroups, handleSelectRegion, onSelectBatchRegions]);
+
   if (!isOpen) return null;
 
   // Global index for striping across groups
@@ -186,19 +244,6 @@ export function SliderPanel({
           <h2 className="text-[14px] font-semibold leading-[20px] text-[#E2E2E2]" style={{ fontFamily: 'Google Sans, sans-serif' }}>Masks</h2>
 
           <div className="flex items-center gap-3">
-            {/* Canvas Interactions Toggle */}
-            <button
-              onClick={onToggleCanvasInteractions}
-              className={`flex items-center justify-center transition-colors ${canvasInteractionsEnabled ? 'text-white hover:opacity-80' : 'text-[#484848] hover:text-[#666666]'}`}
-              aria-label={canvasInteractionsEnabled ? 'Disable canvas interactions' : 'Enable canvas interactions'}
-              title={canvasInteractionsEnabled ? 'Canvas interactions on' : 'Canvas interactions off'}
-            >
-              {canvasInteractionsEnabled
-                ? <ToggleRight className="h-[22px] w-[22px]" />
-                : <ToggleLeft className="h-[22px] w-[22px]" />
-              }
-            </button>
-
             {/* Add mask */}
             <button
               onClick={() => setShowAddMaskMenu(v => !v)}
@@ -371,6 +416,24 @@ export function SliderPanel({
           </div>
         </div>
 
+
+        {/* Show Overlay Toggle */}
+        <div
+          className="flex items-center gap-[6px] pl-[18px] py-3 cursor-pointer"
+          onClick={onToggleCanvasInteractions}
+        >
+          {/* Custom checkbox 12×12 */}
+          <div className={`shrink-0 flex items-center justify-center w-3 h-3 rounded-[2px] overflow-hidden ${canvasInteractionsEnabled ? 'bg-[#2563eb] border border-transparent' : 'bg-[#303030] border border-[#474747]'}`}>
+            {canvasInteractionsEnabled && (
+              <svg width="8" height="8" viewBox="0 0 6.25028 4.50034" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M6.17701 0.427014L2.17701 4.42701C2.1538 4.45026 2.12622 4.4687 2.09587 4.48128C2.06552 4.49386 2.03299 4.50034 2.00014 4.50034C1.96729 4.50034 1.93475 4.49386 1.9044 4.48128C1.87405 4.4687 1.84648 4.45026 1.82326 4.42701L0.073264 2.67701C0.0263538 2.6301 0 2.56648 0 2.50014C0 2.4338 0.0263538 2.37017 0.073264 2.32326C0.120174 2.27635 0.183798 2.25 0.250139 2.25C0.31648 2.25 0.380104 2.27635 0.427014 2.32326L2.00014 3.8967L5.82326 0.0732639C5.87017 0.0263537 5.9338 -4.94279e-10 6.00014 0C6.06648 4.94279e-10 6.1301 0.0263537 6.17701 0.0732639C6.22393 0.120174 6.25028 0.183798 6.25028 0.250139C6.25028 0.31648 6.22393 0.380104 6.17701 0.427014Z" fill="white" />
+              </svg>
+            )}
+          </div>
+          <span className="text-[13px] font-normal leading-[16px] text-[#ABABAB] whitespace-nowrap select-none">
+            Show Overlay
+          </span>
+        </div>
 
         {showMaskImage && (
           <div className="mt-4 pb-10">
