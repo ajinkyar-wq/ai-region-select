@@ -7,7 +7,7 @@ import { ToolLayer } from './layers/ToolLayer';
 import { AdjustmentLayer } from './layers/AdjustmentLayer';
 import { BrushTool } from './tools/BrushTool';
 import { WalkthroughOverlay } from './layers/WalkthroughOverlay';
-import { useWalkthrough } from './Workspacelogic/useWalkthrough';
+//import { useWalkthrough } from './Workspacelogic/useWalkthrough';
 import { segmentImage } from '@/lib/segmentation';
 import type { ImageTileData, Region } from '@/types/workspace';
 
@@ -68,18 +68,18 @@ export function ImageCanvas({
   const mainCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const { isWalkthroughActive, isWaveStopped, stopWaveCount, stopWave, completeWalkthrough, resetWalkthrough } = useWalkthrough();
+  //const { isWalkthroughActive, isWaveStopped, stopWaveCount, stopWave, completeWalkthrough, resetWalkthrough } = useWalkthrough();
 
   const [walkthroughClickPos, setWalkthroughClickPos] = useState<{ x: number; y: number } | null>(null);
   const lastMousePosRef = useRef<{ x: number; y: number } | null>(null);
   const viewDimensionsRef = useRef<{ width: number; height: number } | null>(null);
 
   // When wave is stopped from slider panel, re-anchor tooltip to image center on every click
-  useEffect(() => {
+  /*useEffect(() => {
     if (isWaveStopped && viewDimensionsRef.current) {
       setWalkthroughClickPos({ x: viewDimensionsRef.current.width / 2, y: viewDimensionsRef.current.height / 2 });
     }
-  }, [stopWaveCount]);
+  }, [stopWaveCount]);*/
 
   const [showScan, setShowScan] = useState(true);
   const [imageTransform, setImageTransform] = useState<{
@@ -184,7 +184,7 @@ activeMask.type.startsWith('background-')
     if (!mainCanvasRef.current || !containerRef.current) return;
 
     // Reset walkthrough each time a new image is loaded
-    resetWalkthrough();
+    //resetWalkthrough();
     setWalkthroughClickPos(null);
 
     const mainCanvas = mainCanvasRef.current;
@@ -397,18 +397,18 @@ activeMask.type.startsWith('background-')
             height={viewDimensions.height}
             peopleEnabled={peopleEnabled}
             backgroundEnabled={backgroundEnabled}
-            isWalkthroughActive={isWalkthroughActive}
+            //isWalkthroughActive={isWalkthroughActive}
             hoveredRegionId={brushActive ? null : hoveredRegionId}
             isEditing={!!activeEditingRegion && activeEditingRegion.type !== 'manual' && activeEditingRegion.type !== 'linear-gradient' && activeEditingRegion.type !== 'radial-gradient'}
             onHoverChange={brushActive ? () => { } : setLocalHoveredRegion}
             onUpdateTile={onUpdateTile}
             onEditRegion={(r) => { // Single Click: stop wave, show/reset tooltip
-              if (isWalkthroughActive) stopWave();
+              //if (isWalkthroughActive) stopWave();
               setWalkthroughClickPos(lastMousePosRef.current ? { ...lastMousePosRef.current } : null);
               handleEditRegion(r.id);
             }}
             onEnterLocalEdit={(r) => { // Double Click: complete walkthrough, hide tooltip
-              if (isWalkthroughActive) completeWalkthrough();
+              //if (isWalkthroughActive) completeWalkthrough();
               setWalkthroughClickPos(null);
               if (onActivateBrush) onActivateBrush(r.id);
               setEditingRegion(r);
@@ -591,8 +591,8 @@ r.type.startsWith('background-')
         panOffset={offset}
         regions={tile.regions}
         hoveredRegionId={hoveredRegionId}
-        isWalkthroughActive={isWalkthroughActive}
-        isWaveStopped={isWaveStopped}
+        //isWalkthroughActive={isWalkthroughActive}
+        //isWaveStopped={isWaveStopped}
         clickPos={walkthroughClickPos}
       />
 

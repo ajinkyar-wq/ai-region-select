@@ -11,8 +11,8 @@ interface WalkthroughOverlayProps {
     panOffset?: { x: number; y: number };
     regions: Region[];
     hoveredRegionId: string | null;
-    isWalkthroughActive: boolean;
-    isWaveStopped: boolean;
+    isWalkthroughActive?: boolean;
+    isWaveStopped?: boolean;
     clickPos?: { x: number; y: number } | null;
 }
 
@@ -223,8 +223,8 @@ export function WalkthroughOverlay({
     panOffset = { x: 0, y: 0 },
     regions,
     hoveredRegionId,
-    isWalkthroughActive,
-    isWaveStopped,
+    isWalkthroughActive = false,
+    isWaveStopped = false,
     clickPos,
 }: WalkthroughOverlayProps) {
     const [masks, setMasks] = useState<MaskEntry[]>([]);

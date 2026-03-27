@@ -644,6 +644,7 @@ export function SmartMaskLayer({
     }, [onHoverChange]);
 
     const handleMouseMove = (e: React.MouseEvent) => {
+        if (!canvasInteractionsEnabled) return;
         if (isEditing) return;
 
         // When something is selected in the right panel, gate hover behind Shift
@@ -690,6 +691,7 @@ export function SmartMaskLayer({
     const clickTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const handleCanvasClick = (e: React.MouseEvent) => {
+        if (!canvasInteractionsEnabled) return;
         if (tile.regions.some(r => r.selected) && !e.shiftKey) return;
         const isMultiToggle = e.ctrlKey || e.metaKey;
         const coords = toImageCoords(e);
@@ -739,6 +741,7 @@ export function SmartMaskLayer({
     };
 
     const handleCanvasDoubleClick = (e: React.MouseEvent) => {
+        if (!canvasInteractionsEnabled) return;
         if (clickTimeoutRef.current) clearTimeout(clickTimeoutRef.current);
         const coords = toImageCoords(e);
         if (!coords) return;
@@ -752,7 +755,7 @@ export function SmartMaskLayer({
     return (
         <canvas
             ref={canvasRef}
-            className="absolute inset-0 z-10 pointer-events-auto cursor-pointer"
+            className={`absolute inset-0 z-10 pointer-events-auto ${canvasInteractionsEnabled ? 'cursor-pointer' : 'cursor-default'}`}
             onClick={handleCanvasClick}
             onDoubleClick={handleCanvasDoubleClick}
             onMouseMove={handleMouseMove}
