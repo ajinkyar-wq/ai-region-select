@@ -25,6 +25,7 @@ interface DraggableToolbarProps {
   activeId?: string;
   onActiveChange?: (id: string) => void;
   containerRef: React.RefObject<HTMLElement>;
+  disabled?: boolean;
 
   // Brush Settings Props
   brushSize: number[];
@@ -41,6 +42,7 @@ export function DraggableToolbar({
   activeId,
   onActiveChange,
   containerRef,
+  disabled = false,
   brushSize,
   onBrushSizeChange,
   brushSoftness,
@@ -51,6 +53,10 @@ export function DraggableToolbar({
 }: DraggableToolbarProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+
+  useEffect(() => {
+    if (disabled) setShowSettings(false);
+  }, [disabled]);
 
   // NOTE: Brush state is now controlled by parent (Workspace)
   // const [brushSize, setBrushSize] = useState([50]);
@@ -81,7 +87,7 @@ export function DraggableToolbar({
       const tbHeight = toolbarRect.height;
 
       // Margins
-      const MARGIN = 16;
+      const MARGIN = 12;
       const BOTTOM_MARGIN = 140; // Space for Filmstrip
 
       // Compare Button (top-3 right-3, size 9) -> 12px offset + 36px size
@@ -183,7 +189,7 @@ export function DraggableToolbar({
     if (!pos) {
       // 12px (top offset) + 36px (button) + 8px (gap) = 56px
       return {
-        right: 16,
+        right: 12,
         top: 56,
         cursor: isDragging ? 'grabbing' : 'grab',
       };
@@ -204,10 +210,10 @@ export function DraggableToolbar({
   // Active: bg-[#27272a] border border-transparent (or active border)
   // Inactive: bg-transparent
   const getItemClasses = (isActive: boolean) => cn(
-    'flex items-center justify-center shrink-0 size-[36px] rounded-[4px] transition-colors cursor-pointer',
+    'flex items-center justify-center shrink-0 size-[36px] rounded-[4px] transition-colors cursor-pointer border-[0.5px]',
     isActive
-      ? 'bg-[#27272a] text-white'
-      : 'text-[#a1a1aa] hover:bg-white/5 hover:text-white'
+      ? 'bg-[rgba(226,226,226,0.10)] border-[#5e5e5e] text-white'
+      : 'border-transparent text-[#a1a1aa] hover:bg-white/5 hover:text-white'
   );
 
   const getCollapseIcon = () => {
@@ -220,13 +226,13 @@ export function DraggableToolbar({
 
   const getSettingsStyle = (): React.CSSProperties => {
     // Offset from toolbar
-    const GAP = 12;
+    const GAP = 8;
     const PANEL_WIDTH = 240; // Approximate width based on Figma
     const PANEL_HEIGHT = 180; // Approximate height
 
     if (!pos) {
       return {
-        right: 16 + 48 + 12, // Margin + Toolbar + Gap
+        right: 12 + 36 + 8, // Toolbar right offset + toolbar width + gap
         top: 56,
         position: 'absolute'
       };
@@ -284,25 +290,26 @@ export function DraggableToolbar({
       >
         <div className={containerClasses}>
 
-          {/* If Collapsed: Show Active Tool + Toggle */}
+          {/* If Collapsed: Show only the active tool + expand button */}
           {isCollapsed ? (
             <>
               <button
                 key={activeItem.id}
-                className={getItemClasses(true)}
+                className={cn(getItemClasses(activeId === activeItem.id), disabled && 'opacity-30 pointer-events-none')}
                 onClick={(e) => {
                   e.stopPropagation();
-                  // Clicking active tool in collapsed mode could also expand, 
-                  // but Figma sidebar shows a distinct expand button below it.
-                  // We'll keep this as just selection/indicator.
-                  setIsCollapsed(false);
+                  if (!disabled) {
+                    onActiveChange?.(activeItem.id);
+                    activeItem.onClick();
+                  }
                 }}
                 title={activeItem.label}
+                disabled={disabled}
               >
                 {activeItem.icon}
               </button>
 
-              {/* Expand Button (Figma: ArrowsOutSimple) */}
+              {/* Expand Button */}
               <button
                 className={getItemClasses(false)}
                 onClick={(e) => {
@@ -320,13 +327,14 @@ export function DraggableToolbar({
               {items.map((item) => (
                 <button
                   key={item.id}
-                  className={getItemClasses(activeId === item.id)}
+                  className={cn(getItemClasses(activeId === item.id), disabled && 'opacity-30 pointer-events-none')}
                   onClick={(e) => {
                     e.stopPropagation();
                     onActiveChange?.(item.id);
                     item.onClick();
                   }}
                   title={item.label}
+                  disabled={disabled}
                 >
                   {item.icon}
                 </button>
@@ -335,12 +343,13 @@ export function DraggableToolbar({
               {/* Size indicator — selected when settings panel is open */}
               <div
                 className={cn(
-                  'flex items-center justify-center size-[36px] shrink-0 cursor-pointer rounded-[4px] transition-colors',
-                  showSettings ? 'bg-[#27272a]' : 'hover:bg-white/5'
+                  'flex items-center justify-center size-[36px] shrink-0 cursor-pointer rounded-[4px] transition-colors border-[0.5px]',
+                  showSettings ? 'bg-[rgba(226,226,226,0.10)] border-[#5e5e5e]' : 'border-transparent hover:bg-white/5',
+                  disabled && 'opacity-30 pointer-events-none'
                 )}
                 onClick={(e) => {
                   e.stopPropagation();
-                  setShowSettings(!showSettings);
+                  if (!disabled) setShowSettings(!showSettings);
                 }}
               >
                 <div className="size-[20px] rounded-full bg-[#d9d9d9] flex items-center justify-center text-[10px] font-medium text-black">
@@ -350,12 +359,13 @@ export function DraggableToolbar({
 
               {/* Reset Mask */}
               <button
-                className={getItemClasses(false)}
+                className={cn(getItemClasses(false), disabled && 'opacity-30 pointer-events-none')}
                 onClick={(e) => {
                   e.stopPropagation();
-                  onResetMask?.();
+                  if (!disabled) onResetMask?.();
                 }}
                 title="Reset Mask"
+                disabled={disabled}
               >
                 <RotateCcw className="h-[20px] w-[20px]" />
               </button>

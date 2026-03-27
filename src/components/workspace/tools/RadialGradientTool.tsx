@@ -3,6 +3,7 @@ import type { Region } from '@/types/workspace';
 import { cn } from '@/lib/utils';
 import { generateRadialGradientMask } from '@/lib/mask-analysis';
 import { GlassCard } from 'react-glass-ui';
+import { FlipVertical2 } from 'lucide-react';
 
 interface RadialGradientToolProps {
     imageTransform: {
@@ -48,10 +49,12 @@ export function RadialGradientTool({
         center: { x: number, y: number }; // Pixel coords
         radius: { x: number, y: number }; // Pixel radii
         feather: number; // 0-1 Ratio
-        isDragging: 'move-center' | 'resize-outer-n' | 'resize-outer-s' | 'resize-outer-e' | 'resize-outer-w' | 'resize-outer-free' | 'resize-inner-n' | 'resize-inner-s' | 'resize-inner-e' | 'resize-inner-w' | null;
+        rotation: number; // Degrees
+        isDragging: 'move-center' | 'resize-outer-n' | 'resize-outer-s' | 'resize-outer-e' | 'resize-outer-w' | 'resize-outer-free' | 'resize-inner-n' | 'resize-inner-s' | 'resize-inner-e' | 'resize-inner-w' | 'rotate' | null;
         initialClickOffset?: { x: number; y: number }; // For relative move
         initialRadius?: { x: number, y: number };
         initialCenter?: { x: number, y: number }; // For calculating total delta
+        initialRotation?: number; // For rotate drag
     } | null>(null);
 
     // Sync state with region prop
@@ -73,6 +76,7 @@ export function RadialGradientTool({
                 center,
                 radius,
                 feather: region.radialGradient.feather,
+                rotation: region.radialGradient.rotation ?? 0,
                 isDragging: null
             });
         }
@@ -105,11 +109,12 @@ export function RadialGradientTool({
         // HTML5 Canvas gradient is strictly circular.
         // To do Ellipse, we must scale the context.
 
-        const { center, radius, feather } = dragState;
+        const { center, radius, feather, rotation } = dragState;
         const isInverted = region.radialGradient?.invert || false;
 
         ctx.save();
         ctx.translate(center.x, center.y);
+        ctx.rotate((rotation * Math.PI) / 180);
 
         // Calculate scaling to transform circle to ellipse
         // Let's draw a Unit circle and scale it to radius.x, radius.y
@@ -185,7 +190,7 @@ export function RadialGradientTool({
             }
         }
 
-    }, [dragState, clipMask, imageTransform?.width, imageTransform?.height, isSelected, isEditing, isParentSelected, region.radialGradient?.invert]);
+    }, [dragState, clipMask, imageTransform?.width, imageTransform?.height, isSelected, isEditing, isParentSelected, region.radialGradient?.invert, region.radialGradient?.rotation]);
 
 
     // --- Interaction Handlers ---
@@ -211,7 +216,8 @@ export function RadialGradientTool({
             isDragging: action,
             initialClickOffset,
             initialRadius: { ...dragState.radius },
-            initialCenter: { ...dragState.center }
+            initialCenter: { ...dragState.center },
+            initialRotation: dragState.rotation
         });
     };
 
@@ -224,11 +230,18 @@ export function RadialGradientTool({
 
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
-        const dx = x - dragState.center.x; // Delta from center
-        const dy = y - dragState.center.y;
+        const dxRaw = x - dragState.center.x;
+        const dyRaw = y - dragState.center.y;
+        // Unrotate into ellipse local space
+        const rotRadMove = (dragState.rotation * Math.PI) / 180;
+        const cosM = Math.cos(-rotRadMove);
+        const sinM = Math.sin(-rotRadMove);
+        const dx = cosM * dxRaw - sinM * dyRaw;
+        const dy = sinM * dxRaw + cosM * dyRaw;
 
         let newRadius = { ...dragState.radius };
         let newFeather = dragState.feather;
+        let newRotation = dragState.rotation;
 
         switch (dragState.isDragging) {
             case 'move-center':
@@ -253,6 +266,12 @@ export function RadialGradientTool({
                     });
                 }
                 return;
+
+            case 'rotate': {
+                const angle = Math.atan2(y - dragState.center.y, x - dragState.center.x) * 180 / Math.PI;
+                newRotation = ((angle % 360) + 360) % 360;
+                break;
+            }
 
             // --- Outer Resizing (Radius) ---
             case 'resize-outer-e': // Right -> Modifies X
@@ -280,7 +299,8 @@ export function RadialGradientTool({
         setDragState({
             ...dragState,
             radius: newRadius,
-            feather: newFeather
+            feather: newFeather,
+            rotation: newRotation
         });
     };
 
@@ -311,7 +331,8 @@ export function RadialGradientTool({
                 normCenter,
                 normRadius,
                 dragState.feather,
-                isInverted
+                isInverted,
+                dragState.rotation
             );
 
             const sourceUpdates = {
@@ -320,7 +341,8 @@ export function RadialGradientTool({
                     center: normCenter,
                     radius: normRadius,
                     feather: dragState.feather,
-                    invert: isInverted
+                    invert: isInverted,
+                    rotation: dragState.rotation
                 }
             };
 
@@ -354,7 +376,8 @@ export function RadialGradientTool({
                 normCenter,
                 normRadius,
                 feather,
-                isInverted
+                isInverted,
+                region.radialGradient!.rotation ?? 0
             );
 
             onUpdate({
@@ -433,8 +456,34 @@ export function RadialGradientTool({
     const featherRx = dragState.radius.x * dragState.feather;
     const featherRy = dragState.radius.y * dragState.feather;
 
+    // Rotation handle: a point above the top of the outer ellipse, rotated
+    const rotRad = (dragState.rotation * Math.PI) / 180;
+    const cosR = Math.cos(rotRad);
+    const sinR = Math.sin(rotRad);
+    // Rotate a local offset (lx, ly) around center
+    const rotPt = (lx: number, ly: number) => ({
+        x: dragState.center.x + lx * cosR - ly * sinR,
+        y: dragState.center.y + lx * sinR + ly * cosR,
+    });
+    const rotHandleOffset = dragState.radius.y + 28;
+    const rotHandle = rotPt(0, -rotHandleOffset);
+    const rotHandleX = rotHandle.x;
+    const rotHandleY = rotHandle.y;
+    // Tick line from top of ellipse to rotation handle
+    const tick = rotPt(0, -dragState.radius.y);
+    const tickX = tick.x;
+    const tickY = tick.y;
+    // Rotated cardinal handle positions
+    const handleN = rotPt(0, -dragState.radius.y);
+    const handleS = rotPt(0, dragState.radius.y);
+    const handleW = rotPt(-dragState.radius.x, 0);
+    const handleE = rotPt(dragState.radius.x, 0);
+    const handleInnerE = rotPt(featherRx, 0);
+
     // Generic Handle Component
-    const Handle = ({ x, y, cursor, onDown, isInner }: any) => (
+    const Handle = ({ x, y, cursor, rotateCursor, onDown, isInner }: any) => {
+        const [hovered, setHovered] = useState(false);
+        return (
         <div
             className={cn(
                 "absolute rounded-full transform -translate-x-1/2 -translate-y-1/2 z-50 flex items-center justify-center shadow-[0_2px_4px_rgba(0,0,0,0.2)] pointer-events-auto",
@@ -449,14 +498,17 @@ export function RadialGradientTool({
                 "hover:scale-125 hover:z-60",
                 isInner ? "hover:bg-blue-50" : "hover:bg-gray-50"
             )}
-            style={{ left: x, top: y, cursor }}
+            style={{ left: x, top: y, cursor: hovered && rotateCursor ? 'crosshair' : cursor }}
+            onPointerEnter={() => setHovered(true)}
+            onPointerLeave={() => setHovered(false)}
             onPointerDown={onDown}
             onClick={(e) => e.stopPropagation()}
         >
             {/* Center dot for precision feel */}
             <div className={cn("w-1 h-1 rounded-full", isInner ? "bg-blue-400" : "bg-gray-400")} />
         </div>
-    );
+        );
+    };
 
     return (
         <div
@@ -470,38 +522,45 @@ export function RadialGradientTool({
             <canvas ref={canvasRef} width={imageTransform.width} height={imageTransform.height} className="absolute inset-0 pointer-events-none" />
 
             <svg className="absolute inset-0 w-full h-full visible overflow-visible pointer-events-none">
-                {/* Outer Ring — visual */}
-                <ellipse
-                    cx={dragState.center.x} cy={dragState.center.y}
-                    rx={Math.max(0, dragState.radius.x)} ry={Math.max(0, dragState.radius.y)}
-                    fill="none" stroke="rgba(255,255,255,0.8)" strokeWidth="1"
-                />
-                {/* Outer Ring — fat invisible hit area, pick nearest axis to resize */}
-                <ellipse
-                    cx={dragState.center.x} cy={dragState.center.y}
-                    rx={Math.max(0, dragState.radius.x)} ry={Math.max(0, dragState.radius.y)}
-                    fill="none" stroke="transparent" strokeWidth="24"
-                    style={{ pointerEvents: 'stroke', cursor: ringCursor }}
-                    onPointerMove={(e) => {
-                        const rect = containerRef.current?.getBoundingClientRect();
-                        if (!rect || !dragState) return;
-                        const x = e.clientX - rect.left;
-                        const y = e.clientY - rect.top;
-                        const angle = Math.atan2(y - dragState.center.y, x - dragState.center.x) * 180 / Math.PI;
-                        const a = ((angle % 180) + 180) % 180; // 0-180
-                        if (a < 22.5 || a >= 157.5) setRingCursor('ew-resize');
-                        else if (a < 67.5) setRingCursor('nwse-resize');
-                        else if (a < 112.5) setRingCursor('ns-resize');
-                        else setRingCursor('nesw-resize');
-                    }}
-                    onPointerDown={(e) => handlePointerDown(e as any, 'resize-outer-free')}
-                    onClick={(e) => e.stopPropagation()}
-                />
-                {/* Inner Ring */}
-                <ellipse
-                    cx={dragState.center.x} cy={dragState.center.y}
-                    rx={Math.max(0, featherRx)} ry={Math.max(0, featherRy)}
-                    fill="none" stroke="rgba(200,200,200,0.6)" strokeWidth="1" strokeDasharray="4 4"
+                <g transform={`rotate(${dragState.rotation}, ${dragState.center.x}, ${dragState.center.y})`}>
+                    {/* Outer Ring — visual */}
+                    <ellipse
+                        cx={dragState.center.x} cy={dragState.center.y}
+                        rx={Math.max(0, dragState.radius.x)} ry={Math.max(0, dragState.radius.y)}
+                        fill="none" stroke="rgba(255,255,255,0.8)" strokeWidth="1"
+                    />
+                    {/* Outer Ring — fat invisible hit area, pick nearest axis to resize */}
+                    <ellipse
+                        cx={dragState.center.x} cy={dragState.center.y}
+                        rx={Math.max(0, dragState.radius.x)} ry={Math.max(0, dragState.radius.y)}
+                        fill="none" stroke="transparent" strokeWidth="24"
+                        style={{ pointerEvents: 'stroke', cursor: ringCursor }}
+                        onPointerMove={(e) => {
+                            const rect = containerRef.current?.getBoundingClientRect();
+                            if (!rect || !dragState) return;
+                            const x = e.clientX - rect.left;
+                            const y = e.clientY - rect.top;
+                            const angle = Math.atan2(y - dragState.center.y, x - dragState.center.x) * 180 / Math.PI;
+                            const a = ((angle % 180) + 180) % 180; // 0-180
+                            if (a < 22.5 || a >= 157.5) setRingCursor('ew-resize');
+                            else if (a < 67.5) setRingCursor('nwse-resize');
+                            else if (a < 112.5) setRingCursor('ns-resize');
+                            else setRingCursor('nesw-resize');
+                        }}
+                        onPointerDown={(e) => handlePointerDown(e as any, 'resize-outer-free')}
+                        onClick={(e) => e.stopPropagation()}
+                    />
+                    {/* Inner Ring */}
+                    <ellipse
+                        cx={dragState.center.x} cy={dragState.center.y}
+                        rx={Math.max(0, featherRx)} ry={Math.max(0, featherRy)}
+                        fill="none" stroke="rgba(200,200,200,0.6)" strokeWidth="1" strokeDasharray="4 4"
+                    />
+                </g>
+                {/* Rotation handle stem line */}
+                <line
+                    x1={tickX} y1={tickY} x2={rotHandleX} y2={rotHandleY}
+                    stroke="rgba(255,255,255,0.6)" strokeWidth="1" strokeDasharray="3 3"
                 />
             </svg>
 
@@ -521,24 +580,44 @@ export function RadialGradientTool({
                 <div className="w-1.5 h-1.5 bg-white rounded-full" />
             </div>
 
-            {/* Invert Button */}
-            <div className="absolute z-50 transform pointer-events-auto" style={{ left: dragState.center.x + 20, top: dragState.center.y + 20 }}>
-                <button
-                    onClick={handleInvert}
-                    className="bg-black/60 text-[10px] text-white px-2 py-1 rounded border border-white/20 hover:bg-black/80 backdrop-blur-sm"
-                >
-                    {region.radialGradient?.invert ? "Invert: ON" : "Invert"}
-                </button>
+            {/* Invert Button — sits 20px to the right of the rotation handle */}
+            <button
+                onClick={handleInvert}
+                title={region.radialGradient?.invert ? "Invert: ON" : "Invert"}
+                className={cn(
+                    "absolute w-[18px] h-[18px] flex items-center justify-center rounded-full border z-50 pointer-events-auto transform -translate-x-1/2 -translate-y-1/2 transition-colors shadow-[0_1px_3px_rgba(0,0,0,0.3)]",
+                    region.radialGradient?.invert
+                        ? "bg-white border-gray-200 text-black"
+                        : "bg-white border-gray-200 text-gray-500"
+                )}
+                style={{ left: dragState.center.x + 20, top: dragState.center.y - 20 }}
+            >
+                <FlipVertical2 size={9} />
+            </button>
+
+            {/* Rotation Handle */}
+            <div
+                className={cn(
+                    "absolute w-5 h-5 rounded-full transform -translate-x-1/2 -translate-y-1/2 z-50 flex items-center justify-center pointer-events-auto shadow-[0_2px_4px_rgba(0,0,0,0.3)]",
+                    "bg-white/90 border border-purple-400 ring-2 ring-purple-300/50",
+                    "hover:scale-125 hover:ring-purple-400 cursor-crosshair"
+                )}
+                style={{ left: rotHandleX, top: rotHandleY }}
+                onPointerDown={(e) => handlePointerDown(e, 'rotate')}
+                onClick={(e) => e.stopPropagation()}
+                title="Rotate"
+            >
+                <div className="w-1 h-1 rounded-full bg-purple-400" />
             </div>
 
-            {/* --- Outer Handles (4) --- */}
-            <Handle x={dragState.center.x} y={dragState.center.y - dragState.radius.y} cursor="ns-resize" onDown={(e: any) => handlePointerDown(e, 'resize-outer-n')} />
-            <Handle x={dragState.center.x} y={dragState.center.y + dragState.radius.y} cursor="ns-resize" onDown={(e: any) => handlePointerDown(e, 'resize-outer-s')} />
-            <Handle x={dragState.center.x - dragState.radius.x} y={dragState.center.y} cursor="ew-resize" onDown={(e: any) => handlePointerDown(e, 'resize-outer-w')} />
-            <Handle x={dragState.center.x + dragState.radius.x} y={dragState.center.y} cursor="ew-resize" onDown={(e: any) => handlePointerDown(e, 'resize-outer-e')} />
+            {/* --- Outer Handles (4) — show rotate cursor on hover --- */}
+            <Handle x={handleN.x} y={handleN.y} cursor="ns-resize" rotateCursor onDown={(e: any) => handlePointerDown(e, 'resize-outer-n')} />
+            <Handle x={handleS.x} y={handleS.y} cursor="ns-resize" rotateCursor onDown={(e: any) => handlePointerDown(e, 'resize-outer-s')} />
+            <Handle x={handleW.x} y={handleW.y} cursor="ew-resize" rotateCursor onDown={(e: any) => handlePointerDown(e, 'resize-outer-w')} />
+            <Handle x={handleE.x} y={handleE.y} cursor="ew-resize" rotateCursor onDown={(e: any) => handlePointerDown(e, 'resize-outer-e')} />
 
             {/* --- Inner Handle (1) - Right Side only --- */}
-            <Handle x={dragState.center.x + featherRx} y={dragState.center.y} cursor="ew-resize" isInner onDown={(e: any) => handlePointerDown(e, 'resize-inner-e')} />
+            <Handle x={handleInnerE.x} y={handleInnerE.y} cursor="ew-resize" isInner onDown={(e: any) => handlePointerDown(e, 'resize-inner-e')} />
 
         </div>
     );

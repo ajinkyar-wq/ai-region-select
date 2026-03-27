@@ -22,6 +22,7 @@ export interface Region {
     radius: { x: number; y: number }; // Normalized 0-1 (using x as radius for circle)
     feather: number; // 0-1 Ratio (Inner Radius / Outer Radius)
     invert: boolean;
+    rotation: number; // Degrees (0-360)
   };
   // Display properties
   color: string;

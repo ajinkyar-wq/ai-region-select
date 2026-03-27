@@ -39,8 +39,10 @@ interface ImageCanvasProps {
 
   // Edit Mode Notification (Local AI Mask Editing)
   onEditingModeChange?: (isEditing: boolean) => void;
+  exitEditTrigger?: number;
   canvasInteractionsEnabled?: boolean;
   onActionComplete?: () => void;
+  onGradientDraggingChange?: (isDragging: boolean) => void;
 
 }
 
@@ -63,7 +65,9 @@ export function ImageCanvas({
   peopleEnabled = true,
   backgroundEnabled = true,
   onEditingModeChange,
+  exitEditTrigger,
   canvasInteractionsEnabled = true,
+  onGradientDraggingChange,
 }: ImageCanvasProps) {
   const mainCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -102,6 +106,12 @@ export function ImageCanvas({
     current: { x: number, y: number };
     isDrawing: boolean;
   } | null>(null);
+
+
+  // Clear editingRegion when parent triggers exit (e.g. Escape key)
+  useEffect(() => {
+    if (exitEditTrigger) setEditingRegion(null);
+  }, [exitEditTrigger]);
 
   // Sync editingRegion with tile updates (e.g. Reset Mask)
   useEffect(() => {
@@ -363,7 +373,7 @@ activeMask.type.startsWith('background-')
           });
         }
 
-        if (brushActive && onBrushExit) {
+        if (onBrushExit) {
           onBrushExit();
         }
       }}
@@ -407,11 +417,15 @@ activeMask.type.startsWith('background-')
               setWalkthroughClickPos(lastMousePosRef.current ? { ...lastMousePosRef.current } : null);
               handleEditRegion(r.id);
             }}
-            onEnterLocalEdit={(r) => { // Double Click: complete walkthrough, hide tooltip
+            onEnterLocalEdit={(r) => { // Double Click: enter edit mode + activate brush
               //if (isWalkthroughActive) completeWalkthrough();
               setWalkthroughClickPos(null);
-              if (onActivateBrush) onActivateBrush(r.id);
-              setEditingRegion(r);
+              if (r.type === 'manual') {
+                if (onActivateBrush) onActivateBrush(r.id);
+              } else {
+                if (onActivateRegion) onActivateRegion(r.id);
+                setEditingRegion(r);
+              }
             }}
             canvasInteractionsEnabled={canvasInteractionsEnabled}
             isManualToolActive={
@@ -439,6 +453,7 @@ activeMask.type.startsWith('background-')
             onUpdateTile={onUpdateTile}
             onEditRegion={handleEditRegion} // Route edits through our dispatcher
             onDoubleEditRegion={onActivateBrush} // Handle Double Click (Enable Brush Toolbar)
+            onGradientDraggingChange={onGradientDraggingChange}
           />
         )}
 

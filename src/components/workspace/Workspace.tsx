@@ -27,19 +27,23 @@ export function Workspace() {
   const [activeMask, setActiveMask] = useState<Region | null>(null);
   const [brushActive, setBrushActive] = useState(false);
   const [isLocalEditing, setIsLocalEditing] = useState(false); // For AI Mask Editor
+  const [exitEditTrigger, setExitEditTrigger] = useState(0);
   const [hoveredRegion] = useState<'person' | 'background' | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const [brushMode, setBrushMode] = useState<'add' | 'erase'>('add');
   const [brushSize, setBrushSize] = useState([50]);
   const [brushSoftness, setBrushSoftness] = useState([20]);
-  const [brushOpacity, setBrushOpacity] = useState([70]);
+  const [brushOpacity, setBrushOpacity] = useState([100]);
 
   // New Drawing Mode State
   const [drawingTool, setDrawingTool] = useState<'linear-gradient' | 'radial-gradient' | null>(null);
 
   // Canvas Interactions Toggle — when false, new canvas drawing (gradient drag) is disabled
   const [canvasInteractionsEnabled, setCanvasInteractionsEnabled] = useState(true);
+
+  // Hide the brush toolbar while the user is actively dragging a gradient handle
+  const [isGradientDragging, setIsGradientDragging] = useState(false);
 
   const { isWalkthroughActive, isWaveStopped, stopWave, completeWalkthrough } = useWalkthrough();
 
@@ -99,6 +103,8 @@ export function Workspace() {
     setActiveMask,
     brushActive,
     setBrushActive,
+    isLocalEditing,
+    onExitEditMode: () => setExitEditTrigger(v => v + 1),
     drawingTool,
     setDrawingTool,
     clipboard,
@@ -281,10 +287,11 @@ export function Workspace() {
 
               {/* DraggableToolbar: Only shows when explicitly ACTIVATED (Double Click / Edit Mode) 
                   AND it's a Brush-based tool (Manual or AI Mask). Gradients use on-canvas handles. */}
-              {image && (brushActive || (isLocalEditing && activeMask && activeMask.type !== 'linear-gradient' && activeMask.type !== 'radial-gradient')) && (
+              {image && !image.regions.some(r => r.selected && (r.type === 'linear-gradient' || r.type === 'radial-gradient')) && !isGradientDragging && (
                 <DraggableToolbar
+                  disabled={!image.regions.some(r => r.selected && r.type !== 'linear-gradient' && r.type !== 'radial-gradient')}
                   containerRef={containerRef}
-                  activeId={brushMode === 'erase' ? 'eraser' : 'brush'}
+                  activeId={(brushActive || isLocalEditing) ? (brushMode === 'erase' ? 'eraser' : 'brush') : undefined}
                   onActiveChange={(id) => {
                     if (id === 'brush') {
                       setBrushActive(true);
@@ -405,7 +412,9 @@ export function Workspace() {
                     }
                   }}
                   onEditingModeChange={handleLocalEditChange}
+                  exitEditTrigger={exitEditTrigger}
                   canvasInteractionsEnabled={canvasInteractionsEnabled}
+                  onGradientDraggingChange={setIsGradientDragging}
                 />
               </div>
 

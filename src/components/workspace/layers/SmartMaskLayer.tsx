@@ -689,11 +689,28 @@ export function SmartMaskLayer({
     };
 
     const clickTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // Snapshot of selected region captured at mousedown, before click processing clears it
+    const selectedAtMouseDownRef = useRef<Region | null>(null);
+
+    const handleCanvasMouseDown = () => {
+        selectedAtMouseDownRef.current = tile.regions.find(r => r.selected) ?? null;
+    };
 
     const handleCanvasClick = (e: React.MouseEvent) => {
         if (!canvasInteractionsEnabled) return;
-        if (tile.regions.some(r => r.selected) && !e.shiftKey) return;
         const isMultiToggle = e.ctrlKey || e.metaKey;
+        const isAdditive = e.shiftKey || isMultiToggle;
+        if (tile.regions.some(r => r.selected) && !isAdditive) {
+            // Only block if cursor is actually over a region — empty space should deselect
+            const coords2 = toImageCoords(e);
+            const hitCheck = coords2 ? resolveHit(coords2.x, coords2.y) : null;
+            if (hitCheck) {
+                e.stopPropagation();
+                return;
+            }
+            // No hit → let it bubble to background deselect
+            return;
+        }
         const coords = toImageCoords(e);
         if (!coords) return;
 
@@ -703,7 +720,7 @@ export function SmartMaskLayer({
             e.stopPropagation();
             const performSelectionUpdate = () => {
                 let updatedRegions = tile.regions.map(r => {
-                    if (isMultiToggle) {
+                    if (isAdditive) {
                         const isBecomingSelected = r.id === clickedRegion.id ? !r.selected : r.selected;
                         return { ...r, selected: isBecomingSelected, hasEdits: isBecomingSelected ? true : r.hasEdits };
                     }
@@ -735,7 +752,7 @@ export function SmartMaskLayer({
             } else {
                 performSelectionUpdate();
             }
-            const isDeselecting = isMultiToggle && clickedRegion.selected;
+            const isDeselecting = isAdditive && clickedRegion.selected;
             if (!isDeselecting) onEditRegion(clickedRegion);
         }
     };
@@ -744,18 +761,28 @@ export function SmartMaskLayer({
         if (!canvasInteractionsEnabled) return;
         if (clickTimeoutRef.current) clearTimeout(clickTimeoutRef.current);
         const coords = toImageCoords(e);
-        if (!coords) return;
-        const hit = resolveHit(coords.x, coords.y);
-        if (!hit) return;
-        onEditRegion(hit);
-        if (onEnterLocalEdit) onEnterLocalEdit(hit);
-        else onEditRegion(hit);
+        // Use the selection snapshot captured at mousedown
+        const snapshotSelected = selectedAtMouseDownRef.current;
+        if (coords) {
+            const hit = resolveHit(coords.x, coords.y);
+            const target = snapshotSelected ?? hit;
+            if (!target) return;
+            onEditRegion(target);
+            if (onEnterLocalEdit) onEnterLocalEdit(target);
+            else onEditRegion(target);
+        } else if (snapshotSelected) {
+            // No image coords but something was selected — still enter edit
+            onEditRegion(snapshotSelected);
+            if (onEnterLocalEdit) onEnterLocalEdit(snapshotSelected);
+            else onEditRegion(snapshotSelected);
+        }
     };
 
     return (
         <canvas
             ref={canvasRef}
             className={`absolute inset-0 z-10 pointer-events-auto ${canvasInteractionsEnabled ? 'cursor-pointer' : 'cursor-default'}`}
+            onMouseDown={handleCanvasMouseDown}
             onClick={handleCanvasClick}
             onDoubleClick={handleCanvasDoubleClick}
             onMouseMove={handleMouseMove}

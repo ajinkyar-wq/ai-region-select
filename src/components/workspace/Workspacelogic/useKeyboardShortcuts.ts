@@ -8,6 +8,8 @@ interface UseKeyboardShortcutsProps {
     setActiveMask: React.Dispatch<React.SetStateAction<Region | null>>;
     brushActive: boolean;
     setBrushActive: React.Dispatch<React.SetStateAction<boolean>>;
+    isLocalEditing: boolean;
+    onExitEditMode: () => void;
     drawingTool: 'linear-gradient' | 'radial-gradient' | null;
     setDrawingTool: React.Dispatch<React.SetStateAction<'linear-gradient' | 'radial-gradient' | null>>;
     clipboard: Region[];
@@ -23,6 +25,8 @@ export function useKeyboardShortcuts({
     setActiveMask,
     brushActive,
     setBrushActive,
+    isLocalEditing,
+    onExitEditMode,
     drawingTool,
     setDrawingTool,
     clipboard,
@@ -112,18 +116,31 @@ export function useKeyboardShortcuts({
                 });
             }
 
-            // Handle Escape Key (Exit Edit/Drawing Mode)
+            // Handle Escape Key — two-step exit:
+            // Step 1: if in edit/brush mode, exit edit but keep selection
+            // Step 2: if already out of edit mode, deselect all
             if (e.key === 'Escape') {
                 if (drawingTool) {
                     setDrawingTool(null);
+                    return;
                 }
-                if (brushActive) {
-                    setBrushActive(false);
-                }
-                if (activeMask) {
+                // Gradient selected — deselect it (gradient edit mode IS its selected state)
+                const hasGradientSelected = image?.regions.some(r => r.selected && (r.type === 'linear-gradient' || r.type === 'radial-gradient'));
+                if (hasGradientSelected) {
                     setActiveMask(null);
+                    onExitEditMode();
+                    if (image) {
+                        setImage({ ...image, regions: image.regions.map(r => ({ ...r, selected: false })) });
+                    }
+                    return;
                 }
-                // Deselect all regions
+                if (brushActive || isLocalEditing) {
+                    setBrushActive(false);
+                    onExitEditMode();
+                    return;
+                }
+                // Not in edit mode — deselect all
+                if (activeMask) setActiveMask(null);
                 if (image) {
                     setImage({
                         ...image,
@@ -238,5 +255,5 @@ export function useKeyboardShortcuts({
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [image, activeMask, brushActive, drawingTool, clipboard, setImage, setActiveMask, setBrushActive, setDrawingTool, setClipboard, autoDissolveGroups, removeOrphanedClipChildren]);
+    }, [image, activeMask, brushActive, isLocalEditing, onExitEditMode, drawingTool, clipboard, setImage, setActiveMask, setBrushActive, setDrawingTool, setClipboard, autoDissolveGroups, removeOrphanedClipChildren]);
 }

@@ -6,7 +6,8 @@ export function generateRadialGradientMask(
     center: { x: number, y: number },
     radius: { x: number, y: number },
     feather: number,
-    invert: boolean
+    invert: boolean,
+    rotation: number = 0
 ): Uint8Array {
     const data = new Uint8Array(width * height);
     const cx = center.x * width;
@@ -14,18 +15,22 @@ export function generateRadialGradientMask(
     const rx = radius.x * width;
     const ry = radius.y * height;
 
-    // Optimization values
-    const rx_sq = rx * rx;
-    const ry_sq = ry * ry;
+    const angle = (rotation * Math.PI) / 180;
+    const cos = Math.cos(-angle);
+    const sin = Math.sin(-angle);
 
     for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
             const dx = x - cx;
             const dy = y - cy;
 
+            // Rotate point into ellipse local space
+            const rdx = cos * dx - sin * dy;
+            const rdy = sin * dx + cos * dy;
+
             // Normalized Elliptical Distance
             // d = 0 at center, 1 at perimeter
-            const d = Math.sqrt((dx * dx) / rx_sq + (dy * dy) / ry_sq);
+            const d = Math.sqrt((rdx * rdx) / (rx * rx) + (rdy * rdy) / (ry * ry));
 
             let alpha = 0;
             if (d <= feather) {

@@ -122,7 +122,8 @@ export function useGradientOperations({
                     center: normCenter,
                     radius: { x: radiusX, y: radiusY },
                     feather: 0.5,
-                    invert: false
+                    invert: false,
+                    rotation: 0
                 },
                 visible: true,
                 selected: true,

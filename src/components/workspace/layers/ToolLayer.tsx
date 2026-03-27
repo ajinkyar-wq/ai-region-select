@@ -26,6 +26,7 @@ interface ToolLayerProps {
     onUpdateTile?: (updates: Partial<ImageTileData>) => void;
     onEditRegion?: (regionId: string) => void;
     onDoubleEditRegion?: (regionId: string) => void;
+    onGradientDraggingChange?: (isDragging: boolean) => void;
 }
 
 export function ToolLayer({
@@ -39,6 +40,7 @@ export function ToolLayer({
     onUpdateTile,
     onEditRegion,
     onDoubleEditRegion,
+    onGradientDraggingChange,
 }: ToolLayerProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const isDraggingRef = useRef(false); // Track if a drag occurred to prevent click-deselection
@@ -334,7 +336,8 @@ export function ToolLayer({
                         newCenter,
                         existing.radialGradient.radius,
                         existing.radialGradient.feather,
-                        existing.radialGradient.invert || false
+                        existing.radialGradient.invert || false,
+                        existing.radialGradient.rotation ?? 0
                     );
 
                     return {
@@ -689,8 +692,9 @@ export function ToolLayer({
                                     );
                                     onUpdateTile({ regions: updatedRegions });
                                 }}
+                                onDragStart={() => onGradientDraggingChange?.(true)}
                                 onDrag={(delta) => handleChildDrag(region.id, delta)}
-                                onDragEnd={(sourceUpdates) => handleChildDragEnd(region.id, sourceUpdates)}
+                                onDragEnd={(sourceUpdates) => { handleChildDragEnd(region.id, sourceUpdates); onGradientDraggingChange?.(false); }}
                                 onSelect={(e) => handleIconClick(e, region)}
                             />
                         );
@@ -712,8 +716,9 @@ export function ToolLayer({
                                 );
                                 onUpdateTile({ regions: updatedRegions });
                             }}
+                            onDragStart={() => onGradientDraggingChange?.(true)}
                             onDrag={(delta) => handleChildDrag(region.id, delta)}
-                            onDragEnd={(sourceUpdates) => handleChildDragEnd(region.id, sourceUpdates)}
+                            onDragEnd={(sourceUpdates) => { handleChildDragEnd(region.id, sourceUpdates); onGradientDraggingChange?.(false); }}
                             onSelect={(e) => {
                                 // Use common handle logic
                                 handleIconClick(e, region);

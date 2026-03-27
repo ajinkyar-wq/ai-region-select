@@ -20,6 +20,7 @@ interface LinearGradientToolProps {
     onDoubleClick?: (e: React.MouseEvent) => void;
     onDrag?: (delta: { x: number, y: number }) => void;
     onDragEnd?: (sourceUpdates?: Partial<Region>) => void;
+    onDragStart?: () => void;
     /** When set, the gradient overlay is clipped to these mask pixels (for intersect mode) */
     clipMask?: { data: Uint8Array; width: number; height: number };
     /** When true the parent mask is selected — gradient should reveal its overlay even without editing */
@@ -36,6 +37,7 @@ export function LinearGradientTool({
     onDoubleClick,
     onDrag,
     onDragEnd,
+    onDragStart,
     clipMask,
     isParentSelected = false,
 }: LinearGradientToolProps) {
@@ -178,6 +180,8 @@ export function LinearGradientTool({
         e.currentTarget.setPointerCapture(e.pointerId);
 
         if (!dragState) return;
+
+        onDragStart?.();
 
         const rect = containerRef.current?.getBoundingClientRect();
         if (!rect) return;
