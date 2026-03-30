@@ -8,6 +8,8 @@ interface UseKeyboardShortcutsProps {
     setActiveMask: React.Dispatch<React.SetStateAction<Region | null>>;
     brushActive: boolean;
     setBrushActive: React.Dispatch<React.SetStateAction<boolean>>;
+    brushMode: 'add' | 'erase';
+    setBrushMode: React.Dispatch<React.SetStateAction<'add' | 'erase'>>;
     isLocalEditing: boolean;
     onExitEditMode: () => void;
     drawingTool: 'linear-gradient' | 'radial-gradient' | null;
@@ -25,6 +27,8 @@ export function useKeyboardShortcuts({
     setActiveMask,
     brushActive,
     setBrushActive,
+    brushMode,
+    setBrushMode,
     isLocalEditing,
     onExitEditMode,
     drawingTool,
@@ -36,11 +40,20 @@ export function useKeyboardShortcuts({
 }: UseKeyboardShortcutsProps) {
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            if ((e.key === 'Delete' || e.key === 'Backspace') && image) {
-                // Prevent deleting if typing in an input
-                if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
+            // Prevent shortcuts when typing in an input
+            if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
+                return;
+            }
+
+            // X — flip between add and erase while brush/local editing is active
+            if (e.key === 'q' || e.key === 'Q') {
+                if (brushActive || isLocalEditing) {
+                    setBrushMode(prev => prev === 'add' ? 'erase' : 'add');
                     return;
                 }
+            }
+
+            if ((e.key === 'Delete' || e.key === 'Backspace') && image) {
 
                 setImage(prev => {
                     if (!prev) return prev;
@@ -255,5 +268,5 @@ export function useKeyboardShortcuts({
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [image, activeMask, brushActive, isLocalEditing, onExitEditMode, drawingTool, clipboard, setImage, setActiveMask, setBrushActive, setDrawingTool, setClipboard, autoDissolveGroups, removeOrphanedClipChildren]);
+    }, [image, activeMask, brushActive, brushMode, setBrushMode, isLocalEditing, onExitEditMode, drawingTool, clipboard, setImage, setActiveMask, setBrushActive, setDrawingTool, setClipboard, autoDissolveGroups, removeOrphanedClipChildren]);
 }

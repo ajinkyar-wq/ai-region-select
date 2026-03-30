@@ -35,6 +35,7 @@ interface DraggableToolbarProps {
   brushOpacity: number[];
   onBrushOpacityChange: (value: number[]) => void;
   onResetMask?: () => void;
+  imageId?: string;
 }
 
 export function DraggableToolbar({
@@ -50,9 +51,26 @@ export function DraggableToolbar({
   brushOpacity,
   onBrushOpacityChange,
   onResetMask,
+  imageId,
 }: DraggableToolbarProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showXHint, setShowXHint] = useState(true);
+
+  useEffect(() => {
+    setShowXHint(true);
+  }, [imageId]);
+
+  useEffect(() => {
+    if (!showXHint) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'q' || e.key === 'Q') {
+        setShowXHint(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [showXHint]);
 
   useEffect(() => {
     if (disabled) setShowSettings(false);
@@ -389,6 +407,22 @@ export function DraggableToolbar({
           )}
         </div>
       </div>
+
+      {/* X to flip hint */}
+      {activeId && !isCollapsed && showXHint && (
+        <div
+          className="absolute z-40 pointer-events-none flex items-center justify-center px-[6px] py-[8px] rounded-[4px] bg-[#1c1c1c] border border-white/10 select-none"
+          style={
+            !pos
+              ? { right: 12 + 48 + 8, top: 56 + 46 - 24, width: 48 }
+              : { left: pos.x - 8, top: pos.y + 46 - 24, transform: 'translateX(-100%)', width: 48 }
+          }
+        >
+          <span className="text-[11px] text-[#888] text-center leading-tight">
+            <kbd className="font-mono text-white/70 text-[11px]">Q</kbd>{' '}to flip
+          </span>
+        </div>
+      )}
 
       {/* Settings Panel */}
       {showSettings && !isCollapsed && (

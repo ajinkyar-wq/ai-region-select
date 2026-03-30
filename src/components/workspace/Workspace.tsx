@@ -45,7 +45,12 @@ export function Workspace() {
   // Hide the brush toolbar while the user is actively dragging a gradient handle
   const [isGradientDragging, setIsGradientDragging] = useState(false);
 
-  const { isWalkthroughActive, isWaveStopped, stopWave, completeWalkthrough } = useWalkthrough();
+  const { isWalkthroughActive, isWaveStopped, walkthroughStep, stopWave, advanceStep, completeWalkthrough, resetWalkthrough } = useWalkthrough();
+  const [postWalkthroughTip, setPostWalkthroughTip] = useState<{ x: number; y: number } | null>(null);
+  const postTipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dblClickTipCountRef = useRef(4); // show "double click" tip up to 4 times
+  const lastPointerPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const lastTippedMaskIdRef = useRef<string | null>(null); // track which mask last triggered the tip
 
   // Clipboard State
   const [clipboard, setClipboard] = useState<Region[]>([]);
@@ -103,6 +108,8 @@ export function Workspace() {
     setActiveMask,
     brushActive,
     setBrushActive,
+    brushMode,
+    setBrushMode,
     isLocalEditing,
     onExitEditMode: () => setExitEditTrigger(v => v + 1),
     drawingTool,
@@ -153,7 +160,7 @@ export function Workspace() {
       const region = image.regions.find(r => r.id === activeId);
       if (region) {
         setActiveMask(region);
-        setBrushActive(false); // Selection never activates brush — only double-click does
+        setBrushActive(false);
         setDrawingTool(null);
       }
     }
@@ -165,6 +172,11 @@ export function Workspace() {
   }, []);
 
   const handleFileDrop = useCallback((file: File) => {
+    resetWalkthrough();
+    dblClickTipCountRef.current = 4;
+    lastTippedMaskIdRef.current = null;
+    setPostWalkthroughTip(null);
+    if (postTipTimerRef.current) clearTimeout(postTipTimerRef.current);
     const imageUrl = URL.createObjectURL(file);
 
     // Load image to get dimensions
@@ -266,6 +278,44 @@ export function Workspace() {
               style={{ marginRight: isPanelOpen ? 344 : 0 }}
             >
 
+              {/* Escape to deselect tip — top center, shown when mask selected but no tool active */}
+              {activeMask && !brushActive && !isLocalEditing && !isWalkthroughActive && (
+                <div className="absolute top-3 left-0 right-0 flex justify-center pointer-events-none z-40">
+                  <div style={{
+                    display: 'inline-flex', alignItems: 'center',
+                    padding: '5px 10px', background: 'rgba(30,30,30,0.72)',
+                    borderRadius: '6px', boxShadow: '0 2px 10px rgba(0,0,0,0.22)',
+                    backdropFilter: 'blur(6px)', whiteSpace: 'nowrap',
+                  }}>
+                    <span style={{ fontFamily: 'Geist, sans-serif', fontSize: '11px', fontWeight: 500, color: 'rgba(255,255,255,0.85)', lineHeight: '14px' }}>
+                      Press <kbd style={{ display: 'inline-block', padding: '1px 5px', background: 'rgba(255,255,255,0.15)', borderRadius: '4px', fontFamily: 'Geist, sans-serif', fontSize: '11px', fontWeight: 600, color: '#fff' }}>Esc</kbd> to unselect all masks
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Post-walkthrough tip */}
+              {postWalkthroughTip && (
+                <div
+                  className="absolute pointer-events-none z-50"
+                  style={{ left: postWalkthroughTip.x + 14, top: postWalkthroughTip.y - 10 }}
+                >
+                  <div style={{
+                    display: 'inline-flex', alignItems: 'center',
+                    padding: '5px 9px', background: '#F6F6F6',
+                    borderRadius: '5px', boxShadow: '0 2px 10px rgba(0,0,0,0.18)',
+                    whiteSpace: 'nowrap',
+                  }}>
+                    <span style={{
+                      fontFamily: 'Geist, sans-serif', fontSize: '11px',
+                      fontWeight: 500, color: '#474747', lineHeight: '14px',
+                    }}>
+                      Double click anywhere to select brush tool directly
+                    </span>
+                  </div>
+                </div>
+              )}
+
               <div className="absolute top-3 right-3 z-30 pointer-events-auto">
                 <button
                   className="
@@ -287,10 +337,11 @@ export function Workspace() {
 
               {/* DraggableToolbar: Only shows when explicitly ACTIVATED (Double Click / Edit Mode) 
                   AND it's a Brush-based tool (Manual or AI Mask). Gradients use on-canvas handles. */}
-              {image && !image.regions.some(r => r.selected && (r.type === 'linear-gradient' || r.type === 'radial-gradient')) && !isGradientDragging && (
+              {image && !image.regions.some(r => r.selected && (r.type === 'linear-gradient' || r.type === 'radial-gradient')) && (
                 <DraggableToolbar
                   disabled={!image.regions.some(r => r.selected && r.type !== 'linear-gradient' && r.type !== 'radial-gradient')}
                   containerRef={containerRef}
+                  imageId={image.id}
                   activeId={(brushActive || isLocalEditing) ? (brushMode === 'erase' ? 'eraser' : 'brush') : undefined}
                   onActiveChange={(id) => {
                     if (id === 'brush') {
@@ -337,7 +388,9 @@ export function Workspace() {
                 />
               )}
 
-              <div className="relative flex-1 pb-[128px]">
+              <div className="relative flex-1 pb-[128px]"
+                onPointerDown={(e) => { lastPointerPosRef.current = { x: e.clientX, y: e.clientY }; }}
+              >
                 <ImageCanvas
                   image={image}
                   selectionMode={selectionMode}
@@ -349,6 +402,7 @@ export function Workspace() {
                   // Pass Brush State
                   brushMode={brushMode}
                   brushSize={brushSize[0]} // Pass number
+                  onBrushSizeChange={(size) => setBrushSize([size])}
                   brushSoftness={brushSoftness[0]}
                   brushOpacity={brushOpacity[0]}
 
@@ -409,13 +463,78 @@ export function Workspace() {
                       // Single-click: Select only. NEVER activate brush here.
                       // Brush is activated ONLY via double-click (onDoubleEditRegion).
                       setBrushActive(false);
+
+                      // Show "double click" tip up to 4 times, once per unique mask selection
+                      if (dblClickTipCountRef.current > 0 && lastTippedMaskIdRef.current !== id) {
+                        lastTippedMaskIdRef.current = id;
+                        dblClickTipCountRef.current -= 1;
+                        const containerEl = containerRef.current;
+                        const rect = containerEl?.getBoundingClientRect();
+                        const pos = rect
+                          ? { x: lastPointerPosRef.current.x - rect.left, y: lastPointerPosRef.current.y - rect.top }
+                          : lastPointerPosRef.current;
+                        setPostWalkthroughTip(pos);
+                        if (postTipTimerRef.current) clearTimeout(postTipTimerRef.current);
+                        postTipTimerRef.current = setTimeout(() => setPostWalkthroughTip(null), 2800);
+                      }
                     }
                   }}
                   onEditingModeChange={handleLocalEditChange}
                   exitEditTrigger={exitEditTrigger}
                   canvasInteractionsEnabled={canvasInteractionsEnabled}
                   onGradientDraggingChange={setIsGradientDragging}
+                  isWalkthroughActive={isWalkthroughActive}
+                  isWaveStopped={isWaveStopped}
+                  walkthroughStep={walkthroughStep}
+                  onAdvanceWalkthroughStep={advanceStep}
+                  onStopWave={stopWave}
+                  onCompleteWalkthrough={(pos) => {
+                    completeWalkthrough();
+                    if (pos) {
+                      setPostWalkthroughTip(pos);
+                      if (postTipTimerRef.current) clearTimeout(postTipTimerRef.current);
+                      postTipTimerRef.current = setTimeout(() => setPostWalkthroughTip(null), 3500);
+                    }
+                  }}
+                  onSimulateRegionClick={(regionId) => {
+                    if (!image) return;
+                    const region = image.regions.find(r => r.id === regionId);
+                    if (!region) return;
+                    const updated = { ...region, selected: true, hasEdits: true };
+                    setActiveMask(updated);
+                    setBrushActive(false);
+                    setImage({ ...image, regions: image.regions.map(r =>
+                      r.id === regionId ? updated : { ...r, selected: false }
+                    )});
+                  }}
                 />
+
+                {/* Edit mode tooltip */}
+                {isLocalEditing && (
+                  <div style={{
+                    position: 'absolute', bottom: 148, left: '50%',
+                    transform: 'translateX(-50%)',
+                    pointerEvents: 'none', zIndex: 60,
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px',
+                    padding: '7px 13px',
+                    background: 'rgba(30,30,30,0.82)',
+                    borderRadius: '8px',
+                    boxShadow: '0 2px 12px rgba(0,0,0,0.28)',
+                    backdropFilter: 'blur(6px)',
+                    whiteSpace: 'nowrap',
+                  }}>
+                    <span style={{ fontFamily: 'Geist, sans-serif', fontSize: '12px', fontWeight: 500, color: '#fff', lineHeight: '17px' }}>
+                      <kbd style={{
+                        display: 'inline-block', padding: '1px 5px',
+                        background: 'rgba(255,255,255,0.15)', borderRadius: '4px',
+                        fontFamily: 'Geist, sans-serif', fontSize: '11px', fontWeight: 600, color: '#fff',
+                      }}>Esc</kbd>{' '}or click outside the image to unselect tools
+                    </span>
+                    <span style={{ fontFamily: 'Geist, sans-serif', fontSize: '11px', fontWeight: 400, color: 'rgba(255,255,255,0.6)', lineHeight: '15px' }}>
+                      Switching masks will unselect tools
+                    </span>
+                  </div>
+                )}
               </div>
 
               <div className="absolute bottom-[42px] left-0 right-0 z-10">

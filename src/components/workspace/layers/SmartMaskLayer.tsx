@@ -671,7 +671,7 @@ export function SmartMaskLayer({
         if (!isManualToolActive) {
             for (const handle of toolHandlesRef.current) {
                 const handleDist = Math.hypot(coords.x - handle.x, coords.y - handle.y);
-                if (handleDist < 80) { // 80px magnetic halo
+                if (handleDist < 5) { // 80px magnetic halo
                     isTargetingTool = true;
                     break;
                 }
@@ -691,12 +691,23 @@ export function SmartMaskLayer({
     const clickTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     // Snapshot of selected region captured at mousedown, before click processing clears it
     const selectedAtMouseDownRef = useRef<Region | null>(null);
+    const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null);
+    const DRAG_THRESHOLD = 4;
 
-    const handleCanvasMouseDown = () => {
+    const handleCanvasMouseDown = (e: React.MouseEvent) => {
         selectedAtMouseDownRef.current = tile.regions.find(r => r.selected) ?? null;
+        mouseDownPosRef.current = { x: e.clientX, y: e.clientY };
+    };
+
+    const hasDragged = (e: React.MouseEvent) => {
+        if (!mouseDownPosRef.current) return false;
+        const dx = e.clientX - mouseDownPosRef.current.x;
+        const dy = e.clientY - mouseDownPosRef.current.y;
+        return Math.sqrt(dx * dx + dy * dy) > DRAG_THRESHOLD;
     };
 
     const handleCanvasClick = (e: React.MouseEvent) => {
+        if (hasDragged(e)) return;
         if (!canvasInteractionsEnabled) return;
         const isMultiToggle = e.ctrlKey || e.metaKey;
         const isAdditive = e.shiftKey || isMultiToggle;
@@ -758,6 +769,7 @@ export function SmartMaskLayer({
     };
 
     const handleCanvasDoubleClick = (e: React.MouseEvent) => {
+        if (hasDragged(e)) return;
         if (!canvasInteractionsEnabled) return;
         if (clickTimeoutRef.current) clearTimeout(clickTimeoutRef.current);
         const coords = toImageCoords(e);

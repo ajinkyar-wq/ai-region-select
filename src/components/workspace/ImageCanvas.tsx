@@ -4,10 +4,9 @@ import { ScanAnimation } from './layers/ScanAnimation';
 import { AIMaskEditor } from './tools/AIMaskEditor';
 import { SmartMaskLayer } from './layers/SmartMaskLayer';
 import { ToolLayer } from './layers/ToolLayer';
-import { AdjustmentLayer } from './layers/AdjustmentLayer';
 import { BrushTool } from './tools/BrushTool';
 import { WalkthroughOverlay } from './layers/WalkthroughOverlay';
-//import { useWalkthrough } from './Workspacelogic/useWalkthrough';
+import type { WalkthroughStep } from './Workspacelogic/useWalkthrough';
 import { segmentImage } from '@/lib/segmentation';
 import type { ImageTileData, Region } from '@/types/workspace';
 
@@ -24,6 +23,7 @@ interface ImageCanvasProps {
   // Brush Props
   brushMode?: 'add' | 'erase';
   brushSize?: number;
+  onBrushSizeChange?: (size: number) => void;
   brushSoftness?: number;
   brushOpacity?: number;
   onBrushExit?: () => void;
@@ -44,6 +44,16 @@ interface ImageCanvasProps {
   onActionComplete?: () => void;
   onGradientDraggingChange?: (isDragging: boolean) => void;
 
+  // Walkthrough
+  isWalkthroughActive?: boolean;
+  isWaveStopped?: boolean;
+  walkthroughStep?: WalkthroughStep;
+  onAdvanceWalkthroughStep?: () => void;
+  onStopWave?: () => void;
+  onCompleteWalkthrough?: (pos?: { x: number; y: number }) => void;
+  onSimulateRegionClick?: (regionId: string) => void;
+  onSimulateRegionHover?: (regionId: string | null) => void;
+  onSimulateRegionDeselect?: () => void;
 }
 
 export function ImageCanvas({
@@ -56,6 +66,7 @@ export function ImageCanvas({
   onBrushExit,
   brushMode,
   brushSize,
+  onBrushSizeChange,
   brushSoftness,
   brushOpacity,
   onActivateBrush,
@@ -68,11 +79,20 @@ export function ImageCanvas({
   exitEditTrigger,
   canvasInteractionsEnabled = true,
   onGradientDraggingChange,
+  isWalkthroughActive = false,
+  isWaveStopped = false,
+  walkthroughStep = 0,
+  onAdvanceWalkthroughStep,
+  onStopWave,
+  onCompleteWalkthrough,
+  onSimulateRegionClick,
+  onSimulateRegionHover,
+  onSimulateRegionDeselect,
 }: ImageCanvasProps) {
   const mainCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  //const { isWalkthroughActive, isWaveStopped, stopWaveCount, stopWave, completeWalkthrough, resetWalkthrough } = useWalkthrough();
+  // Walkthrough is driven from Workspace via props
 
   const [walkthroughClickPos, setWalkthroughClickPos] = useState<{ x: number; y: number } | null>(null);
   const lastMousePosRef = useRef<{ x: number; y: number } | null>(null);
@@ -181,13 +201,76 @@ activeMask.type.startsWith('background-')
     ) ? activeMask : null
   );
 
-  // Pan only — zoom removed (scale breaks brush and multi-select mask movement)
-  const handleWheel = (e: React.WheelEvent) => {
-    setOffset(prev => ({
-      x: prev.x - e.deltaX,
-      y: prev.y - e.deltaY,
-    }));
+  const isPanningRef = useRef(false);
+  const panStartRef = useRef<{ x: number; y: number; offsetX: number; offsetY: number } | null>(null);
+  const containerPointerDownRef = useRef<{ x: number; y: number } | null>(null);
+  const PAN_THRESHOLD = 4;
+  const offsetRef = useRef(offset);
+  useEffect(() => { offsetRef.current = offset; }, [offset]);
+
+  const isOutsideImage = (clientX: number, clientY: number) => {
+    if (!imageTransform || !containerRef.current) return true;
+    const rect = containerRef.current.getBoundingClientRect();
+    const x = clientX - rect.left - offset.x;
+    const y = clientY - rect.top - offset.y;
+    return (
+      x < imageTransform.x ||
+      x > imageTransform.x + imageTransform.width ||
+      y < imageTransform.y ||
+      y > imageTransform.y + imageTransform.height
+    );
   };
+
+  const handleContainerPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    containerPointerDownRef.current = { x: e.clientX, y: e.clientY };
+    // Always allow pan from outside the image area, even when brush is active
+    if (!isOutsideImage(e.clientX, e.clientY)) return;
+    panStartRef.current = { x: e.clientX, y: e.clientY, offsetX: offsetRef.current.x, offsetY: offsetRef.current.y };
+    isPanningRef.current = false;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+
+  const handleContainerPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!panStartRef.current) return;
+    const dx = e.clientX - panStartRef.current.x;
+    const dy = e.clientY - panStartRef.current.y;
+    if (!isPanningRef.current && Math.sqrt(dx * dx + dy * dy) < PAN_THRESHOLD) return;
+    isPanningRef.current = true;
+    setOffset({ x: panStartRef.current.offsetX + dx, y: panStartRef.current.offsetY + dy });
+  };
+
+  const handleContainerPointerUp = () => {
+    panStartRef.current = null;
+    if (isPanningRef.current) {
+      setTimeout(() => { isPanningRef.current = false; }, 0);
+    }
+  };
+
+  // Wheel: brush size when brush/edit active, pan otherwise. Attached imperatively so we can preventDefault.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      const isBrushActive = brushActive || !!editingRegion;
+      if (isBrushActive) {
+        e.preventDefault();
+        if (!onBrushSizeChange || brushSize === undefined) return;
+        // deltaY positive = scroll down = smaller brush, negative = scroll up = larger
+        const delta = e.deltaY > 0 ? -2 : 2;
+        const next = Math.max(1, Math.min(100, brushSize + delta));
+        onBrushSizeChange(next);
+      } else {
+        e.preventDefault();
+        setOffset(prev => ({
+          x: prev.x - e.deltaX,
+          y: prev.y - e.deltaY,
+        }));
+      }
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [brushActive, editingRegion, brushSize, onBrushSizeChange]);
 
   // Load image and run segmentation (LAYER 1)
   useEffect(() => {
@@ -346,14 +429,27 @@ activeMask.type.startsWith('background-')
     <div
       ref={containerRef}
       className={`relative h-full w-full overflow-hidden bg-black ${drawingTool ? 'cursor-crosshair' : ''}`}
-      onWheel={handleWheel}
+      onPointerDown={handleContainerPointerDown}
+      onPointerMove={handleContainerPointerMove}
+      onPointerUp={handleContainerPointerUp}
+      onPointerLeave={handleContainerPointerUp}
       onMouseMove={(e) => {
         const rect = containerRef.current?.getBoundingClientRect();
         if (rect) lastMousePosRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
       }}
-      onClick={() => {
-        // Exit Edit / Brush Modes on background click
+      onClick={(e) => {
+        // Exit Edit / Brush Modes on background click — ignore if user dragged (pan)
+        if (isPanningRef.current) return;
         if (drawingTool) return;
+        // Ignore if user dragged inside the image (drag-to-adjust gradients etc.)
+        if (containerPointerDownRef.current) {
+          const dx = e.clientX - containerPointerDownRef.current.x;
+          const dy = e.clientY - containerPointerDownRef.current.y;
+          if (Math.sqrt(dx * dx + dy * dy) > PAN_THRESHOLD) return;
+        }
+        // While editing a gradient, only exit if the click was outside the image
+        const isGradientEdit = editingRegion?.type === 'linear-gradient' || editingRegion?.type === 'radial-gradient';
+        if (isGradientEdit && !isOutsideImage(e.clientX, e.clientY)) return;
 
         if (editingRegion) {
           const isGradient = editingRegion.type === 'linear-gradient' || editingRegion.type === 'radial-gradient';
@@ -366,15 +462,18 @@ activeMask.type.startsWith('background-')
               selected: isGradient ? false : r.id === editingRegion.id,
             })),
           });
+          // Don't kill the brush when exiting a gradient — it wasn't active for the gradient
+          if (!isGradient && onBrushExit) {
+            onBrushExit();
+          }
         } else {
           // No editing region: Deselect ALL on background click
           onUpdateTile({
             regions: tile.regions.map(r => ({ ...r, selected: false })),
           });
-        }
-
-        if (onBrushExit) {
-          onBrushExit();
+          if (onBrushExit) {
+            onBrushExit();
+          }
         }
       }}
     >
@@ -388,16 +487,6 @@ activeMask.type.startsWith('background-')
         {/* LAYER 1: Base Image */}
         <canvas ref={mainCanvasRef} className="absolute inset-0 z-0" />
 
-        {/* LAYER 1.5: Image Adjustments */}
-        {imageTransform && (
-          <AdjustmentLayer
-            tile={tile}
-            imageTransform={imageTransform}
-            width={viewDimensions?.width ?? 0}
-            height={viewDimensions?.height ?? 0}
-          />
-        )}
-
         {/* LAYER 2: Smart AI Masks */}
         {viewDimensions && (
           <SmartMaskLayer
@@ -407,18 +496,18 @@ activeMask.type.startsWith('background-')
             height={viewDimensions.height}
             peopleEnabled={peopleEnabled}
             backgroundEnabled={backgroundEnabled}
-            //isWalkthroughActive={isWalkthroughActive}
+            isWalkthroughActive={isWalkthroughActive}
             hoveredRegionId={brushActive ? null : hoveredRegionId}
             isEditing={!!activeEditingRegion && activeEditingRegion.type !== 'manual' && activeEditingRegion.type !== 'linear-gradient' && activeEditingRegion.type !== 'radial-gradient'}
             onHoverChange={brushActive ? () => { } : setLocalHoveredRegion}
             onUpdateTile={onUpdateTile}
-            onEditRegion={(r) => { // Single Click: stop wave, show/reset tooltip
-              //if (isWalkthroughActive) stopWave();
+            onEditRegion={(r) => {
+              if (isWalkthroughActive) onCompleteWalkthrough?.(lastMousePosRef.current ?? undefined);
               setWalkthroughClickPos(lastMousePosRef.current ? { ...lastMousePosRef.current } : null);
               handleEditRegion(r.id);
             }}
-            onEnterLocalEdit={(r) => { // Double Click: enter edit mode + activate brush
-              //if (isWalkthroughActive) completeWalkthrough();
+            onEnterLocalEdit={(r) => {
+              if (isWalkthroughActive) onCompleteWalkthrough?.(lastMousePosRef.current ?? undefined);
               setWalkthroughClickPos(null);
               if (r.type === 'manual') {
                 if (onActivateBrush) onActivateBrush(r.id);
@@ -606,9 +695,21 @@ r.type.startsWith('background-')
         panOffset={offset}
         regions={tile.regions}
         hoveredRegionId={hoveredRegionId}
-        //isWalkthroughActive={isWalkthroughActive}
-        //isWaveStopped={isWaveStopped}
+        isWalkthroughActive={isWalkthroughActive}
+        isWaveStopped={isWaveStopped}
         clickPos={walkthroughClickPos}
+        walkthroughStep={walkthroughStep}
+        containerWidth={viewDimensions?.width ?? 0}
+        containerHeight={viewDimensions?.height ?? 0}
+        onAdvanceStep={onAdvanceWalkthroughStep}
+        onStopWave={onStopWave}
+        onCompleteWalkthrough={onCompleteWalkthrough}
+        onSimulateRegionClick={onSimulateRegionClick}
+        onSimulateRegionHover={(id) => { if (!brushActive) setLocalHoveredRegion(id); }}
+        onSimulateRegionDeselect={() => {
+          onUpdateTile({ regions: tile.regions.map(r => ({ ...r, selected: false })) });
+          setLocalHoveredRegion(null);
+        }}
       />
 
       <ScanAnimation isActive={showScan} />

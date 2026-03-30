@@ -218,7 +218,7 @@ All colors MUST be HSL.
 }
 
 .animate-walkthrough-wave {
-  animation: walkthrough-wave 5s linear infinite;
+  animation: walkthrough-wave 1.4s linear 1 forwards;
 }
 @keyframes walkthrough-wave-pos {
   0%   { background-position: -25% -25%; }

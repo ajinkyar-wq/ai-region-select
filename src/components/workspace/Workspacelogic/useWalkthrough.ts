@@ -10,6 +10,8 @@ function notify() {
     listeners.forEach(fn => fn());
 }
 
+export type WalkthroughStep = 0 | 1 | 2 | 3 | 4;
+
 export function useWalkthrough() {
     const [, rerender] = useState(0);
 
@@ -38,11 +40,16 @@ export function useWalkthrough() {
         notify();
     };
 
+    // advanceStep kept for compat — not used in simplified flow
+    const advanceStep = () => { /* no-op in simplified flow */ };
+
     return {
         isWalkthroughActive: !sharedHasCompleted,
         isWaveStopped: sharedIsWaveStopped,
         stopWaveCount: sharedStopWaveCount,
+        walkthroughStep: 0 as WalkthroughStep,
         stopWave,
+        advanceStep,
         completeWalkthrough,
         resetWalkthrough,
     };
