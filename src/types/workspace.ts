@@ -34,6 +34,8 @@ export interface Region {
   groupId?: string;
   /** If set, this gradient is a child of the mask with this ID (intersect/clip mode) */
   clipParentId?: string;
+  /** How this child composites onto its parent */
+  clipMode?: 'add' | 'subtract' | 'intersect';
   previewUrl?: string;
   adjustments?: RegionAdjustments;
 }

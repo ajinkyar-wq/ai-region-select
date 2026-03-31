@@ -103,8 +103,13 @@ export function LinearGradientTool({
             dragState.end.x, dragState.end.y
         );
 
-        grad.addColorStop(0, 'rgba(255, 50, 50, 0.4)');
-        grad.addColorStop(1, 'rgba(255, 50, 50, 0)');
+        const cm = region.color.match(/#([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})/i);
+        const rC = cm ? parseInt(cm[1], 16) : 255;
+        const gC = cm ? parseInt(cm[2], 16) : 50;
+        const bC = cm ? parseInt(cm[3], 16) : 50;
+
+        grad.addColorStop(0, `rgba(${rC}, ${gC}, ${bC}, 0.4)`);
+        grad.addColorStop(1, `rgba(${rC}, ${gC}, ${bC}, 0)`);
 
         ctx.fillStyle = grad;
         ctx.fillRect(0, 0, canvas.width, canvas.height);

@@ -8,6 +8,8 @@ import { Filmstrip } from './layout/Filmstrip';
 import { BottomBar } from './layout/BottomBar';
 import { SliderPanel } from './slider-panel/SliderPanel';
 import { DraggableToolbar } from './tools/DraggableToolbar';
+import { ToolWheel } from './tools/ToolWheel';
+import type { WheelTool } from './tools/ToolWheel';
 import type { ImageTileData, Region } from '@/types/workspace';
 import { Columns2, Paintbrush, Eraser } from 'lucide-react';
 import { useKeyboardShortcuts } from './Workspacelogic/useKeyboardShortcuts';
@@ -45,6 +47,14 @@ export function Workspace() {
   // Hide the brush toolbar while the user is actively dragging a gradient handle
   const [isGradientDragging, setIsGradientDragging] = useState(false);
 
+  // Tool wheel state
+  const [wheelVisible, setWheelVisible] = useState(false);
+  const [wheelPos, setWheelPos] = useState({ x: 0, y: 0 });
+  const wheelHoveredRef = useRef<number>(-2);
+  const hasMaskSelectedRef = useRef(false);
+  const mousePosRef = useRef({ x: 0, y: 0 });
+  const prevMousePosRef = useRef({ x: 0, y: 0 });
+
   const { isWalkthroughActive, isWaveStopped, walkthroughStep, stopWave, advanceStep, completeWalkthrough, resetWalkthrough } = useWalkthrough();
   const [postWalkthroughTip, setPostWalkthroughTip] = useState<{ x: number; y: number } | null>(null);
   const postTipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -57,6 +67,7 @@ export function Workspace() {
 
   // Selection Snapshot for Async Tools (Gradients)
   const selectionSnapshotRef = useRef<string[]>([]);
+  const gradientModeRef = useRef<'add' | 'erase'>('add');
 
   const showMaskImage = !!image?.regions.some(r => r.selected);
 
@@ -98,7 +109,8 @@ export function Workspace() {
     setBrushActive,
     drawingTool,
     setDrawingTool,
-    selectionSnapshotRef
+    selectionSnapshotRef,
+    gradientModeRef,
   });
 
   useKeyboardShortcuts({
@@ -119,6 +131,97 @@ export function Workspace() {
     autoDissolveGroups,
     removeOrphanedClipChildren
   });
+
+  // Tool wheel: select tool handler (stable ref to avoid stale closures)
+  const handleWheelSelectTool = useCallback((tool: WheelTool, mode: 'add' | 'erase') => {
+    setBrushMode(mode);
+    if (tool === 'brush' || tool === 'eraser') {
+      const hasMask = image?.regions.some(r => r.selected);
+      if (!hasMask) {
+        handleCreateManualMask();
+      } else {
+        setBrushActive(true);
+        setDrawingTool(null);
+      }
+    } else if (tool === 'linear-gradient') {
+      handleCreateLinearGradient(mode);
+    } else if (tool === 'radial-gradient') {
+      handleCreateRadialGradient(mode);
+    }
+  }, [image, handleCreateManualMask, handleCreateLinearGradient, handleCreateRadialGradient]);
+
+  const handleWheelSelectToolRef = useRef(handleWheelSelectTool);
+  handleWheelSelectToolRef.current = handleWheelSelectTool;
+
+  // Tool wheel: track mouse and Tab key
+  useEffect(() => {
+    const onMouseMove = (e: MouseEvent) => {
+      prevMousePosRef.current = mousePosRef.current;
+      mousePosRef.current = { x: e.clientX, y: e.clientY };
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Tab') {
+        const tag = (document.activeElement as HTMLElement)?.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+        e.preventDefault();
+        e.stopPropagation();
+        // Blur whatever is focused so browser can't tab-cycle
+        (document.activeElement as HTMLElement)?.blur?.();
+        if (!e.repeat) {
+          setWheelPos(mousePosRef.current);
+          setWheelVisible(true);
+        }
+      }
+    };
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Tab') {
+        const tag = (document.activeElement as HTMLElement)?.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+        e.preventDefault();
+        e.stopPropagation();
+        setWheelVisible(false);
+        const idx = wheelHoveredRef.current;
+        if (idx >= 0) {
+          if (hasMaskSelectedRef.current) {
+            // 8-sector split: 0-3 = add, 4-7 = subtract
+            const splitSectors: { tool: WheelTool; mode: 'add' | 'erase' }[] = [
+              { tool: 'brush',           mode: 'add'   },
+              { tool: 'linear-gradient', mode: 'add'   },
+              { tool: 'radial-gradient', mode: 'add'   },
+              { tool: 'eraser',          mode: 'add'   },
+              { tool: 'brush',           mode: 'erase' },
+              { tool: 'linear-gradient', mode: 'erase' },
+              { tool: 'radial-gradient', mode: 'erase' },
+              { tool: 'eraser',          mode: 'erase' },
+            ];
+            const s = splitSectors[idx];
+            if (s) handleWheelSelectToolRef.current(s.tool, s.mode);
+          } else {
+            // 4-sector simple: brush, linear, eraser, radial
+            const simpleSectors: { tool: WheelTool; mode: 'add' | 'erase' }[] = [
+              { tool: 'brush',           mode: 'add' },
+              { tool: 'linear-gradient', mode: 'add' },
+              { tool: 'eraser',          mode: 'add' },
+              { tool: 'radial-gradient', mode: 'add' },
+            ];
+            const s = simpleSectors[idx];
+            if (s) handleWheelSelectToolRef.current(s.tool, s.mode);
+          }
+        }
+      }
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('keyup', onKeyUp, true);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('keyup', onKeyUp, true);
+    };
+  }, []);
 
   const handleSelectBatchRegions = (ids: string[], multi: boolean, activeId?: string) => {
     if (!image) return;
@@ -385,6 +488,19 @@ export function Workspace() {
                       },
                     },
                   ]}
+                />
+              )}
+
+              {/* Tool Wheel — shown when Tab is held */}
+              {wheelVisible && image && (
+                <ToolWheel
+                  x={wheelPos.x}
+                  y={wheelPos.y}
+                  hasMaskSelected={(() => { const v = image.regions.some(r => r.selected); hasMaskSelectedRef.current = v; return v; })()}
+                  brushMode={brushMode}
+                  onSelectTool={handleWheelSelectTool}
+                  onToggleBrushMode={() => setBrushMode(prev => prev === 'add' ? 'erase' : 'add')}
+                  onHoverChange={(idx) => { wheelHoveredRef.current = idx; }}
                 />
               )}
 

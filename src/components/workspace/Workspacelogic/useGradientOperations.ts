@@ -12,6 +12,7 @@ interface UseGradientOperationsProps {
     drawingTool: 'linear-gradient' | 'radial-gradient' | null;
     setDrawingTool: React.Dispatch<React.SetStateAction<'linear-gradient' | 'radial-gradient' | null>>;
     selectionSnapshotRef: MutableRefObject<string[]>;
+    gradientModeRef: MutableRefObject<'add' | 'erase'>;
 }
 
 export function useGradientOperations({
@@ -21,40 +22,52 @@ export function useGradientOperations({
     setBrushActive,
     drawingTool,
     setDrawingTool,
-    selectionSnapshotRef
+    selectionSnapshotRef,
+    gradientModeRef,
 }: UseGradientOperationsProps) {
 
-    const handleCreateLinearGradient = useCallback(() => {
+    const handleCreateLinearGradient = useCallback((mode: 'add' | 'erase' = 'add') => {
         if (!image) return;
 
-        selectionSnapshotRef.current = image.regions.filter(r => r.selected).map(r => r.id);
+        const selectedIds = image.regions.filter(r => r.selected).map(r => r.id);
+        gradientModeRef.current = mode;
+        selectionSnapshotRef.current = selectedIds;
 
         setDrawingTool('linear-gradient');
-        setImage(prev => prev ? {
-            ...prev,
-            regions: prev.regions.map(r => ({ ...r, selected: false }))
-        } : prev);
+        // Only deselect if no mask is selected (standalone gradient creation)
+        if (selectedIds.length === 0) {
+            setImage(prev => prev ? {
+                ...prev,
+                regions: prev.regions.map(r => ({ ...r, selected: false }))
+            } : prev);
+            setActiveMask(null);
+        }
         setBrushActive(false);
-        setActiveMask(null);
-    }, [image, setImage, setDrawingTool, setBrushActive, setActiveMask, selectionSnapshotRef]);
+    }, [image, setImage, setDrawingTool, setBrushActive, setActiveMask, selectionSnapshotRef, gradientModeRef]);
 
-    const handleCreateRadialGradient = useCallback(() => {
+    const handleCreateRadialGradient = useCallback((mode: 'add' | 'erase' = 'add') => {
         if (!image) return;
 
-        selectionSnapshotRef.current = image.regions.filter(r => r.selected).map(r => r.id);
+        const selectedIds = image.regions.filter(r => r.selected).map(r => r.id);
+        gradientModeRef.current = mode;
+        selectionSnapshotRef.current = selectedIds;
 
         setDrawingTool('radial-gradient');
-        setImage(prev => prev ? {
-            ...prev,
-            regions: prev.regions.map(r => ({ ...r, selected: false }))
-        } : prev);
+        // Only deselect if no mask is selected (standalone gradient creation)
+        if (selectedIds.length === 0) {
+            setImage(prev => prev ? {
+                ...prev,
+                regions: prev.regions.map(r => ({ ...r, selected: false }))
+            } : prev);
+            setActiveMask(null);
+        }
         setBrushActive(false);
-        setActiveMask(null);
-    }, [image, setImage, setDrawingTool, setBrushActive, setActiveMask, selectionSnapshotRef]);
+    }, [image, setImage, setDrawingTool, setBrushActive, setActiveMask, selectionSnapshotRef, gradientModeRef]);
 
     const handleDrawComplete = useCallback((start: { x: number, y: number }, end: { x: number, y: number }) => {
         if (!image) return;
         const tool = drawingTool;
+        const mode = gradientModeRef.current;
         setDrawingTool(null);
 
         const width = image.width ?? 640;
@@ -101,7 +114,7 @@ export function useGradientOperations({
                 return;
             }
 
-            const maskData = generateRadialGradientMask(
+            const gradMaskData = generateRadialGradientMask(
                 width,
                 height,
                 normCenter,
@@ -110,11 +123,49 @@ export function useGradientOperations({
                 false
             );
 
+            // ADD or SUBTRACT with a mask selected: attach as a child gradient with clipParentId
+            if (selectedRegions.length > 0) {
+                const parent = selectedRegions[0];
+                const childMask: Region = {
+                    id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2),
+                    type: 'radial-gradient',
+                    label: mode === 'erase' ? 'Radial Gradient (Subtract)' : 'Radial Gradient (Add)',
+                    maskData: gradMaskData,
+                    maskWidth: width,
+                    maskHeight: height,
+                    color: parent.color,
+                    radialGradient: {
+                        center: normCenter,
+                        radius: { x: radiusX, y: radiusY },
+                        feather: 0.5,
+                        invert: false,
+                        rotation: 0
+                    },
+                    visible: true,
+                    selected: false,
+                    hovered: false,
+                    hasEdits: true,
+                    previewUrl: generateMaskPreview(gradMaskData, width, height, parent.color),
+                    clipParentId: parent.id,
+                    clipMode: mode === 'erase' ? 'subtract' : 'add',
+                };
+                setImage(prev => prev ? {
+                    ...prev,
+                    regions: [
+                        ...prev.regions.map(r => snapshotIds.includes(r.id) ? { ...r, selected: true } : r),
+                        childMask
+                    ]
+                } : prev);
+                setActiveMask(parent);
+                selectionSnapshotRef.current = [];
+                return;
+            }
+
             const newMask: Region = {
                 id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2),
                 type: 'radial-gradient',
                 label: 'Radial Gradient',
-                maskData,
+                maskData: gradMaskData,
                 maskWidth: width,
                 maskHeight: height,
                 color: REGION_COLORS.manual,
@@ -129,7 +180,7 @@ export function useGradientOperations({
                 selected: true,
                 hovered: false,
                 hasEdits: true,
-                previewUrl: generateMaskPreview(maskData, width, height, REGION_COLORS.manual),
+                previewUrl: generateMaskPreview(gradMaskData, width, height, REGION_COLORS.manual),
                 groupId: targetGroupId,
             };
 
@@ -167,7 +218,7 @@ export function useGradientOperations({
             const normStart = start;
             const normEnd = end;
 
-            const maskData = new Uint8Array(width * height);
+            const gradMaskData = new Uint8Array(width * height);
 
             const vPx = p2_px.x - p1_px.x;
             const vPy = p2_px.y - p1_px.y;
@@ -185,16 +236,48 @@ export function useGradientOperations({
                         else if (u >= 1) alpha = 0;
                         else alpha = Math.round((1 - u) * 255);
 
-                        if (alpha > 0) maskData[y * width + x] = alpha;
+                        if (alpha > 0) gradMaskData[y * width + x] = alpha;
                     }
                 }
+            }
+
+            // ADD or SUBTRACT with a mask selected: attach as a child gradient with clipParentId
+            if (selectedRegions.length > 0) {
+                const parent = selectedRegions[0];
+                const childMask: Region = {
+                    id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2),
+                    type: 'linear-gradient',
+                    label: mode === 'erase' ? 'Linear Gradient (Subtract)' : 'Linear Gradient (Add)',
+                    maskData: gradMaskData,
+                    maskWidth: width,
+                    maskHeight: height,
+                    color: parent.color,
+                    gradient: { start: normStart, end: normEnd },
+                    visible: true,
+                    selected: false,
+                    hovered: false,
+                    hasEdits: true,
+                    previewUrl: generateMaskPreview(gradMaskData, width, height, parent.color),
+                    clipParentId: parent.id,
+                    clipMode: mode === 'erase' ? 'subtract' : 'add',
+                };
+                setImage(prev => prev ? {
+                    ...prev,
+                    regions: [
+                        ...prev.regions.map(r => snapshotIds.includes(r.id) ? { ...r, selected: true } : r),
+                        childMask
+                    ]
+                } : prev);
+                setActiveMask(parent);
+                selectionSnapshotRef.current = [];
+                return;
             }
 
             const newMask: Region = {
                 id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2),
                 type: 'linear-gradient',
                 label: 'Linear Gradient',
-                maskData,
+                maskData: gradMaskData,
                 maskWidth: width,
                 maskHeight: height,
                 color: REGION_COLORS.manual,
@@ -203,7 +286,7 @@ export function useGradientOperations({
                 selected: true,
                 hovered: false,
                 hasEdits: true,
-                previewUrl: generateMaskPreview(maskData, width, height, REGION_COLORS.manual),
+                previewUrl: generateMaskPreview(gradMaskData, width, height, REGION_COLORS.manual),
                 groupId: targetGroupId,
             };
 
@@ -223,7 +306,7 @@ export function useGradientOperations({
             );
             setActiveMask(newMask);
         }
-    }, [image, drawingTool, setImage, setActiveMask, setDrawingTool, selectionSnapshotRef]);
+    }, [image, drawingTool, setImage, setActiveMask, setDrawingTool, selectionSnapshotRef, gradientModeRef]);
 
     const handleIntersectGradient = useCallback((gradientId: string, targetId: string) => {
         if (!image) return;

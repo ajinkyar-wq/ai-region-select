@@ -1,8 +1,9 @@
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import { ScanAnimation } from './layers/ScanAnimation';
 import { AIMaskEditor } from './tools/AIMaskEditor';
 import { SmartMaskLayer } from './layers/SmartMaskLayer';
+import type { LiveGradient } from './layers/SmartMaskLayer';
 import { ToolLayer } from './layers/ToolLayer';
 import { BrushTool } from './tools/BrushTool';
 import { WalkthroughOverlay } from './layers/WalkthroughOverlay';
@@ -425,6 +426,20 @@ activeMask.type.startsWith('background-')
     editingRegion.type !== 'radial-gradient' &&
     editingRegion.type !== 'manual';
 
+  // Live gradient: fed into SmartMaskLayer/ToolLayer for real-time compositing during draw
+  const liveGradient = useMemo<LiveGradient | null>(() => {
+    if (!drawState?.isDrawing || !drawingTool) return null;
+    const parentRegion = tile?.regions.find(r => r.selected && !r.clipParentId);
+    if (!parentRegion) return null;
+    return {
+      type: drawingTool as 'linear-gradient' | 'radial-gradient',
+      start: drawState.start,
+      end: drawState.current,
+      mode: brushMode === 'erase' ? 'subtract' : 'add',
+      parentId: parentRegion.id,
+    };
+  }, [drawState, drawingTool, tile?.regions, brushMode]);
+
   return (
     <div
       ref={containerRef}
@@ -525,6 +540,7 @@ activeMask.type.startsWith('background-')
               activeEditingRegion?.type === 'linear-gradient' ||
               activeEditingRegion?.type === 'radial-gradient'
             }
+            liveGradient={liveGradient}
           />
         )}
 
@@ -543,6 +559,7 @@ activeMask.type.startsWith('background-')
             onEditRegion={handleEditRegion} // Route edits through our dispatcher
             onDoubleEditRegion={onActivateBrush} // Handle Double Click (Enable Brush Toolbar)
             onGradientDraggingChange={onGradientDraggingChange}
+            liveGradient={liveGradient}
           />
         )}
 
@@ -624,44 +641,7 @@ r.type.startsWith('background-')
                   className="absolute pointer-events-none"
                   style={{ left: imageTransform.x, top: imageTransform.y, width: iw, height: ih }}
                 >
-                  {/* Live gradient preview canvas */}
-                  <canvas
-                    ref={(canvas) => {
-                      if (!canvas) return;
-                      canvas.width = iw;
-                      canvas.height = ih;
-                      const ctx = canvas.getContext('2d');
-                      if (!ctx) return;
-                      ctx.clearRect(0, 0, iw, ih);
-
-                      if (drawingTool === 'linear-gradient') {
-                        const grad = ctx.createLinearGradient(sx, sy, ex, ey);
-                        grad.addColorStop(0, 'rgba(255, 50, 50, 0.45)');
-                        grad.addColorStop(1, 'rgba(255, 50, 50, 0)');
-                        ctx.fillStyle = grad;
-                        ctx.fillRect(0, 0, iw, ih);
-                      } else {
-                        // Radial gradient — ellipse via scaled context
-                        const rx = Math.abs(ex - sx);
-                        const ry = Math.abs(ey - sy);
-                        if (rx > 2 && ry > 2) {
-                          ctx.save();
-                          ctx.translate(sx, sy);
-                          ctx.scale(1, ry / rx);
-                          const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, rx);
-                          grad.addColorStop(0, 'rgba(255, 50, 50, 0.45)');
-                          grad.addColorStop(1, 'rgba(255, 50, 50, 0)');
-                          ctx.fillStyle = grad;
-                          ctx.fillRect(-rx * 4, -rx * 4 / (ry / rx), rx * 8, rx * 8 / (ry / rx));
-                          ctx.restore();
-                        }
-                      }
-                    }}
-                    className="absolute inset-0"
-                    style={{ width: iw, height: ih }}
-                  />
-
-                  {/* Control handles on top */}
+                  {/* Handles only — fill is composited live by SmartMaskLayer/ToolLayer */}
                   <svg className="absolute inset-0 w-full h-full overflow-visible pointer-events-none">
                     {drawingTool === 'radial-gradient' ? (
                       <ellipse

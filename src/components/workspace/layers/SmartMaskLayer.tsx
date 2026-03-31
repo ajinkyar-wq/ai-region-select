@@ -1,6 +1,14 @@
 import { useEffect, useRef, useCallback } from 'react';
 import type { ImageTileData, Region } from '@/types/workspace';
-import { getMaskCenter } from '@/lib/mask-analysis';
+import { getMaskCenter, generateRadialGradientMask } from '@/lib/mask-analysis';
+
+export interface LiveGradient {
+    type: 'linear-gradient' | 'radial-gradient';
+    start: { x: number; y: number }; // normalized 0-1
+    end: { x: number; y: number };   // normalized 0-1
+    mode: 'add' | 'subtract';
+    parentId: string;
+}
 
 interface SmartMaskLayerProps {
     tile: ImageTileData;
@@ -23,6 +31,7 @@ interface SmartMaskLayerProps {
     canvasInteractionsEnabled?: boolean;
     isWalkthroughActive?: boolean;
     isManualToolActive?: boolean;
+    liveGradient?: LiveGradient | null;
 }
 
 // ─── Erosion ──────────────────────────────────────────────────────────────────
@@ -335,6 +344,7 @@ export function SmartMaskLayer({
     canvasInteractionsEnabled = true,
     isWalkthroughActive = false,
     isManualToolActive = false,
+    liveGradient = null,
 }: SmartMaskLayerProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     // Cache persists across renders; checksum-based invalidation handles mask edits
@@ -486,27 +496,94 @@ export function SmartMaskLayer({
                 return result;
             };
 
-            const directClipKids = clipChildrenByParent[region.id] || [];
+            const directClipKids = [...(clipChildrenByParent[region.id] || [])];
             const groupClipKids = region.groupId ? (clipChildrenByGroup[region.groupId] || []) : [];
 
-            // 1. Calculate the union of all group-level constraints
+            // Inject live gradient as a temporary clip child for real-time preview
+            if (liveGradient && liveGradient.parentId === region.id) {
+                let liveMaskData: Uint8Array;
+                if (liveGradient.type === 'radial-gradient') {
+                    const radiusX = Math.abs(liveGradient.end.x - liveGradient.start.x);
+                    const radiusY = Math.abs(liveGradient.end.y - liveGradient.start.y);
+                    liveMaskData = generateRadialGradientMask(w, h, liveGradient.start, { x: radiusX, y: radiusY }, 0.5, false);
+                } else {
+                    // linear gradient
+                    liveMaskData = new Uint8Array(w * h);
+                    const p1x = liveGradient.start.x * w;
+                    const p1y = liveGradient.start.y * h;
+                    const p2x = liveGradient.end.x * w;
+                    const p2y = liveGradient.end.y * h;
+                    const vx = p2x - p1x;
+                    const vy = p2y - p1y;
+                    const m2 = vx * vx + vy * vy;
+                    if (m2 > 0.0001) {
+                        for (let py = 0; py < h; py++) {
+                            for (let px = 0; px < w; px++) {
+                                const u = ((px - p1x) * vx + (py - p1y) * vy) / m2;
+                                const alpha = u <= 0 ? 255 : u >= 1 ? 0 : Math.round((1 - u) * 255);
+                                if (alpha > 0) liveMaskData[py * w + px] = alpha;
+                            }
+                        }
+                    }
+                }
+                directClipKids.push({
+                    id: '__live__',
+                    type: liveGradient.type,
+                    label: '',
+                    maskData: liveMaskData,
+                    maskWidth: w,
+                    maskHeight: h,
+                    color: region.color,
+                    visible: true,
+                    selected: false,
+                    hovered: false,
+                    clipParentId: region.id,
+                    clipMode: liveGradient.mode === 'subtract' ? 'subtract' : 'add',
+                } as Region);
+            }
+
+            // Group kids are legacy intersect-only
             const groupUnion = getUnionOfClipBranches(groupClipKids, w, h);
-            // 2. Calculate the union of all direct-level constraints
-            const directUnion = getUnionOfClipBranches(directClipKids, w, h);
 
-            if (groupUnion || directUnion) {
-                const finalMask = new Uint8Array(w * h);
-                for (let i = 0; i < mask.length; i++) {
-                    const baseVal = mask[i];
-                    if (baseVal <= 0) continue;
+            let finalMask = new Uint8Array(mask);
 
-                    let effectiveVal = baseVal;
-                    // Intersect with Group Union if it exists
-                    if (groupUnion) effectiveVal = Math.min(effectiveVal, groupUnion[i]);
-                    // Intersect with Direct Union if it exists
-                    if (directUnion) effectiveVal = Math.min(effectiveVal, directUnion[i]);
+            if (directClipKids.length > 0 || groupUnion) {
+                // Apply each direct kid's clipMode individually
 
-                    finalMask[i] = effectiveVal;
+                for (const kid of directClipKids) {
+                    const kW = kid.maskWidth;
+                    const kH = kid.maskHeight;
+                    const sameSize = kW === w && kH === h;
+                    const hasAddKids = directClipKids.some(k => k.clipMode === 'add');
+
+                    for (let i = 0; i < finalMask.length; i++) {
+                        if (finalMask[i] === 0 && !hasAddKids) continue;
+                        const x = i % w;
+                        const y = Math.floor(i / w);
+                        let childVal: number;
+                        if (sameSize) {
+                            childVal = kid.maskData[i];
+                        } else {
+                            const kx = Math.min(Math.floor((x / w) * kW), kW - 1);
+                            const ky = Math.min(Math.floor((y / h) * kH), kH - 1);
+                            childVal = kid.maskData[ky * kW + kx];
+                        }
+                        if (kid.clipMode === 'subtract') {
+                            finalMask[i] = Math.max(0, finalMask[i] - childVal);
+                        } else if (kid.clipMode === 'add') {
+                            finalMask[i] = Math.min(255, finalMask[i] + childVal);
+                        } else {
+                            // intersect (legacy default)
+                            finalMask[i] = Math.min(finalMask[i], childVal);
+                        }
+                    }
+                }
+
+                // Apply group-level intersect constraint on top
+                if (groupUnion) {
+                    for (let i = 0; i < finalMask.length; i++) {
+                        finalMask[i] = Math.min(finalMask[i], groupUnion[i]);
+                    }
                 }
 
                 if (finalMask.some(v => v > 0)) {
@@ -522,15 +599,8 @@ export function SmartMaskLayer({
             // We pass a single composite clip mask to renderContourStroke.
             let compositeContourClip: { data: Uint8Array, w: number, h: number } | undefined = undefined;
 
-            if (groupUnion || directUnion) {
-                const combined = new Uint8Array(w * h);
-                for (let i = 0; i < combined.length; i++) {
-                    let val = 255;
-                    if (groupUnion) val = Math.min(val, groupUnion[i]);
-                    if (directUnion) val = Math.min(val, directUnion[i]);
-                    combined[i] = val;
-                }
-                compositeContourClip = { data: combined, w, h };
+            if (directClipKids.length > 0 || groupUnion) {
+                compositeContourClip = { data: finalMask, w, h };
             }
 
             const clipMasksPayload = compositeContourClip ? [compositeContourClip] : [];
@@ -569,7 +639,7 @@ export function SmartMaskLayer({
             // subject: fill only, no contour
         });
 
-    }, [tile.regions, imageTransform, hoveredRegionId, isEditing, peopleEnabled, backgroundEnabled, width, height, canvasInteractionsEnabled]);
+    }, [tile.regions, imageTransform, hoveredRegionId, isEditing, peopleEnabled, backgroundEnabled, width, height, canvasInteractionsEnabled, liveGradient]);
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 

@@ -1,13 +1,13 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { Region, ImageTileData } from '@/types/workspace';
-import { getMaskCenter } from '@/lib/mask-analysis';
+import { getMaskCenter, generateRadialGradientMask } from '@/lib/mask-analysis';
 import { Brush, Contrast } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { LinearGradientTool } from '../tools/LinearGradientTool';
 import { RadialGradientTool } from '../tools/RadialGradientTool';
-import { generateRadialGradientMask } from '@/lib/mask-analysis';
 import { GlassCard } from 'react-glass-ui';
+import type { LiveGradient } from './SmartMaskLayer';
 
 interface ToolLayerProps {
     width: number;
@@ -27,6 +27,7 @@ interface ToolLayerProps {
     onEditRegion?: (regionId: string) => void;
     onDoubleEditRegion?: (regionId: string) => void;
     onGradientDraggingChange?: (isDragging: boolean) => void;
+    liveGradient?: LiveGradient | null;
 }
 
 export function ToolLayer({
@@ -41,6 +42,7 @@ export function ToolLayer({
     onEditRegion,
     onDoubleEditRegion,
     onGradientDraggingChange,
+    liveGradient = null,
 }: ToolLayerProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const isDraggingRef = useRef(false); // Track if a drag occurred to prevent click-deselection
@@ -178,16 +180,62 @@ export function ToolLayer({
             const data = region.maskData;
 
             // Identify intersected gradients (Clip Children)
-            const clipKids = effectiveRegions.filter(c => c.clipParentId === region.id);
+            const clipKids = [...effectiveRegions.filter(c => c.clipParentId === region.id)];
+
+            // Inject live gradient as temporary clip child for real-time preview
+            if (liveGradient && liveGradient.parentId === region.id) {
+                const rw2 = region.maskWidth;
+                const rh2 = region.maskHeight;
+                let liveMaskData: Uint8Array;
+                if (liveGradient.type === 'radial-gradient') {
+                    const radiusX = Math.abs(liveGradient.end.x - liveGradient.start.x);
+                    const radiusY = Math.abs(liveGradient.end.y - liveGradient.start.y);
+                    liveMaskData = generateRadialGradientMask(rw2, rh2, liveGradient.start, { x: radiusX, y: radiusY }, 0.5, false);
+                } else {
+                    liveMaskData = new Uint8Array(rw2 * rh2);
+                    const p1x = liveGradient.start.x * rw2;
+                    const p1y = liveGradient.start.y * rh2;
+                    const p2x = liveGradient.end.x * rw2;
+                    const p2y = liveGradient.end.y * rh2;
+                    const vx = p2x - p1x;
+                    const vy = p2y - p1y;
+                    const m2 = vx * vx + vy * vy;
+                    if (m2 > 0.0001) {
+                        for (let py = 0; py < rh2; py++) {
+                            for (let px = 0; px < rw2; px++) {
+                                const u = ((px - p1x) * vx + (py - p1y) * vy) / m2;
+                                const a = u <= 0 ? 255 : u >= 1 ? 0 : Math.round((1 - u) * 255);
+                                if (a > 0) liveMaskData[py * rw2 + px] = a;
+                            }
+                        }
+                    }
+                }
+                clipKids.push({
+                    id: '__live__',
+                    type: liveGradient.type,
+                    label: '',
+                    maskData: liveMaskData,
+                    maskWidth: rw2,
+                    maskHeight: rh2,
+                    color: region.color,
+                    visible: true,
+                    selected: false,
+                    hovered: false,
+                    clipParentId: region.id,
+                    clipMode: liveGradient.mode === 'subtract' ? 'subtract' : 'add',
+                } as Region);
+            }
+
             const hasClipKids = clipKids.length > 0;
+            const hasAddKids = clipKids.some(k => k.clipMode === 'add');
             const rw = region.maskWidth; // capture for loop
 
             // Color logic: Manual = Green, Linear/Radial Gradient = Red
             for (let i = 0; i < data.length; i++) {
                 let alpha = data[i];
 
-                // If we have clip children, intersect them
-                if (hasClipKids && alpha > 0) {
+                // Run clip kids: always if add kids exist (alpha may be 0), otherwise only where parent has coverage
+                if (hasClipKids && (alpha > 0 || hasAddKids)) {
                     const x = i % rw;
                     const y = Math.floor(i / rw);
 
@@ -197,33 +245,30 @@ export function ToolLayer({
 
                         let childVal = 0;
                         if (kw === rw && kh === region.maskHeight) {
-                            // Fast path: same dimensions
                             childVal = kid.maskData[i];
                         } else {
-                            // Resample
                             const kx = Math.min(Math.floor((x / rw) * kw), kw - 1);
                             const ky = Math.min(Math.floor((y / region.maskHeight) * kh), kh - 1);
                             childVal = kid.maskData[ky * kw + kx];
                         }
-                        alpha = Math.min(alpha, childVal);
+                        if (kid.clipMode === 'subtract') {
+                            alpha = Math.max(0, alpha - childVal);
+                        } else if (kid.clipMode === 'add') {
+                            alpha = Math.min(255, alpha + childVal);
+                        } else {
+                            // intersect (default)
+                            alpha = Math.min(alpha, childVal);
+                        }
                     }
                 }
 
                 if (alpha > 10) {
                     const idx = i * 4;
-                    // Use alpha from mask for gradients
                     const opacity = alpha / 255;
-
-                    if (region.type === 'linear-gradient' || region.type === 'radial-gradient') {
-                        imageData.data[idx] = 255;     // R
-                        imageData.data[idx + 1] = 50;  // G
-                        imageData.data[idx + 2] = 50;  // B
-                    } else {
-                        imageData.data[idx] = 50;     // R
-                        imageData.data[idx + 1] = 255; // G
-                        imageData.data[idx + 2] = 50;  // B
-                    }
-                    // Standard overlay is semi-transparent.
+                    const cm = region.color.match(/#([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})/i);
+                    imageData.data[idx]     = cm ? parseInt(cm[1], 16) : 50;
+                    imageData.data[idx + 1] = cm ? parseInt(cm[2], 16) : 255;
+                    imageData.data[idx + 2] = cm ? parseInt(cm[3], 16) : 50;
                     imageData.data[idx + 3] = Math.floor(opacity * 100);
                 }
             }
@@ -255,7 +300,7 @@ export function ToolLayer({
             ctx.restore();
         });
 
-    }, [regions, width, height, excludedRegionId, dragState, multiDragState, activeRegionId]); // Added activeRegionId
+    }, [regions, width, height, excludedRegionId, dragState, multiDragState, activeRegionId, liveGradient]);
 
     if (!imageTransform) return null;
 
@@ -410,7 +455,10 @@ export function ToolLayer({
                 return r; // Don't touch others
             }
 
-            // Single select
+            // Single select — if clicking a clip child, keep siblings with the same parent selected
+            if (region.clipParentId && r.clipParentId === region.clipParentId) {
+                return r; // keep sibling clip children as-is
+            }
             return {
                 ...r,
                 selected: r.id === region.id
@@ -675,6 +723,8 @@ export function ToolLayer({
                         }
                     }
 
+                    const effectiveClipMask = clipMask;
+
                     if (region.type === 'radial-gradient') {
                         return (
                             <RadialGradientTool
@@ -682,8 +732,8 @@ export function ToolLayer({
                                 imageTransform={imageTransform}
                                 region={region}
                                 isSelected={region.selected}
-                                isEditing={region.id === editingRegionId}
-                                clipMask={clipMask}
+                                isEditing={region.id === editingRegionId || (!!region.clipParentId && region.clipParentId === editingRegionId)}
+                                clipMask={effectiveClipMask}
                                 isParentSelected={isParentSelected}
                                 onUpdate={(updates) => {
                                     if (!onUpdateTile) return;
@@ -706,8 +756,8 @@ export function ToolLayer({
                             imageTransform={imageTransform}
                             region={region}
                             isSelected={region.selected}
-                            isEditing={region.id === editingRegionId}
-                            clipMask={clipMask}
+                            isEditing={region.id === editingRegionId || (!!region.clipParentId && region.clipParentId === editingRegionId)}
+                            clipMask={effectiveClipMask}
                             isParentSelected={isParentSelected}
                             onUpdate={(updates) => {
                                 if (!onUpdateTile) return;
