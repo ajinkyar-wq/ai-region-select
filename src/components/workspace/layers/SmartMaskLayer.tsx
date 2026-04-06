@@ -595,11 +595,14 @@ export function SmartMaskLayer({
             }
 
             // Pass 2 — soft contour
-            // The contour must be clipped by the EXACT SAME combined constraints as the fill.
-            // We pass a single composite clip mask to renderContourStroke.
+            // The contour must be clipped by the combined constraints as the fill,
+            // but ONLY when there are subtract-mode (or legacy intersect) kids.
+            // Add-mode kids expand the mask beyond the original boundary, so clipping
+            // the contour to finalMask would make it look like an intersection — skip it.
             let compositeContourClip: { data: Uint8Array, w: number, h: number } | undefined = undefined;
 
-            if (directClipKids.length > 0 || groupUnion) {
+            const hasSubtractOrIntersectKids = directClipKids.some(k => k.clipMode !== 'add') || !!groupUnion;
+            if (hasSubtractOrIntersectKids) {
                 compositeContourClip = { data: finalMask, w, h };
             }
 
@@ -718,7 +721,7 @@ export function SmartMaskLayer({
         if (isEditing) return;
 
         // When something is selected in the right panel, gate hover behind Shift
-        if (tile.regions.some(r => r.selected) && !e.shiftKey) {
+        if (isSelectedRef.current && !e.shiftKey) {
             if (hoveredRegionId) onHoverChange(null);
             return;
         }
@@ -758,6 +761,9 @@ export function SmartMaskLayer({
         }
     };
 
+    const isSelectedRef = useRef(tile.regions.some(r => r.selected));
+    useEffect(() => { isSelectedRef.current = tile.regions.some(r => r.selected); }, [tile.regions]);
+
     const clickTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     // Snapshot of selected region captured at mousedown, before click processing clears it
     const selectedAtMouseDownRef = useRef<Region | null>(null);
@@ -782,14 +788,18 @@ export function SmartMaskLayer({
         const isMultiToggle = e.ctrlKey || e.metaKey;
         const isAdditive = e.shiftKey || isMultiToggle;
         if (tile.regions.some(r => r.selected) && !isAdditive) {
-            // Only block if cursor is actually over a region — empty space should deselect
-            const coords2 = toImageCoords(e);
-            const hitCheck = coords2 ? resolveHit(coords2.x, coords2.y) : null;
-            if (hitCheck) {
-                e.stopPropagation();
-                return;
-            }
-            // No hit → let it bubble to background deselect
+            // Single click while a mask is selected = deselect all (same as Escape)
+            // Delay so double-click can cancel it before it fires
+            e.stopPropagation();
+            const regionsToDeselect = tile.regions;
+            if (clickTimeoutRef.current) clearTimeout(clickTimeoutRef.current);
+            isSelectedRef.current = false;
+            const hoverCoords = toImageCoords(e);
+            const hoverHit = hoverCoords ? resolveHit(hoverCoords.x, hoverCoords.y) : null;
+            onHoverChange(hoverHit ? hoverHit.id : null);
+            clickTimeoutRef.current = setTimeout(() => {
+                onUpdateTile({ regions: regionsToDeselect.map(r => ({ ...r, selected: false })) });
+            }, 250);
             return;
         }
         const coords = toImageCoords(e);
@@ -841,23 +851,23 @@ export function SmartMaskLayer({
     const handleCanvasDoubleClick = (e: React.MouseEvent) => {
         if (hasDragged(e)) return;
         if (!canvasInteractionsEnabled) return;
+        // Cancel the pending single-click deselect
         if (clickTimeoutRef.current) clearTimeout(clickTimeoutRef.current);
-        const coords = toImageCoords(e);
-        // Use the selection snapshot captured at mousedown
-        const snapshotSelected = selectedAtMouseDownRef.current;
-        if (coords) {
-            const hit = resolveHit(coords.x, coords.y);
-            const target = snapshotSelected ?? hit;
-            if (!target) return;
+        e.stopPropagation();
+        // selectedAtMouseDownRef is always captured at mousedown — before any click fires
+        const target = selectedAtMouseDownRef.current;
+        if (target) {
             onEditRegion(target);
             if (onEnterLocalEdit) onEnterLocalEdit(target);
-            else onEditRegion(target);
-        } else if (snapshotSelected) {
-            // No image coords but something was selected — still enter edit
-            onEditRegion(snapshotSelected);
-            if (onEnterLocalEdit) onEnterLocalEdit(snapshotSelected);
-            else onEditRegion(snapshotSelected);
+            return;
         }
+        // No mask was selected — resolve from coords
+        const coords = toImageCoords(e);
+        if (!coords) return;
+        const hit = resolveHit(coords.x, coords.y);
+        if (!hit) return;
+        onEditRegion(hit);
+        if (onEnterLocalEdit) onEnterLocalEdit(hit);
     };
 
     return (

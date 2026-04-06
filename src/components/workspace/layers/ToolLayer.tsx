@@ -83,29 +83,10 @@ export function ToolLayer({
                 }
 
                 if (r.type === 'linear-gradient' && r.gradient) {
-                    // Normalized coordinates require width/height to apply pixel delta?
-                    // No, delta is pixel. We can convert or keep pixel.
-                    // Wait, Gradient Tools expect normalized updates usually?
-                    // Actually, LinearGradientTool takes `region`.
-                    // If we modify `region.gradient` directly here, we need Image Size to normalize pixel delta.
-                    // imageTransform might be null?
-
-                    // Helper inside: just use pixel projection if possible?
-                    // Actually, simplified: Gradients store normalized 0-1.
-                    // Delta is pixels.
-                    // We need to convert pixels to normalized range.
-                    const w = width; // ToolLayer width ~ image width? No. `width` is container.
-                    // We need image dimensions.
-                    // `imageTransform` has `width/height` (displayed size).
-                    // But gradients are normalized to natural image size?
-                    // No, `region.gradient` is 0-1.
-                    // `imageTransform.width` is the rendered width.
-
                     if (imageTransform) {
-                        // delta.x is in natural image pixels (screen delta / fit_scale).
-                        // Normalize by natural image dimensions (width/height props), not displayed dimensions.
-                        const dxNorm = multiDragState.delta.x / width;
-                        const dyNorm = multiDragState.delta.y / height;
+                        // delta is in display pixels; gradients are normalized 0-1 over display dimensions
+                        const dxNorm = multiDragState.delta.x / imageTransform.width;
+                        const dyNorm = multiDragState.delta.y / imageTransform.height;
                         return {
                             ...r,
                             gradient: {
@@ -118,8 +99,8 @@ export function ToolLayer({
 
                 if (r.type === 'radial-gradient' && r.radialGradient) {
                     if (imageTransform) {
-                        const dxNorm = multiDragState.delta.x / width;
-                        const dyNorm = multiDragState.delta.y / height;
+                        const dxNorm = multiDragState.delta.x / imageTransform.width;
+                        const dyNorm = multiDragState.delta.y / imageTransform.height;
                         return {
                             ...r,
                             radialGradient: {
@@ -349,8 +330,8 @@ export function ToolLayer({
                 }
 
                 if (existing.type === 'linear-gradient' && existing.gradient) {
-                    const dxNorm = multiDragState.delta.x / width;
-                    const dyNorm = multiDragState.delta.y / height;
+                    const dxNorm = multiDragState.delta.x / imageTransform.width;
+                    const dyNorm = multiDragState.delta.y / imageTransform.height;
                     return {
                         ...existing,
                         gradient: {
@@ -367,8 +348,8 @@ export function ToolLayer({
                 }
 
                 if (existing.type === 'radial-gradient' && existing.radialGradient) {
-                    const dxNorm = multiDragState.delta.x / width;
-                    const dyNorm = multiDragState.delta.y / height;
+                    const dxNorm = multiDragState.delta.x / imageTransform.width;
+                    const dyNorm = multiDragState.delta.y / imageTransform.height;
 
                     const newCenter = {
                         x: existing.radialGradient.center.x + dxNorm,
@@ -500,12 +481,10 @@ export function ToolLayer({
             isDraggingRef.current = true;
         }
 
-        // Convert View Pixels -> Image Pixels
-        // scale = viewPixels / imagePixels
-        const scale = imageTransform.scale;
-
-        const dxImg = dx / scale;
-        const dyImg = dy / scale;
+        // Offset is stored in display pixels (same space as maskWidth/maskHeight).
+        // dx/dy are already in display pixels (clientX delta).
+        const dxImg = dx;
+        const dyImg = dy;
 
         const newOffset = {
             x: dragState.initialOffset.x + dxImg,
@@ -515,17 +494,7 @@ export function ToolLayer({
         // Update LOCAL state only (fast)
         setDragState(prev => prev ? { ...prev, currentOffset: newOffset } : null);
 
-        // Also update Multi-Drag for others
-        const delta = {
-            x: dxImg - (dragState.currentOffset.x - dragState.initialOffset.x), // Incremental? No, Logic asks for Total Delta?
-            // `newOffset` is Total Offset. 
-            // `initialOffset` is Start.
-            // Delta = newOffset - initialOffset
-        };
-        // Actually my `handleChildDrag` expects Total Delta from start?
-        // RadialGradientTool sends `dx, dy` which are "Delta from Center".
-        // Center was initial. So yes, Total Delta.
-
+        // Total delta in display pixels for multi-drag coordination
         const totalDelta = {
             x: dxImg,
             y: dyImg
@@ -723,7 +692,9 @@ export function ToolLayer({
                         }
                     }
 
-                    const effectiveClipMask = clipMask;
+                    // For add-mode gradients, do not clip the overlay to the parent mask —
+                    // they expand beyond the parent boundary and clipping would make them look like intersections.
+                    const effectiveClipMask = region.clipMode === 'add' ? undefined : clipMask;
 
                     if (region.type === 'radial-gradient') {
                         return (

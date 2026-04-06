@@ -132,10 +132,10 @@ export function RadialGradientTool({
             0, 0, effectiveRadius
         );
 
-        const cm = region.color.match(/#([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})/i);
-        const rC = cm ? parseInt(cm[1], 16) : 255;
-        const gC = cm ? parseInt(cm[2], 16) : 50;
-        const bC = cm ? parseInt(cm[3], 16) : 50;
+        const cm = region.color?.match(/#([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})/i);
+        const rC = cm ? parseInt(cm[1], 16) : 80;
+        const gC = cm ? parseInt(cm[2], 16) : 255;
+        const bC = cm ? parseInt(cm[3], 16) : 80;
 
         if (isInverted) {
             grad.addColorStop(0, `rgba(${rC}, ${gC}, ${bC}, 0)`);
@@ -195,7 +195,7 @@ export function RadialGradientTool({
             }
         }
 
-    }, [dragState, clipMask, imageTransform?.width, imageTransform?.height, isSelected, isEditing, isParentSelected, region.radialGradient?.invert, region.radialGradient?.rotation]);
+    }, [dragState, clipMask, imageTransform?.width, imageTransform?.height, isSelected, isEditing, isParentSelected, region.radialGradient?.invert, region.radialGradient?.rotation, region.color]);
 
 
     // --- Interaction Handlers ---

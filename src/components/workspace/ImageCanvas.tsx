@@ -430,7 +430,7 @@ activeMask.type.startsWith('background-')
   const liveGradient = useMemo<LiveGradient | null>(() => {
     if (!drawState?.isDrawing || !drawingTool) return null;
     const parentRegion = tile?.regions.find(r => r.selected && !r.clipParentId);
-    if (!parentRegion) return null;
+    if (!parentRegion) return null; // standalone — handled separately by drawing overlay
     return {
       type: drawingTool as 'linear-gradient' | 'radial-gradient',
       start: drawState.start,
@@ -439,6 +439,9 @@ activeMask.type.startsWith('background-')
       parentId: parentRegion.id,
     };
   }, [drawState, drawingTool, tile?.regions, brushMode]);
+
+  // Standalone gradient color: green for manual, inherits nothing
+  const standaloneGradientColor = '#50FF50';
 
   return (
     <div
@@ -636,12 +639,55 @@ r.type.startsWith('background-')
               const ex = drawState.current.x * iw;
               const ey = drawState.current.y * ih;
 
+              // Standalone gradient: no parent mask selected, show fill preview ourselves
+              const isStandalone = !tile?.regions.some(r => r.selected && !r.clipParentId);
+              const pcm = standaloneGradientColor.match(/#([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})/i);
+              const pR = pcm ? parseInt(pcm[1], 16) : 80;
+              const pG = pcm ? parseInt(pcm[2], 16) : 255;
+              const pB = pcm ? parseInt(pcm[3], 16) : 80;
+
               return (
                 <div
                   className="absolute pointer-events-none"
                   style={{ left: imageTransform.x, top: imageTransform.y, width: iw, height: ih }}
                 >
-                  {/* Handles only — fill is composited live by SmartMaskLayer/ToolLayer */}
+                  {/* Fill preview for standalone only — add/subtract is composited live by SmartMaskLayer/ToolLayer */}
+                  {isStandalone && (
+                    <canvas
+                      ref={(canvas) => {
+                        if (!canvas) return;
+                        canvas.width = iw;
+                        canvas.height = ih;
+                        const ctx = canvas.getContext('2d');
+                        if (!ctx) return;
+                        ctx.clearRect(0, 0, iw, ih);
+                        if (drawingTool === 'linear-gradient') {
+                          const grad = ctx.createLinearGradient(sx, sy, ex, ey);
+                          grad.addColorStop(0, `rgba(${pR}, ${pG}, ${pB}, 0.45)`);
+                          grad.addColorStop(1, `rgba(${pR}, ${pG}, ${pB}, 0)`);
+                          ctx.fillStyle = grad;
+                          ctx.fillRect(0, 0, iw, ih);
+                        } else {
+                          const rx = Math.abs(ex - sx);
+                          const ry = Math.abs(ey - sy);
+                          if (rx > 2 && ry > 2) {
+                            ctx.save();
+                            ctx.translate(sx, sy);
+                            ctx.scale(1, ry / rx);
+                            const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, rx);
+                            grad.addColorStop(0, `rgba(${pR}, ${pG}, ${pB}, 0.45)`);
+                            grad.addColorStop(1, `rgba(${pR}, ${pG}, ${pB}, 0)`);
+                            ctx.fillStyle = grad;
+                            ctx.fillRect(-rx * 4, -rx * 4 / (ry / rx), rx * 8, rx * 8 / (ry / rx));
+                            ctx.restore();
+                          }
+                        }
+                      }}
+                      className="absolute inset-0"
+                      style={{ width: iw, height: ih }}
+                    />
+                  )}
+                  {/* Handles */}
                   <svg className="absolute inset-0 w-full h-full overflow-visible pointer-events-none">
                     {drawingTool === 'radial-gradient' ? (
                       <ellipse

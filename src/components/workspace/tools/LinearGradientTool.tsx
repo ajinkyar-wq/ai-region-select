@@ -103,10 +103,10 @@ export function LinearGradientTool({
             dragState.end.x, dragState.end.y
         );
 
-        const cm = region.color.match(/#([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})/i);
-        const rC = cm ? parseInt(cm[1], 16) : 255;
-        const gC = cm ? parseInt(cm[2], 16) : 50;
-        const bC = cm ? parseInt(cm[3], 16) : 50;
+        const cm = region.color?.match(/#([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})/i);
+        const rC = cm ? parseInt(cm[1], 16) : 80;
+        const gC = cm ? parseInt(cm[2], 16) : 255;
+        const bC = cm ? parseInt(cm[3], 16) : 80;
 
         grad.addColorStop(0, `rgba(${rC}, ${gC}, ${bC}, 0.4)`);
         grad.addColorStop(1, `rgba(${rC}, ${gC}, ${bC}, 0)`);
@@ -144,7 +144,7 @@ export function LinearGradientTool({
                 ctx.globalCompositeOperation = 'source-over';
             }
         }
-    }, [dragState, clipMask, imageTransform?.width, imageTransform?.height, isSelected, isEditing, isParentSelected]);
+    }, [dragState, clipMask, imageTransform?.width, imageTransform?.height, isSelected, isEditing, isParentSelected, region.color]);
 
 
 

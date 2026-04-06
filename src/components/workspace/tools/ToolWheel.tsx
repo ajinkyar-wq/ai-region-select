@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Paintbrush, Eraser } from 'lucide-react';
+import { Paintbrush, Eraser, X } from 'lucide-react';
 
 function LinearGradientIcon() {
   return (
@@ -50,21 +50,26 @@ const SIMPLE_SECTORS = [
 ];
 
 // Mask selected: 8 sectors × 45° — left half = add, right half = subtract
-// Left half (add): 90°→270°, centers at 112.5, 157.5, 202.5, 247.5
-// Right half (sub): -90°→90°, centers at -67.5, -22.5, 22.5, 67.5
+// Add  (left):  top-left→bottom-left  — centers at -112.5, -157.5, 157.5, 112.5  (i.e. 247.5, 202.5, 157.5, 112.5 normalised)
+// Sub  (right): top-right→bottom-right — centers at -67.5, -22.5, 22.5, 67.5
+//
+// Clockwise from top-left:
+//   Add:  Brush @ -112.5 (top-left), Linear @ 157.5, Radial @ 202.5, empty @ 247.5
+//   Sub:  Eraser @ -67.5 (top-right), Linear @ -22.5, Radial @ 22.5, empty @ 67.5
 const SPLIT_SECTORS = [
-  { tool: 'brush'           as WheelTool, label: 'Brush',   angle: 112.5, mode: 'add'   as const },
-  { tool: 'linear-gradient' as WheelTool, label: 'Linear',  angle: 157.5, mode: 'add'   as const },
-  { tool: 'radial-gradient' as WheelTool, label: 'Radial',  angle: 202.5, mode: 'add'   as const },
-  { tool: 'eraser'          as WheelTool, label: 'Eraser',  angle: 247.5, mode: 'add'   as const },
-  { tool: 'brush'           as WheelTool, label: 'Brush',   angle: -67.5, mode: 'erase' as const },
-  { tool: 'linear-gradient' as WheelTool, label: 'Linear',  angle: -22.5, mode: 'erase' as const },
-  { tool: 'radial-gradient' as WheelTool, label: 'Radial',  angle:  22.5, mode: 'erase' as const },
-  { tool: 'eraser'          as WheelTool, label: 'Eraser',  angle:  67.5, mode: 'erase' as const },
+  { tool: 'brush'           as WheelTool, label: 'Brush',  angle: -112.5, mode: 'add'   as const, placeholder: false },
+  { tool: 'linear-gradient' as WheelTool, label: 'Linear', angle:  157.5, mode: 'add'   as const, placeholder: false },
+  { tool: 'radial-gradient' as WheelTool, label: 'Radial', angle:  202.5, mode: 'add'   as const, placeholder: false },
+  { tool: 'brush'           as WheelTool, label: '',        angle:  247.5, mode: 'add'   as const, placeholder: true  },
+  { tool: 'eraser'          as WheelTool, label: 'Eraser', angle:  -67.5, mode: 'erase' as const, placeholder: false },
+    { tool: 'radial-gradient' as WheelTool, label: 'Radial', angle:   22.5, mode: 'erase' as const, placeholder: false },
+  { tool: 'linear-gradient' as WheelTool, label: 'Linear', angle:  -22.5, mode: 'erase' as const, placeholder: false },
+  { tool: 'brush'           as WheelTool, label: '',        angle:   67.5, mode: 'erase' as const, placeholder: true  },
 ];
 
 const OUTER_R = 140;
 const VISUAL_INNER_R = 20;
+const CANCEL_ZONE_R = VISUAL_INNER_R; // cancel zone = just the small center circle
 const ICON_R = 88;
 const LABEL_R = 118;
 const OUTER_LABEL_R = 158; // ADD / SUB labels
@@ -119,9 +124,15 @@ export function ToolWheel({ x, y, hasMaskSelected, onSelectTool, onHoverChange }
     const onMove = (e: MouseEvent) => {
       const dx = e.clientX - originRef.current.x;
       const dy = e.clientY - originRef.current.y;
-      const next = getHoveredSector(dx, dy, sectors);
-      setHovered(next);
-      onHoverChange?.(next);
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < CANCEL_ZONE_R) {
+        setHovered(-1);
+        onHoverChange?.(-1);
+      } else {
+        const next = getHoveredSector(dx, dy, sectors);
+        setHovered(next);
+        onHoverChange?.(next);
+      }
     };
     window.addEventListener('mousemove', onMove);
     return () => window.removeEventListener('mousemove', onMove);
@@ -197,8 +208,8 @@ export function ToolWheel({ x, y, hasMaskSelected, onSelectTool, onHoverChange }
             const labelColor = isActive
               ? (hasMaskSelected ? (isAdd ? '#4ade80' : '#f87171') : '#000')
               : 'rgba(255,255,255,0.35)';
-            // In split mode, show icons only on add side to avoid cramped duplicates
-            const showIcon = !hasMaskSelected || i < 4;
+            // Show icon for all non-placeholder sectors
+            const showIcon = !('placeholder' in sector && sector.placeholder);
             return (
               <g key={`${sector.tool}-${i}-ui`}>
                 {showIcon && (
@@ -219,9 +230,18 @@ export function ToolWheel({ x, y, hasMaskSelected, onSelectTool, onHoverChange }
             );
           })}
 
-          {/* Center hole */}
+          {/* Center cancel zone */}
+          <circle cx={0} cy={0} r={CANCEL_ZONE_R}
+            fill={hovered === -1 ? 'rgba(248,113,113,0.18)' : 'rgba(10,10,10,0.0)'}
+            stroke={hovered === -1 ? 'rgba(248,113,113,0.5)' : 'rgba(255,255,255,0.08)'}
+            strokeWidth="1"
+            style={{ transition: 'fill 60ms, stroke 60ms' }} />
+          <g transform="translate(-10, -10)" style={{ color: hovered === -1 ? '#f87171' : 'rgba(255,255,255,0.25)', transition: 'color 60ms' }}>
+            <X width={20} height={20} />
+          </g>
+          {/* Center hole visual ring */}
           <circle cx={0} cy={0} r={VISUAL_INNER_R}
-            fill="rgba(10,10,10,0.95)" stroke="rgba(255,255,255,0.1)" strokeWidth="1" />
+            fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="1" />
 
           {/* Outer ring */}
           <circle cx={0} cy={0} r={OUTER_R + 1} fill="none"
