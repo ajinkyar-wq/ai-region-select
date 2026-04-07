@@ -32,6 +32,7 @@ interface SmartMaskLayerProps {
     isWalkthroughActive?: boolean;
     isManualToolActive?: boolean;
     liveGradient?: LiveGradient | null;
+    sliderHoveredRegionIds?: string[];
 }
 
 // ─── Erosion ──────────────────────────────────────────────────────────────────
@@ -345,6 +346,7 @@ export function SmartMaskLayer({
     isWalkthroughActive = false,
     isManualToolActive = false,
     liveGradient = null,
+    sliderHoveredRegionIds = [],
 }: SmartMaskLayerProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     // Cache persists across renders; checksum-based invalidation handles mask edits
@@ -400,6 +402,7 @@ export function SmartMaskLayer({
             if ((r.type === 'background' || r.type.startsWith('background-')) && !backgroundEnabled) return false;
             if (r.type === 'manual' || r.type === 'linear-gradient' || r.type === 'radial-gradient') return false;
             if (!canvasInteractionsEnabled) return r.id === hoveredRegionId;
+            if (sliderHoveredRegionIds.length > 0 && sliderHoveredRegionIds.includes(r.id)) return false;
             return r.visible;
         });
 
@@ -441,7 +444,7 @@ export function SmartMaskLayer({
 
             // Fill opacity: simple two states — selected is denser, hover is lighter
             const isHovered = shouldDrawHover;
-            const overlayAlpha = region.selected ? 0.5 : 0.3;
+            const overlayAlpha = region.selected ? 0.5 : 0.20;
 
             // Hover = boldest affordance. Selected = already done, back off significantly.
             const contourAlpha255 = !region.selected && isHovered ? 190   // pure hover: strong but not blasting
@@ -642,7 +645,7 @@ export function SmartMaskLayer({
             // subject: fill only, no contour
         });
 
-    }, [tile.regions, imageTransform, hoveredRegionId, isEditing, peopleEnabled, backgroundEnabled, width, height, canvasInteractionsEnabled, liveGradient]);
+    }, [tile.regions, imageTransform, hoveredRegionId, isEditing, peopleEnabled, backgroundEnabled, width, height, canvasInteractionsEnabled, liveGradient, sliderHoveredRegionIds]);
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 

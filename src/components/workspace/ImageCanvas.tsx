@@ -44,6 +44,7 @@ interface ImageCanvasProps {
   canvasInteractionsEnabled?: boolean;
   onActionComplete?: () => void;
   onGradientDraggingChange?: (isDragging: boolean) => void;
+  sliderHoveredRegionIds?: string[];
 
   // Walkthrough
   isWalkthroughActive?: boolean;
@@ -80,6 +81,7 @@ export function ImageCanvas({
   exitEditTrigger,
   canvasInteractionsEnabled = true,
   onGradientDraggingChange,
+  sliderHoveredRegionIds = [],
   isWalkthroughActive = false,
   isWaveStopped = false,
   walkthroughStep = 0,
@@ -544,6 +546,7 @@ activeMask.type.startsWith('background-')
               activeEditingRegion?.type === 'radial-gradient'
             }
             liveGradient={liveGradient}
+            sliderHoveredRegionIds={sliderHoveredRegionIds}
           />
         )}
 

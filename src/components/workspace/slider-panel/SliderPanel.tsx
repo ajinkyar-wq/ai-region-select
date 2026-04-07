@@ -39,6 +39,8 @@ interface SliderPanelProps {
   /** Whether canvas drawing interactions (gradient creation) are enabled */
   canvasInteractionsEnabled?: boolean;
   onToggleCanvasInteractions?: () => void;
+  /** Called when the user hovers in/out of the sliders area */
+  onSliderHoverChange?: (hovering: boolean) => void;
 }
 
 export function SliderPanel({
@@ -64,6 +66,7 @@ export function SliderPanel({
   onIntersectGradient,
   canvasInteractionsEnabled = true,
   onToggleCanvasInteractions,
+  onSliderHoverChange,
 }: SliderPanelProps) {
   const [activeTab, setActiveTab] = useState<'sliders' | 'crop' | 'masking'>('masking');
   const [showAddMaskMenu, setShowAddMaskMenu] = useState(false);
@@ -436,7 +439,11 @@ export function SliderPanel({
         </div>
 
         {showMaskImage && (
-          <div className="mt-4 pb-10">
+          <div
+            className="mt-4 pb-10"
+            onMouseEnter={() => onSliderHoverChange?.(true)}
+            onMouseLeave={() => onSliderHoverChange?.(false)}
+          >
             <SliderPanelContent
               regions={regions.filter(r => r.selected)}
               onUpdateAdjustments={(adjustments) => onUpdateAdjustments?.(adjustments)}

@@ -44,6 +44,9 @@ export function Workspace() {
   // Canvas Interactions Toggle — when false, new canvas drawing (gradient drag) is disabled
   const [canvasInteractionsEnabled, setCanvasInteractionsEnabled] = useState(true);
 
+  // When the user hovers over the sliders panel, temporarily hide the overlay for those regions
+  const [isSliderHovered, setIsSliderHovered] = useState(false);
+
   // Hide the brush toolbar while the user is actively dragging a gradient handle
   const [isGradientDragging, setIsGradientDragging] = useState(false);
 
@@ -599,6 +602,7 @@ export function Workspace() {
                   exitEditTrigger={exitEditTrigger}
                   canvasInteractionsEnabled={canvasInteractionsEnabled}
                   onGradientDraggingChange={setIsGradientDragging}
+                  sliderHoveredRegionIds={isSliderHovered ? (image?.regions.filter(r => r.selected).map(r => r.id) ?? []) : []}
                   isWalkthroughActive={isWalkthroughActive}
                   isWaveStopped={isWaveStopped}
                   walkthroughStep={walkthroughStep}
@@ -830,6 +834,7 @@ region.type.startsWith('background-')) {
               onIntersectGradient={handleIntersectGradient}
               canvasInteractionsEnabled={canvasInteractionsEnabled}
               onToggleCanvasInteractions={() => setCanvasInteractionsEnabled(v => !v)}
+              onSliderHoverChange={setIsSliderHovered}
             />
           </div>
         </div>
