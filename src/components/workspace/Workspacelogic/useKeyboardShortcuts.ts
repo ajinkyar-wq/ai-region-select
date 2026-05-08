@@ -46,7 +46,7 @@ export function useKeyboardShortcuts({
             }
 
             // X — flip between add and erase while brush/local editing is active
-            if (e.key === 'q' || e.key === 'Q') {
+            if (e.key === 'Alt' || e.key === 'Control') {
                 if (brushActive || isLocalEditing) {
                     setBrushMode(prev => prev === 'add' ? 'erase' : 'add');
                     return;

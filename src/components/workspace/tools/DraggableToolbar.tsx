@@ -64,7 +64,7 @@ export function DraggableToolbar({
   useEffect(() => {
     if (!showXHint) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'q' || e.key === 'Q') {
+      if (e.key === 'Alt' || e.key === 'Control') {
         setShowXHint(false);
       }
     };
@@ -427,7 +427,7 @@ export function DraggableToolbar({
           }
         >
           <span className="text-[11px] text-[#888] text-center leading-tight">
-            <kbd className="font-mono text-white/70 text-[11px]">Q</kbd>{' '}to flip
+            <kbd className="font-mono text-white/70 text-[11px]">⌃</kbd><kbd className="font-mono text-white/70 text-[11px]">⌥</kbd>{' '}to flip
           </span>
         </div>
       )}
