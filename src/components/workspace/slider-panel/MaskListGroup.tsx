@@ -43,6 +43,7 @@ interface MaskListGroupProps {
     onDeleteRegion: (id: string) => void;
     onDeleteGroup?: (id: string) => void;
     onInvertMask?: (id?: string) => void;
+    onMaskItemHover?: (id: string | null) => void;
 }
 
 export function MaskListGroup(props: MaskListGroupProps) {
@@ -52,7 +53,7 @@ export function MaskListGroup(props: MaskListGroupProps) {
         groupingHoverTarget, draggingItemId, draggingGradientId,
         handleDragStart, handleDragOverItem, handleDragLeave, handleGlobalDragEnd, handleDropItem,
         handleSelectRegion, onActivateRegion,
-        onToggleVisibility, onToggleBatchVisibility, onDeleteRegion, onDeleteGroup, onInvertMask
+        onToggleVisibility, onToggleBatchVisibility, onDeleteRegion, onDeleteGroup, onInvertMask, onMaskItemHover
     } = props;
 
     const isExpanded = expandedGroups[groupId] !== false; // Default to TRUE (Expanded)
@@ -273,6 +274,8 @@ export function MaskListGroup(props: MaskListGroupProps) {
                                     hasChildren={memberClipKids.length > 0}
                                     isExpanded={isMemberExpanded}
                                     onToggleExpand={() => toggleGroup(memberItemId)}
+                                    onMouseEnter={() => onMaskItemHover?.(region.id)}
+                                    onMouseLeave={() => onMaskItemHover?.(null)}
                                 />
 
                                 <ClipChildTree
@@ -298,6 +301,7 @@ export function MaskListGroup(props: MaskListGroupProps) {
                                     draggingItemId={draggingItemId}
                                     draggingGradientId={draggingGradientId}
                                     isInsideGroupMember={true}
+                                    onMaskItemHover={onMaskItemHover}
                                 />
 
                                 {dropTarget.id === region.id && dropTarget.position === 'bottom' && (
@@ -329,6 +333,7 @@ export function MaskListGroup(props: MaskListGroupProps) {
                         intersectHoverTarget={intersectHoverTarget}
                         draggingItemId={draggingItemId}
                         draggingGradientId={draggingGradientId}
+                        onMaskItemHover={onMaskItemHover}
                     />
                 </div>
             )}

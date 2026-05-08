@@ -1,30 +1,32 @@
 import { useEffect, useRef, useState } from 'react';
-import { Paintbrush, Eraser, X } from 'lucide-react';
+import { Paintbrush, Eraser, X, Plus, Minus } from 'lucide-react';
 
-function LinearGradientIcon() {
+function LinearGradientIcon({ size = 18 }: { size?: number }) {
   return (
-    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+    <svg width={size} height={size} viewBox="0 0 20 20" fill="none">
       <defs>
         <linearGradient id="wlg" x1="0" y1="10" x2="20" y2="10" gradientUnits="userSpaceOnUse">
           <stop offset="0%" stopColor="currentColor" stopOpacity="1" />
           <stop offset="100%" stopColor="currentColor" stopOpacity="0" />
         </linearGradient>
       </defs>
-      <rect x="2" y="4" width="16" height="12" rx="1" fill="url(#wlg)" />
+      <rect x="2" y="5" width="16" height="10" rx="2" fill="url(#wlg)" />
+      <rect x="2" y="5" width="16" height="10" rx="2" stroke="currentColor" strokeOpacity="0.4" strokeWidth="1" />
     </svg>
   );
 }
 
-function RadialGradientIcon() {
+function RadialGradientIcon({ size = 18 }: { size?: number }) {
   return (
-    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+    <svg width={size} height={size} viewBox="0 0 20 20" fill="none">
       <defs>
         <radialGradient id="wrg" cx="50%" cy="50%" r="50%">
           <stop offset="0%" stopColor="currentColor" stopOpacity="1" />
           <stop offset="100%" stopColor="currentColor" stopOpacity="0" />
         </radialGradient>
       </defs>
-      <rect x="2" y="2" width="16" height="16" rx="8" fill="url(#wrg)" />
+      <circle cx="10" cy="10" r="8" fill="url(#wrg)" />
+      <circle cx="10" cy="10" r="8" stroke="currentColor" strokeOpacity="0.4" strokeWidth="1" />
     </svg>
   );
 }
@@ -41,40 +43,56 @@ interface ToolWheelProps {
   onHoverChange?: (idx: number) => void;
 }
 
-// No-mask: 4 sectors × 90° — pure tool picker, no add/subtract
-const SIMPLE_SECTORS = [
-  { tool: 'brush'           as WheelTool, label: 'Brush',   angle: -90  }, // top
-  { tool: 'linear-gradient' as WheelTool, label: 'Linear',  angle: 0    }, // right
-  { tool: 'eraser'          as WheelTool, label: 'Eraser',  angle: 90   }, // bottom
-  { tool: 'radial-gradient' as WheelTool, label: 'Radial',  angle: 180  }, // left
+type SectorDef = {
+  tool: WheelTool;
+  label: string;
+  angle: number;
+  mode: 'add' | 'erase';
+};
+
+// No mask → 4 tools, no add/erase split. Top → right → bottom → left.
+export const SIMPLE_SECTORS: SectorDef[] = [
+  { tool: 'brush',           label: 'Brush',  angle: -90, mode: 'add' },
+  { tool: 'linear-gradient', label: 'Linear', angle:   0, mode: 'add' },
+  { tool: 'radial-gradient', label: 'Radial', angle:  90, mode: 'add' },
+  { tool: 'eraser',          label: 'Eraser', angle: 180, mode: 'add' },
 ];
 
-// Mask selected: 8 sectors × 45° — left half = add, right half = subtract
-// Add  (left):  top-left→bottom-left  — centers at -112.5, -157.5, 157.5, 112.5  (i.e. 247.5, 202.5, 157.5, 112.5 normalised)
-// Sub  (right): top-right→bottom-right — centers at -67.5, -22.5, 22.5, 67.5
-//
-// Clockwise from top-left:
-//   Add:  Brush @ -112.5 (top-left), Linear @ 157.5, Radial @ 202.5, empty @ 247.5
-//   Sub:  Eraser @ -67.5 (top-right), Linear @ -22.5, Radial @ 22.5, empty @ 67.5
-const SPLIT_SECTORS = [
-  { tool: 'brush'           as WheelTool, label: 'Brush',  angle: -112.5, mode: 'add'   as const, placeholder: false },
-  { tool: 'linear-gradient' as WheelTool, label: 'Linear', angle:  157.5, mode: 'add'   as const, placeholder: false },
-  { tool: 'radial-gradient' as WheelTool, label: 'Radial', angle:  202.5, mode: 'add'   as const, placeholder: false },
-  { tool: 'brush'           as WheelTool, label: '',        angle:  247.5, mode: 'add'   as const, placeholder: true  },
-  { tool: 'eraser'          as WheelTool, label: 'Eraser', angle:  -67.5, mode: 'erase' as const, placeholder: false },
-    { tool: 'radial-gradient' as WheelTool, label: 'Radial', angle:   22.5, mode: 'erase' as const, placeholder: false },
-  { tool: 'linear-gradient' as WheelTool, label: 'Linear', angle:  -22.5, mode: 'erase' as const, placeholder: false },
-  { tool: 'brush'           as WheelTool, label: '',        angle:   67.5, mode: 'erase' as const, placeholder: true  },
+// Mask selected → left half ADD (green), right half ERASE (red).
+// 3 tools per side, evenly spaced across the half-circle.
+// Left half centers (clockwise from top): -120, 180, 120
+// Right half centers (clockwise from top):  -60,   0,  60
+export const SPLIT_SECTORS: SectorDef[] = [
+  { tool: 'brush',           label: 'Brush',  angle: -120, mode: 'add'   },
+  { tool: 'linear-gradient', label: 'Linear', angle:  180, mode: 'add'   },
+  { tool: 'radial-gradient', label: 'Radial', angle:  120, mode: 'add'   },
+  { tool: 'eraser',          label: 'Eraser', angle:  -60, mode: 'erase' },
+  { tool: 'linear-gradient', label: 'Linear', angle:    0, mode: 'erase' },
+  { tool: 'radial-gradient', label: 'Radial', angle:   60, mode: 'erase' },
 ];
 
-const OUTER_R = 140;
-const VISUAL_INNER_R = 20;
-const CANCEL_ZONE_R = VISUAL_INNER_R; // cancel zone = just the small center circle
-const ICON_R = 88;
-const LABEL_R = 118;
-const OUTER_LABEL_R = 158; // ADD / SUB labels
+const OUTER_R = 132;
+const INNER_R = 38;
+const ICON_R = 92;
+const LABEL_R = 116;
+const CANCEL_R = 28;
+const HEADER_R = OUTER_R + 22;
 
-function getHoveredSector(dx: number, dy: number, sectors: { angle: number }[]): number {
+const ADD_FILL_IDLE   = 'rgba(22,32,26,0.92)';
+const ADD_FILL_HOVER  = 'rgba(74,222,128,0.18)';
+const ADD_STROKE      = 'rgba(74,222,128,0.55)';
+const ADD_TEXT        = '#4ade80';
+
+const ERASE_FILL_IDLE  = 'rgba(34,20,22,0.92)';
+const ERASE_FILL_HOVER = 'rgba(248,113,113,0.18)';
+const ERASE_STROKE     = 'rgba(248,113,113,0.55)';
+const ERASE_TEXT       = '#f87171';
+
+const NEUTRAL_FILL_IDLE  = 'rgba(20,20,22,0.92)';
+const NEUTRAL_FILL_HOVER = 'rgba(255,255,255,0.10)';
+const NEUTRAL_STROKE     = 'rgba(255,255,255,0.55)';
+
+function getHoveredSector(dx: number, dy: number, sectors: SectorDef[]): number {
   const angle = Math.atan2(dy, dx) * (180 / Math.PI);
   const a = (angle + 360) % 360;
   let best = 0;
@@ -95,9 +113,6 @@ function sectorPath(outerR: number, innerR: number, startDeg: number, endDeg: nu
   const x2 = Math.cos(toRad(endDeg)) * outerR;
   const y2 = Math.sin(toRad(endDeg)) * outerR;
   const largeArc = endDeg - startDeg > 180 ? 1 : 0;
-  if (innerR <= 0) {
-    return [`M 0 0`, `L ${x1} ${y1}`, `A ${outerR} ${outerR} 0 ${largeArc} 1 ${x2} ${y2}`, 'Z'].join(' ');
-  }
   const x3 = Math.cos(toRad(endDeg)) * innerR;
   const y3 = Math.sin(toRad(endDeg)) * innerR;
   const x4 = Math.cos(toRad(startDeg)) * innerR;
@@ -111,9 +126,19 @@ function sectorPath(outerR: number, innerR: number, startDeg: number, endDeg: nu
   ].join(' ');
 }
 
-export function ToolWheel({ x, y, hasMaskSelected, onSelectTool, onHoverChange }: ToolWheelProps) {
+function renderToolIcon(tool: WheelTool, size = 22) {
+  switch (tool) {
+    case 'brush':           return <Paintbrush width={size} height={size} strokeWidth={1.6} />;
+    case 'eraser':          return <Eraser width={size} height={size} strokeWidth={1.6} />;
+    case 'linear-gradient': return <LinearGradientIcon size={size} />;
+    case 'radial-gradient': return <RadialGradientIcon size={size} />;
+  }
+}
+
+export function ToolWheel({ x, y, hasMaskSelected, onHoverChange }: ToolWheelProps) {
   const sectors = hasMaskSelected ? SPLIT_SECTORS : SIMPLE_SECTORS;
-  const sliceSize = hasMaskSelected ? 45 : 90;
+  const sliceSize = hasMaskSelected ? 60 : 90;
+  const sliceGap  = 1.2;
 
   const [hovered, setHovered] = useState<number>(0);
   const originRef = useRef({ x, y });
@@ -125,7 +150,7 @@ export function ToolWheel({ x, y, hasMaskSelected, onSelectTool, onHoverChange }
       const dx = e.clientX - originRef.current.x;
       const dy = e.clientY - originRef.current.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist < CANCEL_ZONE_R) {
+      if (dist < CANCEL_R) {
         setHovered(-1);
         onHoverChange?.(-1);
       } else {
@@ -138,8 +163,10 @@ export function ToolWheel({ x, y, hasMaskSelected, onSelectTool, onHoverChange }
     return () => window.removeEventListener('mousemove', onMove);
   }, [sectors, onHoverChange]);
 
-  const size = (OUTER_LABEL_R + 32) * 2;
+  const size = (HEADER_R + 40) * 2;
   const center = size / 2;
+
+  const activeSector = hovered >= 0 ? sectors[hovered] : null;
 
   return (
     <div
@@ -147,53 +174,106 @@ export function ToolWheel({ x, y, hasMaskSelected, onSelectTool, onHoverChange }
       style={{ left: x - center, top: y - center, width: size, height: size, pointerEvents: 'none' }}
     >
       <svg width={size} height={size} style={{ overflow: 'visible' }}>
-        <g transform={`translate(${center}, ${center})`}>
+        <defs>
+          <filter id="wheelShadow" x="-50%" y="-50%" width="200%" height="200%">
+            <feDropShadow dx="0" dy="4" stdDeviation="12" floodColor="#000" floodOpacity="0.5" />
+          </filter>
+          <radialGradient id="wheelBg" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="rgba(28,28,32,0.95)" />
+            <stop offset="100%" stopColor="rgba(14,14,16,0.95)" />
+          </radialGradient>
+        </defs>
+
+        <g transform={`translate(${center}, ${center})`} filter="url(#wheelShadow)">
+
+          {/* Backplate */}
+          <circle cx={0} cy={0} r={OUTER_R + 6} fill="url(#wheelBg)" stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
 
           {/* Sectors */}
           {sectors.map((sector, i) => {
-            const startAngle = sector.angle - sliceSize / 2;
-            const endAngle   = sector.angle + sliceSize / 2;
+            const startAngle = sector.angle - sliceSize / 2 + sliceGap / 2;
+            const endAngle   = sector.angle + sliceSize / 2 - sliceGap / 2;
             const isActive   = hovered === i;
-            const isAdd      = !hasMaskSelected || ('mode' in sector && sector.mode === 'add');
-            const activeColor = hasMaskSelected
-              ? (isAdd ? 'rgba(74,222,128,0.85)' : 'rgba(248,113,113,0.85)')
-              : 'rgba(255,255,255,0.92)';
-            const idleColor = hasMaskSelected
-              ? (isAdd ? 'rgba(20,38,26,0.93)' : 'rgba(42,18,18,0.93)')
-              : 'rgba(28,28,28,0.93)';
+            const isAdd      = sector.mode === 'add';
+
+            const fillIdle  = hasMaskSelected ? (isAdd ? ADD_FILL_IDLE  : ERASE_FILL_IDLE)  : NEUTRAL_FILL_IDLE;
+            const fillHover = hasMaskSelected ? (isAdd ? ADD_FILL_HOVER : ERASE_FILL_HOVER) : NEUTRAL_FILL_HOVER;
+            const strokeCol = hasMaskSelected ? (isAdd ? ADD_STROKE     : ERASE_STROKE)     : NEUTRAL_STROKE;
+
             return (
               <path
-                key={`${sector.tool}-${i}`}
-                d={sectorPath(OUTER_R, VISUAL_INNER_R, startAngle, endAngle)}
-                fill={isActive ? activeColor : idleColor}
-                stroke={isActive
-                  ? (hasMaskSelected ? (isAdd ? 'rgba(74,222,128,0.35)' : 'rgba(248,113,113,0.35)') : 'rgba(255,255,255,0.3)')
-                  : 'rgba(255,255,255,0.07)'}
-                strokeWidth="1"
-                style={{ transition: 'fill 60ms' }}
+                key={`sector-${i}`}
+                d={sectorPath(OUTER_R, INNER_R, startAngle, endAngle)}
+                fill={isActive ? fillHover : fillIdle}
+                stroke={isActive ? strokeCol : 'rgba(255,255,255,0.04)'}
+                strokeWidth={isActive ? 1.5 : 1}
+                style={{ transition: 'fill 80ms ease-out, stroke 80ms ease-out' }}
               />
             );
           })}
 
-          {/* ADD / SUB labels — only when mask selected */}
-          {hasMaskSelected && <>
-            <text x={-OUTER_LABEL_R} y={0} textAnchor="middle" dominantBaseline="middle"
-              fontSize="11" fontWeight="600" letterSpacing="0.08em"
-              fill="rgba(74,222,128,0.65)"
-              style={{ pointerEvents: 'none', fontFamily: 'Geist, sans-serif' }}>
-              ADD
-            </text>
-            <text x={OUTER_LABEL_R} y={0} textAnchor="middle" dominantBaseline="middle"
-              fontSize="11" fontWeight="600" letterSpacing="0.08em"
-              fill="rgba(248,113,113,0.65)"
-              style={{ pointerEvents: 'none', fontFamily: 'Geist, sans-serif' }}>
-              SUB
-            </text>
-            <line x1={0} y1={-OUTER_R - 4} x2={0} y2={OUTER_R + 4}
-              stroke="rgba(255,255,255,0.15)" strokeWidth="1" strokeDasharray="3 3" />
-          </>}
+          {/* Mode tabs (ADD / ERASE) — small bumps physically attached to each
+              half of the wheel. The tab's flat side sits flush with the outer
+              ring so it reads as an extension of the wheel, not floating text. */}
+          {hasMaskSelected && (() => {
+            // Tab geometry: a rectangle that starts at the outer ring and
+            // extends outward, with rounded outer corners.
+            const tabH = 22;          // height along the vertical axis
+            const tabW = 18;          // how far it extends out from the ring
+            const innerX = OUTER_R + 6; // sits just past the backplate edge
+            const outerX = innerX + tabW;
+            const r = 6;              // outer corner radius
 
-          {/* Icons + labels */}
+            // Left tab path (mirrored): flat edge on the right (touching wheel),
+            // rounded corners on the left (outer side).
+            const leftTab = [
+              `M ${-innerX} ${-tabH / 2}`,
+              `H ${-(outerX - r)}`,
+              `Q ${-outerX} ${-tabH / 2} ${-outerX} ${-tabH / 2 + r}`,
+              `V ${tabH / 2 - r}`,
+              `Q ${-outerX} ${tabH / 2} ${-(outerX - r)} ${tabH / 2}`,
+              `H ${-innerX}`,
+              'Z',
+            ].join(' ');
+
+            const rightTab = [
+              `M ${innerX} ${-tabH / 2}`,
+              `H ${outerX - r}`,
+              `Q ${outerX} ${-tabH / 2} ${outerX} ${-tabH / 2 + r}`,
+              `V ${tabH / 2 - r}`,
+              `Q ${outerX} ${tabH / 2} ${outerX - r} ${tabH / 2}`,
+              `H ${innerX}`,
+              'Z',
+            ].join(' ');
+
+            return (
+              <>
+                {/* ADD tab — left */}
+                <path d={leftTab}
+                  fill="rgba(74,222,128,0.18)"
+                  stroke="rgba(74,222,128,0.5)"
+                  strokeWidth={1} />
+                <g transform={`translate(${-(innerX + tabW / 2)}, 0)`} style={{ color: ADD_TEXT }}>
+                  <g transform="translate(-4, -4)">
+                    <Plus width={8} height={8} strokeWidth={3} />
+                  </g>
+                </g>
+
+                {/* ERASE tab — right */}
+                <path d={rightTab}
+                  fill="rgba(248,113,113,0.18)"
+                  stroke="rgba(248,113,113,0.5)"
+                  strokeWidth={1} />
+                <g transform={`translate(${innerX + tabW / 2}, 0)`} style={{ color: ERASE_TEXT }}>
+                  <g transform="translate(-4, -4)">
+                    <Minus width={8} height={8} strokeWidth={3} />
+                  </g>
+                </g>
+              </>
+            );
+          })()}
+
+          {/* Icons + labels per sector */}
           {sectors.map((sector, i) => {
             const rad = (sector.angle * Math.PI) / 180;
             const ix = Math.cos(rad) * ICON_R;
@@ -201,51 +281,57 @@ export function ToolWheel({ x, y, hasMaskSelected, onSelectTool, onHoverChange }
             const lx = Math.cos(rad) * LABEL_R;
             const ly = Math.sin(rad) * LABEL_R;
             const isActive = hovered === i;
-            const isAdd    = !hasMaskSelected || ('mode' in sector && sector.mode === 'add');
-            const iconColor = isActive
-              ? (hasMaskSelected ? (isAdd ? '#4ade80' : '#f87171') : '#000')
-              : 'rgba(255,255,255,0.45)';
-            const labelColor = isActive
-              ? (hasMaskSelected ? (isAdd ? '#4ade80' : '#f87171') : '#000')
-              : 'rgba(255,255,255,0.35)';
-            // Show icon for all non-placeholder sectors
-            const showIcon = !('placeholder' in sector && sector.placeholder);
+            const isAdd    = sector.mode === 'add';
+
+            const accent = hasMaskSelected ? (isAdd ? ADD_TEXT : ERASE_TEXT) : '#fff';
+            const iconColor  = isActive ? accent : 'rgba(255,255,255,0.55)';
+            const labelColor = isActive ? accent : 'rgba(255,255,255,0.4)';
+
             return (
-              <g key={`${sector.tool}-${i}-ui`}>
-                {showIcon && (
-                  <g transform={`translate(${ix - 10}, ${iy - 10})`}
-                    style={{ color: iconColor, transition: 'color 60ms' }}>
-                    {sector.tool === 'brush'           && <Paintbrush width={20} height={20} />}
-                    {sector.tool === 'eraser'          && <Eraser width={20} height={20} />}
-                    {sector.tool === 'linear-gradient' && <LinearGradientIcon />}
-                    {sector.tool === 'radial-gradient' && <RadialGradientIcon />}
+              <g key={`sector-ui-${i}`}>
+                <g transform={`translate(${ix}, ${iy})`}>
+                  <g transform="translate(-11, -11)"
+                    style={{ color: iconColor, transition: 'color 80ms ease-out' }}>
+                    {renderToolIcon(sector.tool, 22)}
                   </g>
-                )}
+                </g>
                 <text x={lx} y={ly} textAnchor="middle" dominantBaseline="middle"
-                  fontSize="10" fill={labelColor}
-                  style={{ pointerEvents: 'none', transition: 'fill 60ms', fontFamily: 'Geist, sans-serif' }}>
+                  fontSize="10" fontWeight={isActive ? 600 : 500}
+                  fill={labelColor}
+                  style={{
+                    pointerEvents: 'none',
+                    transition: 'fill 80ms ease-out, font-weight 80ms ease-out',
+                    fontFamily: 'Geist, sans-serif',
+                    letterSpacing: '0.02em',
+                  }}>
                   {sector.label}
                 </text>
               </g>
             );
           })}
 
-          {/* Center cancel zone */}
-          <circle cx={0} cy={0} r={CANCEL_ZONE_R}
-            fill={hovered === -1 ? 'rgba(248,113,113,0.18)' : 'rgba(10,10,10,0.0)'}
-            stroke={hovered === -1 ? 'rgba(248,113,113,0.5)' : 'rgba(255,255,255,0.08)'}
+          {/* Inner hub */}
+          <circle cx={0} cy={0} r={INNER_R - 2}
+            fill={hovered === -1 ? 'rgba(248,113,113,0.15)' : 'rgba(10,10,12,0.85)'}
+            stroke={hovered === -1 ? 'rgba(248,113,113,0.55)' : 'rgba(255,255,255,0.08)'}
             strokeWidth="1"
-            style={{ transition: 'fill 60ms, stroke 60ms' }} />
-          <g transform="translate(-10, -10)" style={{ color: hovered === -1 ? '#f87171' : 'rgba(255,255,255,0.25)', transition: 'color 60ms' }}>
-            <X width={20} height={20} />
-          </g>
-          {/* Center hole visual ring */}
-          <circle cx={0} cy={0} r={VISUAL_INNER_R}
-            fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="1" />
+            style={{ transition: 'fill 80ms ease-out, stroke 80ms ease-out' }} />
 
-          {/* Outer ring */}
-          <circle cx={0} cy={0} r={OUTER_R + 1} fill="none"
-            stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
+          {/* Center cancel icon / active tool preview */}
+          {hovered === -1 ? (
+            <g transform="translate(-9, -9)" style={{ color: ERASE_TEXT }}>
+              <X width={18} height={18} strokeWidth={2} />
+            </g>
+          ) : activeSector ? (
+            <g transform="translate(-10, -10)" style={{
+              color: hasMaskSelected
+                ? (activeSector.mode === 'add' ? ADD_TEXT : ERASE_TEXT)
+                : 'rgba(255,255,255,0.85)',
+              transition: 'color 80ms ease-out',
+            }}>
+              {renderToolIcon(activeSector.tool, 20)}
+            </g>
+          ) : null}
 
         </g>
       </svg>

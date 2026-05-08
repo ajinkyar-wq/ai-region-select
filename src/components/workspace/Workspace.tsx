@@ -8,7 +8,7 @@ import { Filmstrip } from './layout/Filmstrip';
 import { BottomBar } from './layout/BottomBar';
 import { SliderPanel } from './slider-panel/SliderPanel';
 import { DraggableToolbar } from './tools/DraggableToolbar';
-import { ToolWheel } from './tools/ToolWheel';
+import { ToolWheel, SIMPLE_SECTORS, SPLIT_SECTORS } from './tools/ToolWheel';
 import type { WheelTool } from './tools/ToolWheel';
 import type { ImageTileData, Region } from '@/types/workspace';
 import { Columns2, Paintbrush, Eraser } from 'lucide-react';
@@ -30,7 +30,8 @@ export function Workspace() {
   const [brushActive, setBrushActive] = useState(false);
   const [isLocalEditing, setIsLocalEditing] = useState(false); // For AI Mask Editor
   const [exitEditTrigger, setExitEditTrigger] = useState(0);
-  const [hoveredRegion] = useState<'person' | 'background' | null>(null);
+  const [hoveredRegion, setHoveredRegion] = useState<string | null>(null);
+  const [panelHoveredRegionId, setPanelHoveredRegionId] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const [brushMode, setBrushMode] = useState<'add' | 'erase'>('add');
@@ -187,31 +188,9 @@ export function Workspace() {
         setWheelVisible(false);
         const idx = wheelHoveredRef.current;
         if (idx >= 0) {
-          if (hasMaskSelectedRef.current) {
-            // 8-sector split: 0-3 = add, 4-7 = subtract
-            const splitSectors: { tool: WheelTool; mode: 'add' | 'erase' }[] = [
-              { tool: 'brush',           mode: 'add'   },
-              { tool: 'linear-gradient', mode: 'add'   },
-              { tool: 'radial-gradient', mode: 'add'   },
-              { tool: 'eraser',          mode: 'add'   },
-              { tool: 'brush',           mode: 'erase' },
-              { tool: 'linear-gradient', mode: 'erase' },
-              { tool: 'radial-gradient', mode: 'erase' },
-              { tool: 'eraser',          mode: 'erase' },
-            ];
-            const s = splitSectors[idx];
-            if (s) handleWheelSelectToolRef.current(s.tool, s.mode);
-          } else {
-            // 4-sector simple: brush, linear, eraser, radial
-            const simpleSectors: { tool: WheelTool; mode: 'add' | 'erase' }[] = [
-              { tool: 'brush',           mode: 'add' },
-              { tool: 'linear-gradient', mode: 'add' },
-              { tool: 'eraser',          mode: 'add' },
-              { tool: 'radial-gradient', mode: 'add' },
-            ];
-            const s = simpleSectors[idx];
-            if (s) handleWheelSelectToolRef.current(s.tool, s.mode);
-          }
+          const sectors = hasMaskSelectedRef.current ? SPLIT_SECTORS : SIMPLE_SECTORS;
+          const s = sectors[idx];
+          if (s) handleWheelSelectToolRef.current(s.tool, s.mode);
         }
       }
     };
@@ -228,6 +207,20 @@ export function Workspace() {
 
   const handleSelectBatchRegions = (ids: string[], multi: boolean, activeId?: string) => {
     if (!image) return;
+
+    // Empty ids = deselect signal from clicking an already-selected region
+    if (ids.length === 0 && !multi) {
+      if (brushActive) {
+        // In edit mode: exit edit mode, keep selected
+        setBrushActive(false);
+        setDrawingTool(null);
+      } else {
+        // Not in edit mode: deselect all
+        setImage({ ...image, regions: image.regions.map(r => ({ ...r, selected: false })) });
+      }
+      return;
+    }
+
     let newRegions = image.regions.map(r => {
       // If ID is in list, select it and mark as edited so it shows in panel
       if (ids.includes(r.id)) return { ...r, selected: true, hasEdits: true };
@@ -450,14 +443,15 @@ export function Workspace() {
                   imageId={image.id}
                   activeId={(brushActive || isLocalEditing) ? (brushMode === 'erase' ? 'eraser' : 'brush') : undefined}
                   onActiveChange={(id) => {
-                    if (id === 'brush') {
+                    if (!id) {
+                      setBrushActive(false);
+                      setExitEditTrigger(v => v + 1);
+                    } else if (id === 'brush') {
                       setBrushActive(true);
                       setBrushMode('add');
                     } else if (id === 'eraser') {
                       setBrushActive(true);
                       setBrushMode('erase');
-                    } else {
-                      setBrushActive(false);
                     }
                   }}
                   // State Props
@@ -513,7 +507,7 @@ export function Workspace() {
                 <ImageCanvas
                   image={image}
                   selectionMode={selectionMode}
-                  hoveredRegionOverride={hoveredRegion}
+                  hoveredRegionOverride={panelHoveredRegionId ?? hoveredRegion}
                   activeMask={activeMask}
                   brushActive={brushActive}
                   onBrushExit={() => setBrushActive(false)}
@@ -835,6 +829,7 @@ region.type.startsWith('background-')) {
               canvasInteractionsEnabled={canvasInteractionsEnabled}
               onToggleCanvasInteractions={() => setCanvasInteractionsEnabled(v => !v)}
               onSliderHoverChange={setIsSliderHovered}
+              onMaskItemHover={setPanelHoveredRegionId}
             />
           </div>
         </div>

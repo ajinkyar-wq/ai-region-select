@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import type { Region } from '@/types/workspace';
 import { MaskListItem } from './MaskListItem';
 import { ClipChildTree } from './ClipChildTree';
@@ -31,6 +31,7 @@ interface MaskListRegionProps {
     onToggleVisibility: (id: string) => void;
     onDeleteRegion: (id: string) => void;
     onInvertMask?: (id?: string) => void;
+    onMaskItemHover?: (id: string | null) => void;
 }
 
 export function MaskListRegion(props: MaskListRegionProps) {
@@ -39,12 +40,13 @@ export function MaskListRegion(props: MaskListRegionProps) {
         dropTarget, intersectTarget, intersectHoverTarget, draggingItemId, draggingGradientId,
         handleDragStart, handleDragOverItem, handleDragLeave, handleGlobalDragEnd, handleDropItem,
         onSelectBatchRegions, handleSelectRegion, onActivateRegion,
-        onToggleVisibility, onDeleteRegion, onInvertMask
+        onToggleVisibility, onDeleteRegion, onInvertMask, onMaskItemHover
     } = props;
 
     const itemIndex = globalIndexRef.current++;
     const isDropTarget = dropTarget.id === region.id;
     const clipKids = clipChildrenByParent[region.id] || [];
+    const deselectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const singleItemId = `single-${region.id}`;
     const isSingleItemExpanded = expandedGroups[singleItemId] !== false; // Default expanded
@@ -59,13 +61,27 @@ export function MaskListRegion(props: MaskListRegionProps) {
                 region={region}
                 index={itemIndex}
                 onSelect={(multi, shift) => {
+                    if (!multi && !shift && region.selected) {
+                        deselectTimerRef.current = setTimeout(() => {
+                            onSelectBatchRegions?.([], false);
+                        }, 250);
+                        return;
+                    }
                     const allIds = [region.id, ...clipKids.map(c => c.id)];
                     handleSelectRegion(region.id, multi, shift!, allIds);
                 }}
-                onActivate={() => onActivateRegion?.(region.id)}
+                onActivate={() => {
+                    if (deselectTimerRef.current) {
+                        clearTimeout(deselectTimerRef.current);
+                        deselectTimerRef.current = null;
+                    }
+                    onActivateRegion?.(region.id);
+                }}
                 onToggleVis={() => onToggleVisibility(region.id)}
                 onDelete={() => onDeleteRegion(region.id)}
                 onInvert={() => onInvertMask?.(region.id)}
+                onMouseEnter={() => onMaskItemHover?.(region.id)}
+                onMouseLeave={() => onMaskItemHover?.(null)}
                 onDragStart={(e) => handleDragStart(e, region.id, region.type)}
                 onDragEnd={handleGlobalDragEnd}
                 onDragOver={(e) => handleDragOverItem(e, region.id, false, region.type)}
@@ -110,6 +126,7 @@ export function MaskListRegion(props: MaskListRegionProps) {
                 intersectHoverTarget={intersectHoverTarget}
                 draggingItemId={draggingItemId}
                 draggingGradientId={draggingGradientId}
+                onMaskItemHover={onMaskItemHover}
             />
 
             {isDropTarget && dropTarget.position === 'bottom' && (

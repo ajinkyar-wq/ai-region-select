@@ -41,6 +41,8 @@ interface SliderPanelProps {
   onToggleCanvasInteractions?: () => void;
   /** Called when the user hovers in/out of the sliders area */
   onSliderHoverChange?: (hovering: boolean) => void;
+  /** Called when hovering a mask list item (id) or leaving (null) */
+  onMaskItemHover?: (id: string | null) => void;
 }
 
 export function SliderPanel({
@@ -67,6 +69,7 @@ export function SliderPanel({
   canvasInteractionsEnabled = true,
   onToggleCanvasInteractions,
   onSliderHoverChange,
+  onMaskItemHover,
 }: SliderPanelProps) {
   const [activeTab, setActiveTab] = useState<'sliders' | 'crop' | 'masking'>('masking');
   const [showAddMaskMenu, setShowAddMaskMenu] = useState(false);
@@ -381,6 +384,7 @@ export function SliderPanel({
                       onDeleteRegion={onDeleteRegion}
                       onDeleteGroup={onDeleteGroup}
                       onInvertMask={onInvertMask}
+                      onMaskItemHover={onMaskItemHover}
                     />
                   );
                 } else {
@@ -411,6 +415,7 @@ export function SliderPanel({
                       onToggleVisibility={onToggleVisibility}
                       onDeleteRegion={onDeleteRegion}
                       onInvertMask={onInvertMask}
+                      onMaskItemHover={onMaskItemHover}
                     />
                   );
                 }

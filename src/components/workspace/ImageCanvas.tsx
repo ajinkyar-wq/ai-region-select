@@ -15,7 +15,7 @@ interface ImageCanvasProps {
   image: ImageTileData | null;
   onUpdateTile: (updates: Partial<ImageTileData>) => void;
   selectionMode?: 'single' | 'multi';
-  hoveredRegionOverride?: 'person' | 'background' | null;
+  hoveredRegionOverride?: string | null;
   peopleEnabled?: boolean;
   backgroundEnabled?: boolean;
   activeMask?: Region | null;

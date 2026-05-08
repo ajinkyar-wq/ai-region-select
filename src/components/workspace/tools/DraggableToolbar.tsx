@@ -23,7 +23,7 @@ interface DraggableToolbarProps {
     onClick: () => void;
   }[];
   activeId?: string;
-  onActiveChange?: (id: string) => void;
+  onActiveChange?: (id: string | undefined) => void;
   containerRef: React.RefObject<HTMLElement>;
   disabled?: boolean;
 
@@ -317,8 +317,12 @@ export function DraggableToolbar({
                 onClick={(e) => {
                   e.stopPropagation();
                   if (!disabled) {
-                    onActiveChange?.(activeItem.id);
-                    activeItem.onClick();
+                    if (activeId === activeItem.id) {
+                      onActiveChange?.(undefined);
+                    } else {
+                      onActiveChange?.(activeItem.id);
+                      activeItem.onClick();
+                    }
                   }
                 }}
                 title={activeItem.label}
@@ -348,8 +352,12 @@ export function DraggableToolbar({
                   className={cn(getItemClasses(activeId === item.id), disabled && 'opacity-30 pointer-events-none')}
                   onClick={(e) => {
                     e.stopPropagation();
-                    onActiveChange?.(item.id);
-                    item.onClick();
+                    if (activeId === item.id) {
+                      onActiveChange?.(undefined);
+                    } else {
+                      onActiveChange?.(item.id);
+                      item.onClick();
+                    }
                   }}
                   title={item.label}
                   disabled={disabled}

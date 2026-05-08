@@ -20,8 +20,10 @@ export function MaskListItem({
     isChild = false,
     onDragOver,
     onDragLeave,
-    dropTarget,
     onDragEnd,
+    onMouseEnter,
+    onMouseLeave,
+    dropTarget,
     isIntersectTarget = false,
     isIntersectHover = false,
     isGroupingHover = false,
@@ -47,6 +49,8 @@ export function MaskListItem({
     onDragOver?: (e: React.DragEvent) => void;
     onDragLeave?: (e: React.DragEvent) => void;
     onDragEnd?: () => void;
+    onMouseEnter?: () => void;
+    onMouseLeave?: () => void;
     isChild?: boolean;
     dropTarget?: 'top' | 'bottom' | 'inside' | null;
     isIntersectTarget?: boolean;
@@ -146,6 +150,8 @@ export function MaskListItem({
                 onDrop={onDrop}
                 onClick={(e) => onSelect(e.metaKey || e.ctrlKey, e.shiftKey)}
                 onDoubleClick={(e) => { e.stopPropagation(); onActivate?.(); }}
+                onMouseEnter={onMouseEnter}
+                onMouseLeave={onMouseLeave}
                 className={`
           group flex items-center justify-between
           h-[35px] px-2 select-none

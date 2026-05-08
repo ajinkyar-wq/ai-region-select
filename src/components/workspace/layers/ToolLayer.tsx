@@ -713,7 +713,6 @@ export function ToolLayer({
                                     );
                                     onUpdateTile({ regions: updatedRegions });
                                 }}
-                                onDragStart={() => onGradientDraggingChange?.(true)}
                                 onDrag={(delta) => handleChildDrag(region.id, delta)}
                                 onDragEnd={(sourceUpdates) => { handleChildDragEnd(region.id, sourceUpdates); onGradientDraggingChange?.(false); }}
                                 onSelect={(e) => handleIconClick(e, region)}

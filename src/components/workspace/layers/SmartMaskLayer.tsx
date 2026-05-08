@@ -723,8 +723,8 @@ export function SmartMaskLayer({
         if (!canvasInteractionsEnabled) return;
         if (isEditing) return;
 
-        // When something is selected in the right panel, gate hover behind Shift
-        if (isSelectedRef.current && !e.shiftKey) {
+        // When something is selected, gate hover behind Shift
+        if (tileRef.current.regions.some(r => r.selected) && !e.shiftKey) {
             if (hoveredRegionId) onHoverChange(null);
             return;
         }
@@ -764,11 +764,14 @@ export function SmartMaskLayer({
         }
     };
 
+    // Always-current tile ref — used inside setTimeout callbacks to avoid stale closures
+    const tileRef = useRef(tile);
+    useEffect(() => { tileRef.current = tile; }, [tile]);
+
     const isSelectedRef = useRef(tile.regions.some(r => r.selected));
     useEffect(() => { isSelectedRef.current = tile.regions.some(r => r.selected); }, [tile.regions]);
 
     const clickTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    // Snapshot of selected region captured at mousedown, before click processing clears it
     const selectedAtMouseDownRef = useRef<Region | null>(null);
     const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null);
     const DRAG_THRESHOLD = 4;
@@ -790,81 +793,83 @@ export function SmartMaskLayer({
         if (!canvasInteractionsEnabled) return;
         const isMultiToggle = e.ctrlKey || e.metaKey;
         const isAdditive = e.shiftKey || isMultiToggle;
+
         if (tile.regions.some(r => r.selected) && !isAdditive) {
-            // Single click while a mask is selected = deselect all (same as Escape)
+            // Single click while a mask is selected = deselect all
             // Delay so double-click can cancel it before it fires
             e.stopPropagation();
-            const regionsToDeselect = tile.regions;
             if (clickTimeoutRef.current) clearTimeout(clickTimeoutRef.current);
-            isSelectedRef.current = false;
             const hoverCoords = toImageCoords(e);
             const hoverHit = hoverCoords ? resolveHit(hoverCoords.x, hoverCoords.y) : null;
             onHoverChange(hoverHit ? hoverHit.id : null);
             clickTimeoutRef.current = setTimeout(() => {
-                onUpdateTile({ regions: regionsToDeselect.map(r => ({ ...r, selected: false })) });
+                onUpdateTile({ regions: tileRef.current.regions.map(r => ({ ...r, selected: false })) });
             }, 250);
             return;
         }
+
         const coords = toImageCoords(e);
         if (!coords) return;
 
         const clickedRegion = resolveHit(coords.x, coords.y);
 
-        if (clickedRegion) {
-            e.stopPropagation();
-            const performSelectionUpdate = () => {
-                let updatedRegions = tile.regions.map(r => {
-                    if (isAdditive) {
-                        const isBecomingSelected = r.id === clickedRegion.id ? !r.selected : r.selected;
-                        return { ...r, selected: isBecomingSelected, hasEdits: isBecomingSelected ? true : r.hasEdits };
-                    }
-                    const isBecomingSelected = r.id === clickedRegion.id;
+        if (!clickedRegion) return;
+
+        e.stopPropagation();
+        if (clickTimeoutRef.current) clearTimeout(clickTimeoutRef.current);
+
+        const performSelectionUpdate = () => {
+            const currentRegions = tileRef.current.regions;
+            let updatedRegions = currentRegions.map(r => {
+                if (isAdditive) {
+                    const isBecomingSelected = r.id === clickedRegion.id ? !r.selected : r.selected;
                     return { ...r, selected: isBecomingSelected, hasEdits: isBecomingSelected ? true : r.hasEdits };
-                });
-
-                const selectedStandalone = updatedRegions.filter(r => r.selected && !r.clipParentId);
-                if (selectedStandalone.length > 1) {
-                    const firstGroup = selectedStandalone[0].groupId;
-                    const allSameGroup = firstGroup && selectedStandalone.every(r => r.groupId === firstGroup);
-
-                    if (!allSameGroup) {
-                        const targetGroupId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
-                        updatedRegions = updatedRegions.map(r => {
-                            if (r.selected && !r.clipParentId) {
-                                return { ...r, groupId: targetGroupId };
-                            }
-                            return r;
-                        });
-                    }
                 }
+                const isBecomingSelected = r.id === clickedRegion.id;
+                return { ...r, selected: isBecomingSelected, hasEdits: isBecomingSelected ? true : r.hasEdits };
+            });
 
-                onUpdateTile({ regions: updatedRegions });
-            };
-            if (!isMultiToggle && clickedRegion.selected) {
-                if (clickTimeoutRef.current) clearTimeout(clickTimeoutRef.current);
-                clickTimeoutRef.current = setTimeout(performSelectionUpdate, 250);
-            } else {
-                performSelectionUpdate();
+            const selectedStandalone = updatedRegions.filter(r => r.selected && !r.clipParentId);
+            if (selectedStandalone.length > 1) {
+                const firstGroup = selectedStandalone[0].groupId;
+                const allSameGroup = firstGroup && selectedStandalone.every(r => r.groupId === firstGroup);
+                if (!allSameGroup) {
+                    const targetGroupId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+                    updatedRegions = updatedRegions.map(r => {
+                        if (r.selected && !r.clipParentId) {
+                            return { ...r, groupId: targetGroupId };
+                        }
+                        return r;
+                    });
+                }
             }
-            const isDeselecting = isAdditive && clickedRegion.selected;
-            if (!isDeselecting) onEditRegion(clickedRegion);
+
+            onUpdateTile({ regions: updatedRegions });
+        };
+
+        // Clicking the already-selected region (no modifier): delay to let double-click cancel
+        if (!isAdditive && clickedRegion.selected) {
+            clickTimeoutRef.current = setTimeout(performSelectionUpdate, 250);
+        } else {
+            performSelectionUpdate();
         }
+
+        const isDeselecting = isAdditive && clickedRegion.selected;
+        if (!isDeselecting) onEditRegion(clickedRegion);
     };
 
     const handleCanvasDoubleClick = (e: React.MouseEvent) => {
         if (hasDragged(e)) return;
         if (!canvasInteractionsEnabled) return;
-        // Cancel the pending single-click deselect
         if (clickTimeoutRef.current) clearTimeout(clickTimeoutRef.current);
         e.stopPropagation();
-        // selectedAtMouseDownRef is always captured at mousedown — before any click fires
+
         const target = selectedAtMouseDownRef.current;
         if (target) {
             onEditRegion(target);
             if (onEnterLocalEdit) onEnterLocalEdit(target);
             return;
         }
-        // No mask was selected — resolve from coords
         const coords = toImageCoords(e);
         if (!coords) return;
         const hit = resolveHit(coords.x, coords.y);

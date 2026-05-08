@@ -25,6 +25,7 @@ interface ClipChildTreeProps {
     draggingItemId: string | null;
     draggingGradientId: string | null;
     isInsideGroupMember?: boolean; // Extra indentation if we are inside a group member
+    onMaskItemHover?: (id: string | null) => void;
 }
 
 export function ClipChildTree(props: ClipChildTreeProps) {
@@ -34,7 +35,7 @@ export function ClipChildTree(props: ClipChildTreeProps) {
         onToggleVisibility, onDeleteRegion, handleDragStart, handleGlobalDragEnd,
         handleDragOverItem, handleDragLeave, handleDropItem, dropTarget,
         intersectTarget, intersectHoverTarget, draggingItemId, draggingGradientId,
-        isInsideGroupMember
+        isInsideGroupMember, onMaskItemHover
     } = props;
 
     const clipKids = clipChildrenByParent[parentId] || [];
@@ -97,6 +98,8 @@ export function ClipChildTree(props: ClipChildTreeProps) {
                                     hasChildren={hasOwnKids}
                                     isExpanded={isChildExpanded}
                                     onToggleExpand={() => toggleGroup(childSingleId)}
+                                    onMouseEnter={() => onMaskItemHover?.(child.id)}
+                                    onMouseLeave={() => onMaskItemHover?.(null)}
                                 />
                             </div>
                         </div>
