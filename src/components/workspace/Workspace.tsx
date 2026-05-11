@@ -11,6 +11,7 @@ import { DraggableToolbar } from './tools/DraggableToolbar';
 import { ToolWheel, SIMPLE_SECTORS, SPLIT_SECTORS } from './tools/ToolWheel';
 import type { WheelTool } from './tools/ToolWheel';
 import type { ImageTileData, Region } from '@/types/workspace';
+import { REGION_COLORS } from '@/types/workspace';
 import { Columns2, Paintbrush, Eraser } from 'lucide-react';
 import { useKeyboardShortcuts } from './Workspacelogic/useKeyboardShortcuts';
 import { useRegionManager } from './Workspacelogic/useRegionManager';
@@ -72,6 +73,7 @@ export function Workspace() {
   // Selection Snapshot for Async Tools (Gradients)
   const selectionSnapshotRef = useRef<string[]>([]);
   const gradientModeRef = useRef<'add' | 'erase'>('add');
+  const pendingGradientIdRef = useRef<string | null>(null);
 
   const showMaskImage = !!image?.regions.some(r => r.selected);
 
@@ -115,6 +117,7 @@ export function Workspace() {
     setDrawingTool,
     selectionSnapshotRef,
     gradientModeRef,
+    pendingGradientIdRef,
   });
 
   useKeyboardShortcuts({
@@ -136,6 +139,37 @@ export function Workspace() {
     removeOrphanedClipChildren
   });
 
+  const addGradientPlaceholder = useCallback((type: 'linear-gradient' | 'radial-gradient') => {
+    if (!image) return;
+    const id = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+    const placeholder: Region = {
+      id,
+      type,
+      label: type === 'linear-gradient' ? 'Linear Gradient' : 'Radial Gradient',
+      maskData: new Uint8Array(0),
+      maskWidth: 0,
+      maskHeight: 0,
+      color: REGION_COLORS.manual,
+      visible: true,
+      selected: true,
+      hovered: false,
+      hasEdits: true,
+    };
+    pendingGradientIdRef.current = id;
+    selectionSnapshotRef.current = [];
+    gradientModeRef.current = 'add';
+    setImage(prev => prev ? {
+      ...prev,
+      regions: [
+        ...prev.regions.map(r => ({ ...r, selected: false })),
+        placeholder
+      ]
+    } : prev);
+    setActiveMask(placeholder);
+    setBrushActive(false);
+    setDrawingTool(type);
+  }, [image]);
+
   // Tool wheel: select tool handler (stable ref to avoid stale closures)
   const handleWheelSelectTool = useCallback((tool: WheelTool, mode: 'add' | 'erase') => {
     setBrushMode(mode);
@@ -148,11 +182,24 @@ export function Workspace() {
         setDrawingTool(null);
       }
     } else if (tool === 'linear-gradient') {
-      handleCreateLinearGradient(mode);
+      // Standalone (no mask selected) → pre-create the listing immediately,
+      // matching the side-panel dropdown behavior. Clip-child case (mask
+      // selected) keeps going through the snapshot-based flow.
+      const hasMask = image?.regions.some(r => r.selected);
+      if (!hasMask) {
+        addGradientPlaceholder('linear-gradient');
+      } else {
+        handleCreateLinearGradient(mode);
+      }
     } else if (tool === 'radial-gradient') {
-      handleCreateRadialGradient(mode);
+      const hasMask = image?.regions.some(r => r.selected);
+      if (!hasMask) {
+        addGradientPlaceholder('radial-gradient');
+      } else {
+        handleCreateRadialGradient(mode);
+      }
     }
-  }, [image, handleCreateManualMask, handleCreateLinearGradient, handleCreateRadialGradient]);
+  }, [image, handleCreateManualMask, handleCreateLinearGradient, handleCreateRadialGradient, addGradientPlaceholder]);
 
   const handleWheelSelectToolRef = useRef(handleWheelSelectTool);
   handleWheelSelectToolRef.current = handleWheelSelectTool;
@@ -217,6 +264,8 @@ export function Workspace() {
       } else {
         // Not in edit mode: deselect all
         setImage({ ...image, regions: image.regions.map(r => ({ ...r, selected: false })) });
+        setActiveMask(null);
+        setDrawingTool(null);
       }
       return;
     }
@@ -594,7 +643,7 @@ export function Workspace() {
                   }}
                   onEditingModeChange={handleLocalEditChange}
                   exitEditTrigger={exitEditTrigger}
-                  canvasInteractionsEnabled={canvasInteractionsEnabled}
+                  canvasInteractionsEnabled={canvasInteractionsEnabled && !wheelVisible}
                   onGradientDraggingChange={setIsGradientDragging}
                   sliderHoveredRegionIds={isSliderHovered ? (image?.regions.filter(r => r.selected).map(r => r.id) ?? []) : []}
                   isWalkthroughActive={isWalkthroughActive}
@@ -817,8 +866,8 @@ region.type.startsWith('background-')) {
               }}
               showMaskImage={showMaskImage}
               onCreateManualMask={handleCreateManualMask}
-              onCreateLinearGradient={handleCreateLinearGradient}
-              onCreateRadialGradient={handleCreateRadialGradient}
+              onCreateLinearGradient={() => addGradientPlaceholder('linear-gradient')}
+              onCreateRadialGradient={() => addGradientPlaceholder('radial-gradient')}
               onApplyEdits={handleApplyEdits}
               onSelectBatchRegions={handleSelectBatchRegions}
               onMoveRegion={handleMoveRegion}

@@ -43,6 +43,11 @@ export function RadialGradientTool({
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const [ringCursor, setRingCursor] = useState<string>('nwse-resize');
+    // Suppresses the synthetic click that follows a real drag (one with actual
+    // movement). Pure taps must still fire onClick so single-click toggle off works.
+    const justDraggedRef = useRef(false);
+    const downPosRef = useRef<{ x: number; y: number } | null>(null);
+    const movedRef = useRef(false);
 
     // Local state for smooth dragging
     const [dragState, setDragState] = useState<{
@@ -206,6 +211,9 @@ export function RadialGradientTool({
 
         if (!dragState) return;
 
+        downPosRef.current = { x: e.clientX, y: e.clientY };
+        movedRef.current = false;
+
         const rect = containerRef.current?.getBoundingClientRect();
         if (!rect) return;
         const x = e.clientX - rect.left;
@@ -229,6 +237,12 @@ export function RadialGradientTool({
     const handlePointerMove = (e: React.PointerEvent) => {
         if (!dragState || !dragState.isDragging || !imageTransform) return;
         e.stopPropagation();
+
+        if (!movedRef.current && downPosRef.current) {
+            const ddx = e.clientX - downPosRef.current.x;
+            const ddy = e.clientY - downPosRef.current.y;
+            if (Math.sqrt(ddx * ddx + ddy * ddy) > 3) movedRef.current = true;
+        }
 
         const rect = containerRef.current?.getBoundingClientRect();
         if (!rect) return;
@@ -312,8 +326,12 @@ export function RadialGradientTool({
     const handlePointerUp = (e: React.PointerEvent) => {
         if (!dragState?.isDragging) return;
         e.stopPropagation();
-        e.preventDefault(); // Prevent click event generation after drag
-        e.currentTarget.releasePointerCapture(e.pointerId);
+        if (movedRef.current) {
+            e.preventDefault();
+            justDraggedRef.current = true;
+        }
+        downPosRef.current = null;
+        try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* already released */ }
 
         if (imageTransform) {
             // Normalized Params
@@ -421,7 +439,14 @@ export function RadialGradientTool({
                         onPointerDown={(e) => handlePointerDown(e, 'move-center')}
                         onPointerMove={handlePointerMove}
                         onPointerUp={handlePointerUp}
-                        onClick={(e) => { e.stopPropagation(); onSelect?.(e); }}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            if (justDraggedRef.current) {
+                                justDraggedRef.current = false;
+                                return;
+                            }
+                            onSelect?.(e);
+                        }}
                         onDoubleClick={(e) => { e.stopPropagation(); onDoubleClick?.(e); }}
                     >
                         {/* Inner Dot */}
@@ -580,7 +605,14 @@ export function RadialGradientTool({
                 )}
                 style={{ left: dragState.center.x, top: dragState.center.y }}
                 onPointerDown={(e) => handlePointerDown(e, 'move-center')}
-                onClick={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                    e.stopPropagation();
+                    if (justDraggedRef.current) {
+                        justDraggedRef.current = false;
+                        return;
+                    }
+                    onSelect?.(e);
+                }}
             >
                 <div className="w-1.5 h-1.5 bg-white rounded-full" />
             </div>

@@ -18,7 +18,20 @@ interface BrushToolProps {
     brushSoftness: number;
     brushOpacity: number;
     brushMode: 'add' | 'erase';
+
+    /** Called when the user double-clicks to exit edit mode. */
+    onExit?: () => void;
 }
+
+// Tuned to match OS double-click feel — generous enough that a deliberate
+// double-tap is reliably caught, tight enough that a tap-then-real-stroke isn't
+// mis-detected.
+const DOUBLE_CLICK_MS = 400;       // max gap between tap 1's up and tap 2's down
+const DOUBLE_CLICK_PX = 12;        // max distance between tap 1 and tap 2 down points
+// A pointerdown→up sequence only counts as a "tap" (half of a double-click) if
+// it was short and barely moved. Long holds or drags are real brush strokes.
+const TAP_MAX_MS = 400;            // max hold duration for a tap
+const TAP_MAX_MOVE_PX = 8;         // max drift within a single tap
 
 export function BrushTool({
     imageTransform,
@@ -28,11 +41,22 @@ export function BrushTool({
     brushSoftness = 0,
     brushOpacity = 100,
     brushMode = 'add',
+    onExit,
 }: BrushToolProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [isDrawing, setIsDrawing] = useState(false);
     const [cursorPos, setCursorPos] = useState({ x: 0, y: 0 });
     const maskDataRef = useRef<Uint8Array | null>(null);
+    // Double-click detection: a "tap" is a quick, near-stationary down→up.
+    // Two taps in quick succession within DOUBLE_CLICK_PX = double-click exit.
+    const lastTapRef = useRef<{ t: number; x: number; y: number } | null>(null);
+    // Tracks the in-progress stroke so we can decide on pointerup whether it
+    // qualified as a tap.
+    const strokeStartRef = useRef<{ t: number; x: number; y: number; moved: boolean } | null>(null);
+    // Snapshot of the mask buffer from BEFORE the previous stroke. On a detected
+    // double-click we restore this to roll back BOTH clicks' dabs (the first one
+    // committed on the prior pointerup, and the second one which we never start).
+    const prevStrokeSnapshotRef = useRef<Uint8Array | null>(null);
 
     // Sync mask data ref
     useEffect(() => {
@@ -104,16 +128,41 @@ export function BrushTool({
     const handlePointerDown = (e: React.PointerEvent) => {
         if (!imageTransform) return;
 
-        setIsDrawing(true);
-        e.currentTarget.setPointerCapture(e.pointerId);
-
         const rect = e.currentTarget.getBoundingClientRect();
-        // Calculate current CSS scale applied to container
-        // rect.width is Screen Pixels. imageTransform.width is Logical Pixels (at Scale=1).
         const currentScale = rect.width / imageTransform.width;
-
         const x = (e.clientX - rect.left) / currentScale;
         const y = (e.clientY - rect.top) / currentScale;
+        const now = performance.now();
+
+        // Double-click detection — only if the PREVIOUS stroke was a tap (quick,
+        // stationary down→up). Fires BEFORE any brush logic so no second dab lands.
+        const lastTap = lastTapRef.current;
+        if (lastTap && onExit && activeMask && prevStrokeSnapshotRef.current) {
+            const dt = now - lastTap.t;
+            const dx = x - lastTap.x;
+            const dy = y - lastTap.y;
+            if (dt < DOUBLE_CLICK_MS && Math.sqrt(dx * dx + dy * dy) < DOUBLE_CLICK_PX) {
+                const restored = new Uint8Array(prevStrokeSnapshotRef.current);
+                maskDataRef.current = restored;
+                renderBrushOverlay();
+                onMaskUpdate(activeMask.id, new Uint8Array(restored));
+                lastTapRef.current = null;
+                prevStrokeSnapshotRef.current = null;
+                strokeStartRef.current = null;
+                onExit();
+                return;
+            }
+        }
+
+        // Snapshot the buffer BEFORE this stroke modifies it, so if THIS stroke
+        // turns out to be the first tap of a double-click, we can roll it back.
+        if (maskDataRef.current) {
+            prevStrokeSnapshotRef.current = new Uint8Array(maskDataRef.current);
+        }
+
+        strokeStartRef.current = { t: now, x, y, moved: false };
+        setIsDrawing(true);
+        e.currentTarget.setPointerCapture(e.pointerId);
 
         if (activeMask && maskDataRef.current) {
             applyBrushStroke(
@@ -148,6 +197,15 @@ export function BrushTool({
         setCursorPos({ x, y });
 
         if (isDrawing && activeMask && maskDataRef.current && lastPosRef.current) {
+            // Flag stroke as "moved" if it drifts past the tap threshold.
+            if (strokeStartRef.current && !strokeStartRef.current.moved) {
+                const sdx = x - strokeStartRef.current.x;
+                const sdy = y - strokeStartRef.current.y;
+                if (Math.sqrt(sdx * sdx + sdy * sdy) > TAP_MAX_MOVE_PX) {
+                    strokeStartRef.current.moved = true;
+                }
+            }
+
             applyBrushStroke(
                 lastPosRef.current,
                 { x, y },
@@ -170,12 +228,31 @@ export function BrushTool({
     const handlePointerUp = (e: React.PointerEvent) => {
         if (isDrawing) {
             setIsDrawing(false);
-            e.currentTarget.releasePointerCapture(e.pointerId);
+            try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* already released */ }
 
             if (activeMask && maskDataRef.current) {
                 onMaskUpdate(activeMask.id, new Uint8Array(maskDataRef.current));
             }
+
+            // Only count this stroke as a "tap" (eligible for double-click) if it
+            // was short and barely moved. Long holds or drags are real strokes.
+            const stroke = strokeStartRef.current;
+            if (stroke && !stroke.moved && performance.now() - stroke.t < TAP_MAX_MS) {
+                lastTapRef.current = { t: performance.now(), x: stroke.x, y: stroke.y };
+            } else {
+                lastTapRef.current = null;
+            }
+            strokeStartRef.current = null;
         }
+    };
+
+    // OS-level cancellation (focus loss, gesture interrupt, etc.). Reset state
+    // so the next pointerdown starts fresh — and do NOT record this as a tap.
+    const handlePointerCancel = (e: React.PointerEvent) => {
+        setIsDrawing(false);
+        try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* already released */ }
+        strokeStartRef.current = null;
+        lastTapRef.current = null;
     };
 
     if (!imageTransform) return null;
@@ -193,7 +270,9 @@ export function BrushTool({
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
             onPointerLeave={handlePointerUp}
+            onPointerCancel={handlePointerCancel}
             onClick={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
         >
             <canvas
                 ref={canvasRef}

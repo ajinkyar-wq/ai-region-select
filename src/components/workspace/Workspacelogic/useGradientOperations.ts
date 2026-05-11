@@ -13,6 +13,7 @@ interface UseGradientOperationsProps {
     setDrawingTool: React.Dispatch<React.SetStateAction<'linear-gradient' | 'radial-gradient' | null>>;
     selectionSnapshotRef: MutableRefObject<string[]>;
     gradientModeRef: MutableRefObject<'add' | 'erase'>;
+    pendingGradientIdRef: MutableRefObject<string | null>;
 }
 
 export function useGradientOperations({
@@ -24,6 +25,7 @@ export function useGradientOperations({
     setDrawingTool,
     selectionSnapshotRef,
     gradientModeRef,
+    pendingGradientIdRef,
 }: UseGradientOperationsProps) {
 
     const handleCreateLinearGradient = useCallback((mode: 'add' | 'erase' = 'add') => {
@@ -77,27 +79,6 @@ export function useGradientOperations({
         const selectedRegions = snapshotIds.length > 0
             ? image.regions.filter(r => snapshotIds.includes(r.id))
             : [];
-
-        let targetGroupId: string | undefined;
-        const regionsToGroup: string[] = [];
-
-        if (selectedRegions.length === 1) {
-            if (selectedRegions[0].groupId) {
-                targetGroupId = selectedRegions[0].groupId;
-            } else {
-                targetGroupId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
-                regionsToGroup.push(selectedRegions[0].id);
-            }
-        } else if (selectedRegions.length > 1) {
-            const firstGroup = selectedRegions[0].groupId;
-            const allSameGroup = selectedRegions.every(r => r.groupId === firstGroup);
-            if (firstGroup && allSameGroup) {
-                targetGroupId = firstGroup;
-            } else {
-                targetGroupId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
-                selectedRegions.forEach(r => regionsToGroup.push(r.id));
-            }
-        }
 
         selectionSnapshotRef.current = [];
 
@@ -161,44 +142,34 @@ export function useGradientOperations({
                 return;
             }
 
-            const newMask: Region = {
-                id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2),
-                type: 'radial-gradient',
-                label: 'Radial Gradient',
-                maskData: gradMaskData,
-                maskWidth: width,
-                maskHeight: height,
-                color: REGION_COLORS.manual,
-                radialGradient: {
-                    center: normCenter,
-                    radius: { x: radiusX, y: radiusY },
-                    feather: 0.5,
-                    invert: false,
-                    rotation: 0
-                },
-                visible: true,
-                selected: true,
-                hovered: false,
-                hasEdits: true,
-                previewUrl: generateMaskPreview(gradMaskData, width, height, REGION_COLORS.manual),
-                groupId: targetGroupId,
-            };
+            const pendingId = pendingGradientIdRef.current;
+            pendingGradientIdRef.current = null;
+            const newId = pendingId ?? (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
+            const radialParams = { center: normCenter, radius: { x: radiusX, y: radiusY }, feather: 0.5, invert: false, rotation: 0 };
+            const previewUrl = generateMaskPreview(gradMaskData, width, height, REGION_COLORS.manual);
 
-            setImage(prev =>
-                prev ? {
-                    ...prev,
-                    regions: [
-                        ...prev.regions.map(r => {
-                            if (regionsToGroup.includes(r.id)) {
-                                return { ...r, groupId: targetGroupId };
-                            }
-                            return r;
-                        }),
-                        newMask
-                    ]
-                } : prev
-            );
-            setActiveMask(newMask);
+            let createdMask: Region | null = null;
+            setImage(prev => {
+                if (!prev) return prev;
+                if (pendingId && prev.regions.some(r => r.id === pendingId)) {
+                    return {
+                        ...prev,
+                        regions: prev.regions.map(r => r.id === pendingId ? {
+                            ...r, maskData: gradMaskData, maskWidth: width, maskHeight: height,
+                            radialGradient: radialParams, previewUrl,
+                        } : r)
+                    };
+                }
+                const newMask: Region = {
+                    id: newId, type: 'radial-gradient', label: 'Radial Gradient',
+                    maskData: gradMaskData, maskWidth: width, maskHeight: height,
+                    color: REGION_COLORS.manual, radialGradient: radialParams,
+                    visible: true, selected: true, hovered: false, hasEdits: true, previewUrl,
+                };
+                createdMask = newMask;
+                return { ...prev, regions: [...prev.regions, newMask] };
+            });
+            if (createdMask) setActiveMask(createdMask);
             return;
         }
 
@@ -273,40 +244,36 @@ export function useGradientOperations({
                 return;
             }
 
-            const newMask: Region = {
-                id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2),
-                type: 'linear-gradient',
-                label: 'Linear Gradient',
-                maskData: gradMaskData,
-                maskWidth: width,
-                maskHeight: height,
-                color: REGION_COLORS.manual,
-                gradient: { start: normStart, end: normEnd },
-                visible: true,
-                selected: true,
-                hovered: false,
-                hasEdits: true,
-                previewUrl: generateMaskPreview(gradMaskData, width, height, REGION_COLORS.manual),
-                groupId: targetGroupId,
-            };
+            const pendingId = pendingGradientIdRef.current;
+            pendingGradientIdRef.current = null;
+            const newId = pendingId ?? (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
+            const gradientParams = { start: normStart, end: normEnd };
+            const previewUrl = generateMaskPreview(gradMaskData, width, height, REGION_COLORS.manual);
 
-            setImage(prev =>
-                prev ? {
-                    ...prev,
-                    regions: [
-                        ...prev.regions.map(r => {
-                            if (regionsToGroup.includes(r.id)) {
-                                return { ...r, groupId: targetGroupId };
-                            }
-                            return r;
-                        }),
-                        newMask
-                    ]
-                } : prev
-            );
-            setActiveMask(newMask);
+            let createdMask: Region | null = null;
+            setImage(prev => {
+                if (!prev) return prev;
+                if (pendingId && prev.regions.some(r => r.id === pendingId)) {
+                    return {
+                        ...prev,
+                        regions: prev.regions.map(r => r.id === pendingId ? {
+                            ...r, maskData: gradMaskData, maskWidth: width, maskHeight: height,
+                            gradient: gradientParams, previewUrl,
+                        } : r)
+                    };
+                }
+                const newMask: Region = {
+                    id: newId, type: 'linear-gradient', label: 'Linear Gradient',
+                    maskData: gradMaskData, maskWidth: width, maskHeight: height,
+                    color: REGION_COLORS.manual, gradient: gradientParams,
+                    visible: true, selected: true, hovered: false, hasEdits: true, previewUrl,
+                };
+                createdMask = newMask;
+                return { ...prev, regions: [...prev.regions, newMask] };
+            });
+            if (createdMask) setActiveMask(createdMask);
         }
-    }, [image, drawingTool, setImage, setActiveMask, setDrawingTool, selectionSnapshotRef, gradientModeRef]);
+    }, [image, drawingTool, setImage, setActiveMask, setDrawingTool, selectionSnapshotRef, gradientModeRef, pendingGradientIdRef]);
 
     const handleIntersectGradient = useCallback((gradientId: string, targetId: string) => {
         if (!image) return;

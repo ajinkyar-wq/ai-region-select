@@ -411,14 +411,15 @@ export function ToolLayer({
         if (multiDragState) return;
 
         const isMultiToggle = e.ctrlKey || e.metaKey || e.shiftKey;
+        const isGradient = region.type === 'linear-gradient' || region.type === 'radial-gradient';
 
-        // For gradients: if already selected (single-click, no modifier), deselect immediately
-        if (!isMultiToggle && region.selected && (region.type === 'linear-gradient' || region.type === 'radial-gradient')) {
-            const updatedRegions = regions.map(r => ({
-                ...r,
-                selected: false
-            }));
-            onUpdateTile({ regions: updatedRegions });
+        // Plain click on an already-selected gradient = deselect it.
+        // Gradients don't have a separate "edit mode" — selecting them shows handles,
+        // so clicking the center handle again is the natural toggle-off action.
+        if (isGradient && region.selected && !isMultiToggle) {
+            onUpdateTile({
+                regions: regions.map(r => r.id === region.id ? { ...r, selected: false } : r)
+            });
             return;
         }
 

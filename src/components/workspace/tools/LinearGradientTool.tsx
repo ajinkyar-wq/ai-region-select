@@ -43,6 +43,12 @@ export function LinearGradientTool({
 }: LinearGradientToolProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
+    // Suppresses the synthetic click that follows a real drag. We only mark
+    // this true if the pointer actually MOVED between down and up — a tap
+    // (down → up without movement) must still toggle selection via onClick.
+    const justDraggedRef = useRef(false);
+    const downPosRef = useRef<{ x: number; y: number } | null>(null);
+    const movedRef = useRef(false);
 
     // Local state for smooth dragging
     const [dragState, setDragState] = useState<{
@@ -186,6 +192,9 @@ export function LinearGradientTool({
 
         if (!dragState) return;
 
+        downPosRef.current = { x: e.clientX, y: e.clientY };
+        movedRef.current = false;
+
         onDragStart?.();
 
         const rect = containerRef.current?.getBoundingClientRect();
@@ -218,6 +227,13 @@ export function LinearGradientTool({
     const handlePointerMove = (e: React.PointerEvent) => {
         if (!dragState || !dragState.isDragging || !imageTransform) return;
         e.stopPropagation();
+
+        // Flag actual movement so we can tell a tap from a drag at pointerup.
+        if (!movedRef.current && downPosRef.current) {
+            const ddx = e.clientX - downPosRef.current.x;
+            const ddy = e.clientY - downPosRef.current.y;
+            if (Math.sqrt(ddx * ddx + ddy * ddy) > 3) movedRef.current = true;
+        }
 
         const rect = containerRef.current?.getBoundingClientRect();
         if (!rect) return;
@@ -316,8 +332,15 @@ export function LinearGradientTool({
     const handlePointerUp = (e: React.PointerEvent) => {
         if (!dragState?.isDragging) return;
         e.stopPropagation();
-        e.preventDefault(); // Prevent click event generation after drag
-        e.currentTarget.releasePointerCapture(e.pointerId);
+        // Only suppress the click if the pointer actually moved (real drag).
+        // A pure tap (down → up without movement) must still fire onClick so
+        // single-click toggle off works.
+        if (movedRef.current) {
+            e.preventDefault();
+            justDraggedRef.current = true;
+        }
+        downPosRef.current = null;
+        try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* already released */ }
 
         if (imageTransform) {
             const normStart = {
@@ -417,6 +440,11 @@ export function LinearGradientTool({
                         onPointerUp={handlePointerUp}
                         onClick={(e) => {
                             e.stopPropagation();
+                            // Swallow the synthetic click that follows a drag.
+                            if (justDraggedRef.current) {
+                                justDraggedRef.current = false;
+                                return;
+                            }
                             onSelect?.(e);
                         }}
                         onDoubleClick={(e) => {
@@ -565,7 +593,14 @@ export function LinearGradientTool({
                     top: center.y
                 }}
                 onPointerDown={(e) => handlePointerDown(e, 'move-center')}
-                onClick={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                    e.stopPropagation();
+                    if (justDraggedRef.current) {
+                        justDraggedRef.current = false;
+                        return;
+                    }
+                    onSelect?.(e);
+                }}
             />
 
         </div>

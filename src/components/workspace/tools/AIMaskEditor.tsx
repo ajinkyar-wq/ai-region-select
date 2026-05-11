@@ -23,6 +23,11 @@ interface AIMaskEditorProps {
     opacity?: number;
 }
 
+const DOUBLE_CLICK_MS = 400;
+const DOUBLE_CLICK_PX = 12;
+const TAP_MAX_MS = 400;
+const TAP_MAX_MOVE_PX = 8;
+
 export function AIMaskEditor({
     activeRegions,
     allPersonRegions,
@@ -31,6 +36,7 @@ export function AIMaskEditor({
     canvasWidth,
     canvasHeight,
     onMasksUpdate,
+    onExit,
     mode = 'add',
     brushSize = 20,
     softness = 0,
@@ -42,6 +48,13 @@ export function AIMaskEditor({
 
     // One mutable mask buffer per active region (keyed by region id)
     const maskBuffers = useRef<Map<string, { data: Uint8Array; w: number; h: number }>>(new Map());
+
+    // Double-click detection (mirrors BrushTool). A tap = short, near-stationary
+    // down→up. Two taps in quick succession at the same spot = double-click exit.
+    const lastTapRef = useRef<{ t: number; x: number; y: number } | null>(null);
+    const strokeStartRef = useRef<{ t: number; x: number; y: number; moved: boolean } | null>(null);
+    // Snapshot of buffers from BEFORE the previous stroke, per region id.
+    const prevStrokeSnapshotsRef = useRef<Map<string, Uint8Array>>(new Map());
 
     // ── Initialize / sync ────────────────────────────────────────────────────
     useEffect(() => {
@@ -170,10 +183,51 @@ export function AIMaskEditor({
 
     // ── Pointer handlers ─────────────────────────────────────────────────────
     const handlePointerDown = (e: React.PointerEvent) => {
-        setIsDrawing(true);
-        e.currentTarget.setPointerCapture(e.pointerId);
         const rect = e.currentTarget.getBoundingClientRect();
         const point = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        const now = performance.now();
+
+        // Double-click detection — gated on the PREVIOUS stroke being a tap.
+        const lastTap = lastTapRef.current;
+        if (lastTap && onExit) {
+            const dt = now - lastTap.t;
+            const dx = point.x - lastTap.x;
+            const dy = point.y - lastTap.y;
+            if (
+                dt < DOUBLE_CLICK_MS &&
+                Math.sqrt(dx * dx + dy * dy) < DOUBLE_CLICK_PX &&
+                prevStrokeSnapshotsRef.current.size > 0
+            ) {
+                // Restore each buffer to its pre-previous-stroke state, then commit
+                // the restored buffers so the first click's dab is also undone.
+                const updates: { id: string; maskData: Uint8Array }[] = [];
+                prevStrokeSnapshotsRef.current.forEach((snap, id) => {
+                    const buf = maskBuffers.current.get(id);
+                    if (buf) {
+                        const restored = new Uint8Array(snap);
+                        buf.data = restored;
+                        updates.push({ id, maskData: new Uint8Array(restored) });
+                    }
+                });
+                renderEditorCanvas();
+                if (updates.length) onMasksUpdate(updates);
+                lastTapRef.current = null;
+                prevStrokeSnapshotsRef.current.clear();
+                strokeStartRef.current = null;
+                onExit();
+                return;
+            }
+        }
+
+        // Snapshot every buffer BEFORE this stroke modifies it.
+        prevStrokeSnapshotsRef.current.clear();
+        maskBuffers.current.forEach(({ data }, id) => {
+            prevStrokeSnapshotsRef.current.set(id, new Uint8Array(data));
+        });
+
+        strokeStartRef.current = { t: now, x: point.x, y: point.y, moved: false };
+        setIsDrawing(true);
+        e.currentTarget.setPointerCapture(e.pointerId);
         performBrushStroke(point, point);
         lastPosRef.current = point;
     };
@@ -184,6 +238,13 @@ export function AIMaskEditor({
         const y = e.clientY - rect.top;
         setCursorPos({ x, y });
         if (isDrawing && lastPosRef.current) {
+            if (strokeStartRef.current && !strokeStartRef.current.moved) {
+                const sdx = x - strokeStartRef.current.x;
+                const sdy = y - strokeStartRef.current.y;
+                if (Math.sqrt(sdx * sdx + sdy * sdy) > TAP_MAX_MOVE_PX) {
+                    strokeStartRef.current.moved = true;
+                }
+            }
             performBrushStroke(lastPosRef.current, { x, y });
             lastPosRef.current = { x, y };
         }
@@ -192,9 +253,24 @@ export function AIMaskEditor({
     const handlePointerUp = (e: React.PointerEvent) => {
         if (isDrawing) {
             setIsDrawing(false);
-            e.currentTarget.releasePointerCapture(e.pointerId);
+            try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* already released */ }
             commitUpdates();
+
+            const stroke = strokeStartRef.current;
+            if (stroke && !stroke.moved && performance.now() - stroke.t < TAP_MAX_MS) {
+                lastTapRef.current = { t: performance.now(), x: stroke.x, y: stroke.y };
+            } else {
+                lastTapRef.current = null;
+            }
+            strokeStartRef.current = null;
         }
+    };
+
+    const handlePointerCancel = (e: React.PointerEvent) => {
+        setIsDrawing(false);
+        try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* already released */ }
+        strokeStartRef.current = null;
+        lastTapRef.current = null;
     };
 
     return (
@@ -212,7 +288,9 @@ export function AIMaskEditor({
                 onPointerMove={handlePointerMove}
                 onPointerUp={handlePointerUp}
                 onPointerLeave={handlePointerUp}
+                onPointerCancel={handlePointerCancel}
                 onClick={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => e.stopPropagation()}
             >
                 <canvas ref={canvasRef} className="absolute inset-0" />
 

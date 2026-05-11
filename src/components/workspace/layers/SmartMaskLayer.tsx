@@ -771,6 +771,14 @@ export function SmartMaskLayer({
     const isSelectedRef = useRef(tile.regions.some(r => r.selected));
     useEffect(() => { isSelectedRef.current = tile.regions.some(r => r.selected); }, [tile.regions]);
 
+    // When canvas interactions get disabled mid-hover (e.g. tool wheel opens via
+    // Tab), clear the hover so the highlight disappears immediately.
+    useEffect(() => {
+        if (!canvasInteractionsEnabled) {
+            onHoverChange(null);
+        }
+    }, [canvasInteractionsEnabled, onHoverChange]);
+
     const clickTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const selectedAtMouseDownRef = useRef<Region | null>(null);
     const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null);
@@ -796,6 +804,15 @@ export function SmartMaskLayer({
 
         if (tile.regions.some(r => r.selected) && !isAdditive) {
             // Single click while a mask is selected = deselect all
+            // EXCEPT when a gradient is among the selected regions — gradients only
+            // deselect via their own drag handle, the slider panel, or Esc.
+            const hasGradientSelected = tile.regions.some(
+                r => r.selected && (r.type === 'linear-gradient' || r.type === 'radial-gradient')
+            );
+            if (hasGradientSelected) {
+                e.stopPropagation();
+                return;
+            }
             // Delay so double-click can cancel it before it fires
             e.stopPropagation();
             if (clickTimeoutRef.current) clearTimeout(clickTimeoutRef.current);

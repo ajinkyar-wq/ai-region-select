@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { ChevronDown, ChevronRight, Eye, EyeOff, Trash2, Contrast } from 'lucide-react';
 import type { Region } from '@/types/workspace';
 import { MaskListItem } from './MaskListItem';
@@ -52,9 +52,11 @@ export function MaskListGroup(props: MaskListGroupProps) {
         globalIndexRef, dropTarget, intersectTarget, intersectHoverTarget,
         groupingHoverTarget, draggingItemId, draggingGradientId,
         handleDragStart, handleDragOverItem, handleDragLeave, handleGlobalDragEnd, handleDropItem,
-        handleSelectRegion, onActivateRegion,
+        handleSelectRegion, onSelectBatchRegions, onActivateRegion,
         onToggleVisibility, onToggleBatchVisibility, onDeleteRegion, onDeleteGroup, onInvertMask, onMaskItemHover
     } = props;
+
+    const deselectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const isExpanded = expandedGroups[groupId] !== false; // Default to TRUE (Expanded)
     const isAllVisible = groupRegions.every(r => r.visible);
@@ -246,10 +248,22 @@ export function MaskListGroup(props: MaskListGroupProps) {
                                     region={region}
                                     index={itemIndex}
                                     onSelect={(multi, shift) => {
+                                        if (!multi && !shift && region.selected) {
+                                            deselectTimerRef.current = setTimeout(() => {
+                                                onSelectBatchRegions?.([], false);
+                                            }, 250);
+                                            return;
+                                        }
                                         const allIds = [region.id, ...memberClipKids.map(c => c.id)];
                                         handleSelectRegion(region.id, multi, shift!, allIds);
                                     }}
-                                    onActivate={() => onActivateRegion?.(region.id)}
+                                    onActivate={() => {
+                                        if (deselectTimerRef.current) {
+                                            clearTimeout(deselectTimerRef.current);
+                                            deselectTimerRef.current = null;
+                                        }
+                                        onActivateRegion?.(region.id);
+                                    }}
                                     onToggleVis={() => onToggleVisibility(region.id)}
                                     onDelete={() => onDeleteRegion(region.id)}
                                     onInvert={() => onInvertMask?.(region.id)}

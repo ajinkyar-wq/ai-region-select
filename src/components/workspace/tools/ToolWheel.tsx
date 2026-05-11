@@ -50,12 +50,12 @@ type SectorDef = {
   mode: 'add' | 'erase';
 };
 
-// No mask → 4 tools, no add/erase split. Top → right → bottom → left.
+// No mask → 3 tools (no eraser — nothing to erase yet).
+// Evenly spaced: top, lower-right, lower-left.
 export const SIMPLE_SECTORS: SectorDef[] = [
-  { tool: 'brush',           label: 'Brush',  angle: -90, mode: 'add' },
-  { tool: 'linear-gradient', label: 'Linear', angle:   0, mode: 'add' },
-  { tool: 'radial-gradient', label: 'Radial', angle:  90, mode: 'add' },
-  { tool: 'eraser',          label: 'Eraser', angle: 180, mode: 'add' },
+  { tool: 'brush',           label: 'Brush',  angle:  -90, mode: 'add' },
+  { tool: 'radial-gradient', label: 'Radial', angle:   30, mode: 'add' },
+  { tool: 'linear-gradient', label: 'Linear', angle:  150, mode: 'add' },
 ];
 
 // Mask selected → left half ADD (green), right half ERASE (red).
@@ -137,7 +137,7 @@ function renderToolIcon(tool: WheelTool, size = 22) {
 
 export function ToolWheel({ x, y, hasMaskSelected, onHoverChange }: ToolWheelProps) {
   const sectors = hasMaskSelected ? SPLIT_SECTORS : SIMPLE_SECTORS;
-  const sliceSize = hasMaskSelected ? 60 : 90;
+  const sliceSize = hasMaskSelected ? 60 : 120;
   const sliceGap  = 1.2;
 
   const [hovered, setHovered] = useState<number>(0);

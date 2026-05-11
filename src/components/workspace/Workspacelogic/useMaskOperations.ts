@@ -45,29 +45,6 @@ export function useMaskOperations({
         }
         const maskData = new Uint8Array(width * height);
 
-        const selectedRegions = image.regions.filter(r => r.selected);
-        let targetGroupId: string | undefined;
-        const regionsToGroup: string[] = [];
-
-        if (selectedRegions.length === 1) {
-            if (selectedRegions[0].groupId) {
-                targetGroupId = selectedRegions[0].groupId;
-            } else {
-                targetGroupId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
-                regionsToGroup.push(selectedRegions[0].id);
-            }
-        } else if (selectedRegions.length > 1) {
-            const firstGroup = selectedRegions[0].groupId;
-            const allSameGroup = selectedRegions.every(r => r.groupId === firstGroup);
-
-            if (firstGroup && allSameGroup) {
-                targetGroupId = firstGroup;
-            } else {
-                targetGroupId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
-                selectedRegions.forEach(r => regionsToGroup.push(r.id));
-            }
-        }
-
         const newMask: Region = {
             id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2),
             type: 'manual',
@@ -81,19 +58,13 @@ export function useMaskOperations({
             hovered: false,
             hasEdits: true,
             previewUrl: generateMaskPreview(maskData, width, height, REGION_COLORS.manual),
-            groupId: targetGroupId,
         };
 
         setImage(prev =>
             prev ? {
                 ...prev,
                 regions: [
-                    ...prev.regions.map(r => {
-                        if (regionsToGroup.includes(r.id)) {
-                            return { ...r, groupId: targetGroupId, selected: false };
-                        }
-                        return { ...r, selected: false };
-                    }),
+                    ...prev.regions.map(r => ({ ...r, selected: false })),
                     newMask
                 ]
             } : prev

@@ -461,29 +461,34 @@ activeMask.type.startsWith('background-')
         // Exit Edit / Brush Modes on background click — ignore if user dragged (pan)
         if (isPanningRef.current) return;
         if (drawingTool) return;
+        // Wheel/tool overlays disable canvas interactions — drop the click entirely.
+        if (!canvasInteractionsEnabled) return;
         // Ignore if user dragged inside the image (drag-to-adjust gradients etc.)
         if (containerPointerDownRef.current) {
           const dx = e.clientX - containerPointerDownRef.current.x;
           const dy = e.clientY - containerPointerDownRef.current.y;
           if (Math.sqrt(dx * dx + dy * dy) > PAN_THRESHOLD) return;
         }
-        // While editing a gradient, only exit if the click was outside the image
+        // Gradients should NEVER deselect from a canvas-background click
+        // (inside or outside the image). They only deselect via their own
+        // drag handle, the slider panel toggle, or Esc.
         const isGradientEdit = editingRegion?.type === 'linear-gradient' || editingRegion?.type === 'radial-gradient';
-        if (isGradientEdit && !isOutsideImage(e.clientX, e.clientY)) return;
+        if (isGradientEdit) return;
+
+        const hasGradientSelected = tile.regions.some(
+          r => r.selected && (r.type === 'linear-gradient' || r.type === 'radial-gradient')
+        );
+        if (hasGradientSelected) return;
 
         if (editingRegion) {
-          const isGradient = editingRegion.type === 'linear-gradient' || editingRegion.type === 'radial-gradient';
           setEditingRegion(null);
           onUpdateTile({
             regions: tile.regions.map(r => ({
               ...r,
-              // Gradients: fully deselect on background click (no intermediate state)
-              // Other types (AI masks): keep selected when exiting edit
-              selected: isGradient ? false : r.id === editingRegion.id,
+              selected: r.id === editingRegion.id,
             })),
           });
-          // Don't kill the brush when exiting a gradient — it wasn't active for the gradient
-          if (!isGradient && onBrushExit) {
+          if (onBrushExit) {
             onBrushExit();
           }
         } else {
@@ -517,9 +522,9 @@ activeMask.type.startsWith('background-')
             peopleEnabled={peopleEnabled}
             backgroundEnabled={backgroundEnabled}
             isWalkthroughActive={isWalkthroughActive}
-            hoveredRegionId={brushActive ? null : hoveredRegionId}
+            hoveredRegionId={brushActive || !canvasInteractionsEnabled ? null : hoveredRegionId}
             isEditing={!!activeEditingRegion && activeEditingRegion.type !== 'manual' && activeEditingRegion.type !== 'linear-gradient' && activeEditingRegion.type !== 'radial-gradient'}
-            onHoverChange={brushActive ? () => { } : setLocalHoveredRegion}
+            onHoverChange={brushActive || !canvasInteractionsEnabled ? () => { } : setLocalHoveredRegion}
             onUpdateTile={onUpdateTile}
             onEditRegion={(r) => {
               if (isWalkthroughActive) onCompleteWalkthrough?.(lastMousePosRef.current ?? undefined);
@@ -570,7 +575,7 @@ activeMask.type.startsWith('background-')
         )}
 
         {/* TOOL: Interactive Brush (Global) - Now Inside Transform */}
-        {brushActive && !editingRegion && imageTransform && activeMask && activeMask.type === 'manual' && (
+        {brushActive && !editingRegion && imageTransform && activeMask && activeMask.type === 'manual' && canvasInteractionsEnabled && (
           <BrushTool
             imageTransform={imageTransform}
             activeMask={activeMask}
@@ -579,6 +584,7 @@ activeMask.type.startsWith('background-')
             brushSoftness={brushSoftness}
             brushOpacity={brushOpacity}
             brushMode={brushMode}
+            onExit={onBrushExit}
           />
         )}
 
@@ -587,7 +593,7 @@ activeMask.type.startsWith('background-')
 
         {/* Modal Mask Editor (AI Masks Only - Modal Overlay) */}
         {/* Gradients are handled "In-Place" by their respective tools receiving isEditing=true */}
-        {activeEditingRegion && activeEditingRegion.type !== 'linear-gradient' && activeEditingRegion.type !== 'radial-gradient' && activeEditingRegion.type !== 'manual' && imageTransform && mainCanvasRef.current && (
+        {activeEditingRegion && activeEditingRegion.type !== 'linear-gradient' && activeEditingRegion.type !== 'radial-gradient' && activeEditingRegion.type !== 'manual' && imageTransform && mainCanvasRef.current && canvasInteractionsEnabled && (
           <AIMaskEditor
             // Pass ALL selected AI masks as active targets
             activeRegions={tile.regions.filter(r => r.selected && (r.type === 'person' || r.type === 'people-group' ||
@@ -626,7 +632,7 @@ r.type.startsWith('background-')
         }
 
         {/* DRAWING OVERLAY */}
-        {drawingTool && (
+        {drawingTool && canvasInteractionsEnabled && (
           <div
             className="absolute inset-0 z-50 cursor-crosshair"
             onPointerDown={handlePointerDown}
