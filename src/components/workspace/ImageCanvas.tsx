@@ -428,10 +428,16 @@ activeMask.type.startsWith('background-')
     editingRegion.type !== 'radial-gradient' &&
     editingRegion.type !== 'manual';
 
+  // Empty-placeholder gradients (created up-front from the dropdown / tool wheel)
+  // shouldn't count as a "parent mask selected" for live-preview purposes —
+  // they have no mask data yet, so treat the in-progress draw as standalone.
+  const isPlaceholderGradient = (r: Region) =>
+    (r.type === 'linear-gradient' || r.type === 'radial-gradient') && r.maskWidth === 0;
+
   // Live gradient: fed into SmartMaskLayer/ToolLayer for real-time compositing during draw
   const liveGradient = useMemo<LiveGradient | null>(() => {
     if (!drawState?.isDrawing || !drawingTool) return null;
-    const parentRegion = tile?.regions.find(r => r.selected && !r.clipParentId);
+    const parentRegion = tile?.regions.find(r => r.selected && !r.clipParentId && !isPlaceholderGradient(r));
     if (!parentRegion) return null; // standalone — handled separately by drawing overlay
     return {
       type: drawingTool as 'linear-gradient' | 'radial-gradient',
@@ -571,6 +577,7 @@ activeMask.type.startsWith('background-')
             onDoubleEditRegion={onActivateBrush} // Handle Double Click (Enable Brush Toolbar)
             onGradientDraggingChange={onGradientDraggingChange}
             liveGradient={liveGradient}
+            canvasInteractionsEnabled={canvasInteractionsEnabled}
           />
         )}
 
@@ -648,8 +655,9 @@ r.type.startsWith('background-')
               const ex = drawState.current.x * iw;
               const ey = drawState.current.y * ih;
 
-              // Standalone gradient: no parent mask selected, show fill preview ourselves
-              const isStandalone = !tile?.regions.some(r => r.selected && !r.clipParentId);
+              // Standalone gradient: no real parent mask selected, show fill preview ourselves.
+              // Placeholder gradients (just-created, no mask data yet) don't count as a parent.
+              const isStandalone = !tile?.regions.some(r => r.selected && !r.clipParentId && !isPlaceholderGradient(r));
               const pcm = standaloneGradientColor.match(/#([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})/i);
               const pR = pcm ? parseInt(pcm[1], 16) : 80;
               const pG = pcm ? parseInt(pcm[2], 16) : 255;

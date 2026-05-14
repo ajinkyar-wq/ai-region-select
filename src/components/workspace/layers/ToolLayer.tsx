@@ -28,6 +28,8 @@ interface ToolLayerProps {
     onDoubleEditRegion?: (regionId: string) => void;
     onGradientDraggingChange?: (isDragging: boolean) => void;
     liveGradient?: LiveGradient | null;
+    /** When false: handles + brush icons are not rendered, mask color overlay stays hidden. */
+    canvasInteractionsEnabled?: boolean;
 }
 
 export function ToolLayer({
@@ -43,6 +45,7 @@ export function ToolLayer({
     onDoubleEditRegion,
     onGradientDraggingChange,
     liveGradient = null,
+    canvasInteractionsEnabled = true,
 }: ToolLayerProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const isDraggingRef = useRef(false); // Track if a drag occurred to prevent click-deselection
@@ -127,6 +130,9 @@ export function ToolLayer({
 
         // Use standard clearRect
         ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Show Overlay is off — nothing to draw.
+        if (!canvasInteractionsEnabled) return;
 
         // Filter for manual & gradient masks
         // IMPORTANT: Exclude SELECTED gradients because they are rendered live by the tool
@@ -281,7 +287,7 @@ export function ToolLayer({
             ctx.restore();
         });
 
-    }, [regions, width, height, excludedRegionId, dragState, multiDragState, activeRegionId, liveGradient]);
+    }, [regions, width, height, excludedRegionId, dragState, multiDragState, activeRegionId, liveGradient, canvasInteractionsEnabled]);
 
     if (!imageTransform) return null;
 
@@ -549,7 +555,7 @@ export function ToolLayer({
             />
 
             {/* Interactive Brush Icons */}
-            {effectiveRegions // Use Effective Regions for rendering positions
+            {canvasInteractionsEnabled && effectiveRegions // Use Effective Regions for rendering positions
                 .filter(r => r.type === 'manual' && r.visible && r.maskData && r.id !== excludedRegionId)
                 .map(r => ({
                     ...r,
@@ -630,7 +636,7 @@ export function ToolLayer({
                 })}
 
             {/* Gradient Tools - Render all (selected will be full UI) */}
-            {effectiveRegions // Use Effective regions to pass down offsets!
+            {canvasInteractionsEnabled && effectiveRegions // Use Effective regions to pass down offsets!
                 .filter(r => (r.type === 'linear-gradient' || r.type === 'radial-gradient') && r.visible && r.id !== excludedRegionId)
                 .map(region => {
                     // clipParentId can be a single region ID or a group ID — handle both.
