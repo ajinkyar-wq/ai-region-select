@@ -10,6 +10,7 @@ import { SliderPanel } from './slider-panel/SliderPanel';
 import { DraggableToolbar } from './tools/DraggableToolbar';
 import { ToolWheel, SIMPLE_SECTORS, SPLIT_SECTORS } from './tools/ToolWheel';
 import type { WheelTool } from './tools/ToolWheel';
+import { CombineMasksControl } from './tools/CombineMasksControl';
 import type { ImageTileData, Region } from '@/types/workspace';
 import { REGION_COLORS } from '@/types/workspace';
 import { Columns2, Paintbrush, Eraser } from 'lucide-react';
@@ -28,6 +29,9 @@ export function Workspace() {
   const [peopleEnabled] = useState(true);
   const [backgroundEnabled] = useState(true);
   const [activeMask, setActiveMask] = useState<Region | null>(null);
+  // Sticky primary for combine flow. The FIRST mask selected stays primary while
+  // additional masks are Shift-added. Cleared when selection drops to zero.
+  const [primaryMaskId, setPrimaryMaskId] = useState<string | null>(null);
   const [brushActive, setBrushActive] = useState(false);
   const [isLocalEditing, setIsLocalEditing] = useState(false); // For AI Mask Editor
   const [exitEditTrigger, setExitEditTrigger] = useState(0);
@@ -92,7 +96,8 @@ export function Workspace() {
     handleResetMasks,
     handleInvertMask,
     handleEditManualMask,
-    handleUpdateAdjustments
+    handleUpdateAdjustments,
+    handleCombineMasks
   } = useMaskOperations({
     image,
     setImage,
@@ -204,6 +209,22 @@ export function Workspace() {
   const handleWheelSelectToolRef = useRef(handleWheelSelectTool);
   handleWheelSelectToolRef.current = handleWheelSelectTool;
 
+  // Maintain sticky primary for combine flow. The primary stays put while the
+  // user Shift-adds more masks; it only changes when the user makes a fresh
+  // single-mask selection, and clears when nothing is selected.
+  useEffect(() => {
+    if (!image) { setPrimaryMaskId(null); return; }
+    const selectedTopLevel = image.regions.filter(r => r.selected && !r.clipParentId);
+    if (selectedTopLevel.length === 0) {
+      if (primaryMaskId !== null) setPrimaryMaskId(null);
+      return;
+    }
+    // If current primary is still selected, keep it sticky (no change).
+    if (primaryMaskId && selectedTopLevel.some(r => r.id === primaryMaskId)) return;
+    // Otherwise: primary was deselected (or never set). Adopt the first selected.
+    setPrimaryMaskId(selectedTopLevel[0].id);
+  }, [image, primaryMaskId]);
+
   // Tool wheel: track mouse and Tab key
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
@@ -270,8 +291,22 @@ export function Workspace() {
       return;
     }
 
+    // Single-click toggle-off: plain click on an already-selected mask when it's
+    // the only thing selected and we're not in edit mode deselects it.
+    if (!multi && ids.length === 1 && !brushActive) {
+      const targetId = ids[0];
+      const selectedNow = image.regions.filter(r => r.selected);
+      const onlyThisSelected = selectedNow.length === 1 && selectedNow[0].id === targetId;
+      if (onlyThisSelected) {
+        setImage({ ...image, regions: image.regions.map(r => ({ ...r, selected: false })) });
+        setActiveMask(null);
+        setDrawingTool(null);
+        return;
+      }
+    }
+
     let newRegions = image.regions.map(r => {
-      // If ID is in list, select it and mark as edited so it shows in panel
+      // If ID is in list, select it and mark as edited so it shows in panel.
       if (ids.includes(r.id)) return { ...r, selected: true, hasEdits: true };
       return multi ? r : { ...r, selected: false };
     });
@@ -537,6 +572,26 @@ export function Workspace() {
                 />
               )}
 
+              {/* Combine Masks control — appears when primary + ≥1 secondary are selected */}
+              {(() => {
+                if (!image || !primaryMaskId) return null;
+                if (brushActive || isLocalEditing || drawingTool || wheelVisible) return null;
+                const primary = image.regions.find(r => r.id === primaryMaskId);
+                if (!primary) return null;
+                const secondaries = image.regions.filter(r =>
+                  r.selected && r.id !== primaryMaskId && !r.clipParentId
+                );
+                if (secondaries.length === 0) return null;
+                return (
+                  <CombineMasksControl
+                    primaryLabel={primary.label || 'Primary'}
+                    secondaryCount={secondaries.length}
+                    onAdd={() => handleCombineMasks('add', primaryMaskId)}
+                    onSubtract={() => handleCombineMasks('subtract', primaryMaskId)}
+                  />
+                );
+              })()}
+
               {/* Tool Wheel — shown when Tab is held */}
               {wheelVisible && image && (
                 <ToolWheel
@@ -759,6 +814,13 @@ export function Workspace() {
 
                 // Double Click: complete walkthrough (parity with canvas double-click)
                 if (isWalkthroughActive) completeWalkthrough();
+
+                // Toggle out of edit mode if double-clicking the same region we're already editing
+                if (activeMask?.id === id && brushActive) {
+                  setBrushActive(false);
+                  setDrawingTool(null);
+                  return;
+                }
 
                 // Explicit Activation -> Edit Mode
                 setActiveMask(region);

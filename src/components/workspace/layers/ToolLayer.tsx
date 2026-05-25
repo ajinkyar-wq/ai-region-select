@@ -143,12 +143,13 @@ export function ToolLayer({
             // Base checks
             if (!r.visible || r.id === excludedRegionId) return false;
 
+            // A gradient acting as a clip parent (combine flow) is just pixels — composite
+            // its clip-children here the same way we do for manual parents. Gradients with
+            // no clip-children keep their existing render path (handles + own overlay).
+            const hasClipChildren = effectiveRegions.some(c => c.clipParentId === r.id);
 
-
-            // Gradients: Render NEVER in ToolLayer.
-            // - Active: Renders itself in Tool (Live Preview).
-            // - Other Selected: User wants NO Overlay (Handle Only).
             if (r.type === 'linear-gradient' || r.type === 'radial-gradient') {
+                if (r.selected && r.id === activeRegionId && hasClipChildren && r.maskData && r.maskData.length > 0) return true;
                 return false;
             }
 
@@ -703,6 +704,8 @@ export function ToolLayer({
                     // they expand beyond the parent boundary and clipping would make them look like intersections.
                     const effectiveClipMask = region.clipMode === 'add' ? undefined : clipMask;
 
+                    const ownsClipChildren = effectiveRegions.some(c => c.clipParentId === region.id);
+
                     if (region.type === 'radial-gradient') {
                         return (
                             <RadialGradientTool
@@ -713,6 +716,7 @@ export function ToolLayer({
                                 isEditing={region.id === editingRegionId || (!!region.clipParentId && region.clipParentId === editingRegionId)}
                                 clipMask={effectiveClipMask}
                                 isParentSelected={isParentSelected}
+                                hasClipChildren={ownsClipChildren}
                                 onUpdate={(updates) => {
                                     if (!onUpdateTile) return;
                                     const updatedRegions = regions.map(r =>
@@ -736,6 +740,7 @@ export function ToolLayer({
                             isEditing={region.id === editingRegionId || (!!region.clipParentId && region.clipParentId === editingRegionId)}
                             clipMask={effectiveClipMask}
                             isParentSelected={isParentSelected}
+                            hasClipChildren={ownsClipChildren}
                             onUpdate={(updates) => {
                                 if (!onUpdateTile) return;
                                 const updatedRegions = regions.map(r =>

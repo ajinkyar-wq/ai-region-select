@@ -409,7 +409,7 @@ export function SmartMaskLayer({
         // Pre-compute clip-children map: parentId -> gradient regions clipped to it
         const clipChildrenByParent: Record<string, Region[]> = {};
         tile.regions.forEach(r => {
-            if (r.clipParentId && (r.type === 'linear-gradient' || r.type === 'radial-gradient' || r.type === 'manual') && r.visible) {
+            if (r.clipParentId && r.maskData && r.maskData.length > 0 && r.visible) {
                 if (!clipChildrenByParent[r.clipParentId]) clipChildrenByParent[r.clipParentId] = [];
                 clipChildrenByParent[r.clipParentId].push(r);
             }
@@ -418,7 +418,7 @@ export function SmartMaskLayer({
         // by resolving which group members have maskData
         const clipChildrenByGroup: Record<string, Region[]> = {};
         tile.regions.forEach(r => {
-            if (r.clipParentId && (r.type === 'linear-gradient' || r.type === 'radial-gradient' || r.type === 'manual') && r.visible) {
+            if (r.clipParentId && r.maskData && r.maskData.length > 0 && r.visible) {
                 // Check if this clipParentId is actually a groupId
                 const isGroupId = !tile.regions.some(p => p.id === r.clipParentId) &&
                     tile.regions.some(p => p.groupId === r.clipParentId);

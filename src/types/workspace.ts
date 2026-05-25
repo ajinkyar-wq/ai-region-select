@@ -38,6 +38,8 @@ export interface Region {
   clipMode?: 'add' | 'subtract' | 'intersect';
   previewUrl?: string;
   adjustments?: RegionAdjustments;
+  /** When set on an inverted-brush region, points back to the AI source it was created from. Re-invert deletes this region and restores the source's listing. */
+  invertSourceId?: string;
 }
 
 export interface ImageTileData {

@@ -148,8 +148,17 @@ export function MaskListItem({
                 }}
                 onDragLeave={onDragLeave}
                 onDrop={onDrop}
-                onClick={(e) => onSelect(e.metaKey || e.ctrlKey, e.shiftKey)}
-                onDoubleClick={(e) => { e.stopPropagation(); onActivate?.(); }}
+                onClick={(e) => {
+                    // Skip the click that's part of a double-click sequence (detail === 2).
+                    // The browser fires dblclick after the second click; suppressing detail >= 2
+                    // ensures only true single clicks toggle selection.
+                    if (e.detail >= 2) return;
+                    onSelect(e.metaKey || e.ctrlKey, e.shiftKey);
+                }}
+                onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    onActivate?.();
+                }}
                 onMouseEnter={onMouseEnter}
                 onMouseLeave={onMouseLeave}
                 className={`

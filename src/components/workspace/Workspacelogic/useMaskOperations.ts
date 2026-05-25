@@ -124,6 +124,111 @@ export function useMaskOperations({
     const handleInvertMask = useCallback((targetId?: string) => {
         if (!image) return;
 
+        if (targetId) {
+            const target = image.regions.find(r => r.id === targetId);
+            if (target?.type === 'linear-gradient' && target.gradient) {
+                setImage(prev => prev ? {
+                    ...prev,
+                    regions: prev.regions.map(r =>
+                        r.id === targetId && r.gradient
+                            ? { ...r, gradient: { start: r.gradient.end, end: r.gradient.start } }
+                            : r
+                    )
+                } : prev);
+                return;
+            }
+            if (target?.type === 'radial-gradient' && target.radialGradient) {
+                setImage(prev => prev ? {
+                    ...prev,
+                    regions: prev.regions.map(r =>
+                        r.id === targetId && r.radialGradient
+                            ? { ...r, radialGradient: { ...r.radialGradient, invert: !r.radialGradient.invert } }
+                            : r
+                    )
+                } : prev);
+                return;
+            }
+            // Re-invert: target is an inverted brush twin. Remove it; bring the AI source's listing back.
+            if (target?.type === 'manual' && target.invertSourceId) {
+                const sourceId = target.invertSourceId;
+                setImage(prev => prev ? {
+                    ...prev,
+                    regions: prev.regions
+                        .filter(r => r.id !== targetId)
+                        .map(r => r.id === sourceId ? { ...r, hasEdits: true, selected: true } : r)
+                } : prev);
+                const restored = image.regions.find(r => r.id === sourceId);
+                if (restored) setActiveMask({ ...restored, hasEdits: true, selected: true });
+                setBrushActive(false);
+                return;
+            }
+            // First invert of an AI mask: create a brush twin; drop the AI from the listing
+            // (via hasEdits=false). The AI region remains in `regions` and can be re-added
+            // independently by clicking it on the canvas (which sets hasEdits=true).
+            const isAIType = target && (
+                target.type === 'person' ||
+                target.type === 'background' ||
+                target.type === 'people-group' ||
+                target.type === 'subject'
+            );
+            if (isAIType && target) {
+                const inverted = new Uint8Array(target.maskData.length);
+                for (let i = 0; i < target.maskData.length; i++) {
+                    inverted[i] = 255 - target.maskData[i];
+                }
+                const twin: Region = {
+                    id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2),
+                    type: 'manual',
+                    label: `Invert of ${target.label}`,
+                    maskData: inverted,
+                    maskWidth: target.maskWidth,
+                    maskHeight: target.maskHeight,
+                    offset: target.offset,
+                    color: REGION_COLORS.manual,
+                    visible: true,
+                    selected: true,
+                    hovered: false,
+                    hasEdits: true,
+                    previewUrl: generateMaskPreview(inverted, target.maskWidth, target.maskHeight, REGION_COLORS.manual),
+                    groupId: target.groupId,
+                    invertSourceId: target.id,
+                };
+                const idx = image.regions.findIndex(r => r.id === target.id);
+                setImage(prev => {
+                    if (!prev) return prev;
+                    const newRegions = prev.regions.map(r => {
+                        if (r.id === target.id) return { ...r, selected: false, hasEdits: false };
+                        return { ...r, selected: false };
+                    });
+                    newRegions.splice(idx + 1, 0, twin);
+                    return { ...prev, regions: newRegions };
+                });
+                setActiveMask(twin);
+                setBrushActive(true);
+                return;
+            }
+            if (target?.type === 'manual') {
+                const inverted = new Uint8Array(target.maskData.length);
+                for (let i = 0; i < target.maskData.length; i++) {
+                    inverted[i] = 255 - target.maskData[i];
+                }
+                setImage(prev => prev ? {
+                    ...prev,
+                    regions: prev.regions.map(r =>
+                        r.id === targetId
+                            ? {
+                                ...r,
+                                maskData: inverted,
+                                previewUrl: generateMaskPreview(inverted, r.maskWidth, r.maskHeight, r.color),
+                                hasEdits: true,
+                            }
+                            : r
+                    )
+                } : prev);
+                return;
+            }
+        }
+
         let selectedRegions: Region[] = [];
         let sourceLabel = 'Selection';
         let insertionIndex = -1;
@@ -185,17 +290,15 @@ export function useMaskOperations({
 
         if (selectedRegions.length === 0) return;
 
-        let width = image.width;
-        let height = image.height;
-
+        // Use the largest source mask's native size as the working resolution.
+        // Avoids resampling everything up to full image dimensions (4000×3000+) which
+        // froze the main thread.
+        const sourceSizeInputs = selectedRegions.length > 0 ? selectedRegions : image.regions;
+        let width = Math.max(...sourceSizeInputs.map(r => r.maskWidth));
+        let height = Math.max(...sourceSizeInputs.map(r => r.maskHeight));
         if (!width || !height) {
-            if (image.regions.length > 0) {
-                width = Math.max(...image.regions.map(r => r.maskWidth + (r.offset?.x || 0)));
-                height = Math.max(...image.regions.map(r => r.maskHeight + (r.offset?.y || 0)));
-            } else {
-                width = 640;
-                height = 640;
-            }
+            width = image.width || 640;
+            height = image.height || 640;
         }
 
         let newMaskData: Uint8Array;
@@ -261,12 +364,12 @@ export function useMaskOperations({
             maskData: newMaskData,
             maskWidth: width,
             maskHeight: height,
-            color: labelOverride ? REGION_COLORS['people-group'] : REGION_COLORS.manual,
+            color: labelOverride === 'Background Mask (Generated)' ? REGION_COLORS['people-group'] : REGION_COLORS.manual,
             visible: true,
             selected: true,
             hovered: false,
             hasEdits: true,
-            previewUrl: generateMaskPreview(newMaskData, width, height, labelOverride ? REGION_COLORS['people-group'] : REGION_COLORS.manual),
+            previewUrl: generateMaskPreview(newMaskData, width, height, labelOverride === 'Background Mask (Generated)' ? REGION_COLORS['people-group'] : REGION_COLORS.manual),
             groupId: targetGroupId,
         };
 
@@ -328,6 +431,58 @@ export function useMaskOperations({
         }
     }, [image, setImage, setActiveMask, setBrushActive, setBrushMode, setDrawingTool]);
 
+    const handleCombineMasks = useCallback((mode: 'add' | 'subtract', primaryId?: string) => {
+        if (!image) return;
+
+        const resolvedPrimaryId = primaryId ?? activeMask?.id;
+        if (!resolvedPrimaryId) return;
+        const primary = image.regions.find(r => r.id === resolvedPrimaryId);
+        if (!primary) return;
+
+        const secondaries = image.regions.filter(r =>
+            r.selected && r.id !== primary.id && !r.clipParentId
+        );
+        if (secondaries.length === 0) return;
+
+        const newChildren: Region[] = secondaries.map(src => {
+            const clonedMask = new Uint8Array(src.maskData);
+            return {
+                id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2),
+                type: src.type,
+                label: `${mode === 'add' ? 'Add' : 'Subtract'}: ${src.label}`,
+                maskData: clonedMask,
+                maskWidth: src.maskWidth,
+                maskHeight: src.maskHeight,
+                offset: src.offset,
+                gradient: src.gradient,
+                radialGradient: src.radialGradient,
+                color: primary.color,
+                visible: true,
+                selected: false,
+                hovered: false,
+                hasEdits: true,
+                previewUrl: generateMaskPreview(clonedMask, src.maskWidth, src.maskHeight, primary.color),
+                clipParentId: primary.id,
+                clipMode: mode,
+            };
+        });
+
+        setImage(prev => {
+            if (!prev) return prev;
+            const primaryIdx = prev.regions.findIndex(r => r.id === primary.id);
+            const newRegions = prev.regions.map(r => {
+                if (r.id === primary.id) return { ...r, selected: true, hasEdits: true };
+                if (r.selected) return { ...r, selected: false };
+                return r;
+            });
+            const insertAt = primaryIdx >= 0 ? primaryIdx + 1 : newRegions.length;
+            newRegions.splice(insertAt, 0, ...newChildren);
+            return { ...prev, regions: newRegions };
+        });
+
+        setActiveMask({ ...primary, selected: true });
+    }, [image, activeMask, setImage, setActiveMask]);
+
     const handleUpdateAdjustments = useCallback((adjustments: RegionAdjustments) => {
         if (!image) return;
         setImage(prev => {
@@ -348,6 +503,7 @@ export function useMaskOperations({
         handleResetMasks,
         handleInvertMask,
         handleEditManualMask,
-        handleUpdateAdjustments
+        handleUpdateAdjustments,
+        handleCombineMasks
     };
 }

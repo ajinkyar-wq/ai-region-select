@@ -25,6 +25,10 @@ interface LinearGradientToolProps {
     clipMask?: { data: Uint8Array; width: number; height: number };
     /** When true the parent mask is selected — gradient should reveal its overlay even without editing */
     isParentSelected?: boolean;
+    /** When true this gradient itself has clip-children attached (combine flow). The
+     *  composite renderer in ToolLayer paints the result, so we must suppress our own
+     *  self-paint to avoid double-rendering the full gradient on top of the composite. */
+    hasClipChildren?: boolean;
 }
 
 export function LinearGradientTool({
@@ -40,6 +44,7 @@ export function LinearGradientTool({
     onDragStart,
     clipMask,
     isParentSelected = false,
+    hasClipChildren = false,
 }: LinearGradientToolProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -92,6 +97,12 @@ export function LinearGradientTool({
         // for manual masks) already draws the intersection — clear here to avoid doubling.
         // Only show our own canvas during an active handle drag (live positioning feedback).
         if (isParentSelected && !dragState.isDragging) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            return;
+        }
+        // Combine flow: this gradient has clip-children attached. ToolLayer's composite
+        // path paints the (parent − child) result; we must not also paint the full gradient.
+        if (hasClipChildren && !dragState.isDragging) {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             return;
         }
@@ -150,7 +161,7 @@ export function LinearGradientTool({
                 ctx.globalCompositeOperation = 'source-over';
             }
         }
-    }, [dragState, clipMask, imageTransform?.width, imageTransform?.height, isSelected, isEditing, isParentSelected, region.color]);
+    }, [dragState, clipMask, imageTransform?.width, imageTransform?.height, isSelected, isEditing, isParentSelected, hasClipChildren, region.color]);
 
 
 
@@ -232,7 +243,7 @@ export function LinearGradientTool({
         if (!movedRef.current && downPosRef.current) {
             const ddx = e.clientX - downPosRef.current.x;
             const ddy = e.clientY - downPosRef.current.y;
-            if (Math.sqrt(ddx * ddx + ddy * ddy) > 3) movedRef.current = true;
+            if (Math.sqrt(ddx * ddx + ddy * ddy) > 12) movedRef.current = true;
         }
 
         const rect = containerRef.current?.getBoundingClientRect();

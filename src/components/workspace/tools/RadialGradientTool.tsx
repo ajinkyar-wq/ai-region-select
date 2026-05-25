@@ -25,6 +25,10 @@ interface RadialGradientToolProps {
     clipMask?: { data: Uint8Array; width: number; height: number };
     /** When true the parent mask is selected — gradient should reveal its overlay even without editing */
     isParentSelected?: boolean;
+    /** When true this gradient itself has clip-children attached (combine flow). The
+     *  composite renderer in ToolLayer paints the result, so we must suppress our own
+     *  self-paint to avoid double-rendering the full gradient on top of the composite. */
+    hasClipChildren?: boolean;
 }
 
 export function RadialGradientTool({
@@ -39,6 +43,7 @@ export function RadialGradientTool({
     onDragEnd,
     clipMask,
     isParentSelected = false,
+    hasClipChildren = false,
 }: RadialGradientToolProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -98,6 +103,13 @@ export function RadialGradientTool({
         // the parent's rendering layer already draws the intersection — clear to avoid doubling.
         // Only show our own canvas during an active handle drag (live positioning feedback).
         if (isParentSelected && !dragState.isDragging) {
+            const ctx2 = canvas.getContext('2d');
+            if (ctx2) ctx2.clearRect(0, 0, canvas.width, canvas.height);
+            return;
+        }
+        // Combine flow: this gradient has clip-children attached. ToolLayer's composite
+        // path paints the (parent − child) result; we must not also paint the full gradient.
+        if (hasClipChildren && !dragState.isDragging) {
             const ctx2 = canvas.getContext('2d');
             if (ctx2) ctx2.clearRect(0, 0, canvas.width, canvas.height);
             return;
@@ -200,7 +212,7 @@ export function RadialGradientTool({
             }
         }
 
-    }, [dragState, clipMask, imageTransform?.width, imageTransform?.height, isSelected, isEditing, isParentSelected, region.radialGradient?.invert, region.radialGradient?.rotation, region.color]);
+    }, [dragState, clipMask, imageTransform?.width, imageTransform?.height, isSelected, isEditing, isParentSelected, hasClipChildren, region.radialGradient?.invert, region.radialGradient?.rotation, region.color]);
 
 
     // --- Interaction Handlers ---
@@ -241,7 +253,7 @@ export function RadialGradientTool({
         if (!movedRef.current && downPosRef.current) {
             const ddx = e.clientX - downPosRef.current.x;
             const ddy = e.clientY - downPosRef.current.y;
-            if (Math.sqrt(ddx * ddx + ddy * ddy) > 3) movedRef.current = true;
+            if (Math.sqrt(ddx * ddx + ddy * ddy) > 12) movedRef.current = true;
         }
 
         const rect = containerRef.current?.getBoundingClientRect();
