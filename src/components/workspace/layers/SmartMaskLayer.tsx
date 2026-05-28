@@ -33,6 +33,10 @@ interface SmartMaskLayerProps {
     isManualToolActive?: boolean;
     liveGradient?: LiveGradient | null;
     sliderHoveredRegionIds?: string[];
+    // Shift-click combine: fired when the user shift-clicks a mask while a
+    // different primary is selected. Workspace decides add vs subtract from
+    // geometry.
+    onCombineWithPrimary?: (pickedId: string) => void;
 }
 
 // ─── Erosion ──────────────────────────────────────────────────────────────────
@@ -347,6 +351,7 @@ export function SmartMaskLayer({
     isManualToolActive = false,
     liveGradient = null,
     sliderHoveredRegionIds = [],
+    onCombineWithPrimary,
 }: SmartMaskLayerProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     // Cache persists across renders; checksum-based invalidation handles mask edits
@@ -398,6 +403,9 @@ export function SmartMaskLayer({
         const { x: destX, y: destY, width: destW, height: destH } = imageTransform;
 
         const visibleRegions = tile.regions.filter(r => {
+            // Clip-children are composited into their parent's finalMask; they
+            // must NOT render as standalone overlays/contours.
+            if (r.clipParentId) return false;
             if (r.type === 'person' && !peopleEnabled) return false;
             if ((r.type === 'background' || r.type.startsWith('background-')) && !backgroundEnabled) return false;
             if (r.type === 'manual' || r.type === 'linear-gradient' || r.type === 'radial-gradient') return false;
@@ -612,7 +620,7 @@ export function SmartMaskLayer({
             const clipMasksPayload = compositeContourClip ? [compositeContourClip] : [];
 
             if (region.type === 'person') {
-                const hasMultiplePeople = tile.regions.filter(r => r.type === 'person').length > 1;
+                const hasMultiplePeople = tile.regions.filter(r => r.type === 'person' && !r.clipParentId).length > 1;
                 if (hasMultiplePeople) {
                     const entry = getOrBuildErodedEntry(region, erodeCache.current);
                     const contourMask = entry && entry.eroded ? entry.eroded : mask;
@@ -620,14 +628,18 @@ export function SmartMaskLayer({
                 }
             } else if (region.type === 'people-group') {
                 tile.regions.forEach(ch => {
-                    if (ch.type === 'person') {
+                    // Skip clip-children — they're subtractions/additions on the
+                    // parent, not standalone people that should get their own
+                    // contour. Otherwise subtracted people reappear as outlines
+                    // when the people-group is selected.
+                    if (ch.type === 'person' && !ch.clipParentId) {
                         const entry = getOrBuildErodedEntry(ch, erodeCache.current);
                         const contourMask = entry && entry.eroded ? entry.eroded : ch.maskData;
                         renderContourStroke(ctx, contourMask, ch.maskWidth, ch.maskHeight, rC, gC, bC, contourAlpha255, destX, destY, destW, destH, clipMasksPayload, contourLineWidth);
                     }
                 });
             } else if (region.type.startsWith('background-')) {
-                const hasMultipleChildren = tile.regions.filter(r => r.type.startsWith('background-')).length > 1;
+                const hasMultipleChildren = tile.regions.filter(r => r.type.startsWith('background-') && !r.clipParentId).length > 1;
                 if (hasMultipleChildren) {
                     const entry = getOrBuildErodedEntry(region, erodeCache.current);
                     const contourMask = entry && entry.eroded ? entry.eroded : mask;
@@ -635,7 +647,8 @@ export function SmartMaskLayer({
                 }
             } else if (region.type === 'background') {
                 tile.regions.forEach(ch => {
-                    if (ch.type.startsWith('background-')) {
+                    // Same as the people-group branch: ignore clip-children.
+                    if (ch.type.startsWith('background-') && !ch.clipParentId) {
                         const entry = getOrBuildErodedEntry(ch, erodeCache.current);
                         const contourMask = entry && entry.eroded ? entry.eroded : ch.maskData;
                         renderContourStroke(ctx, contourMask, ch.maskWidth, ch.maskHeight, rC, gC, bC, contourAlpha255, destX, destY, destW, destH, clipMasksPayload, contourLineWidth);
@@ -667,6 +680,10 @@ export function SmartMaskLayer({
         for (let i = tile.regions.length - 1; i >= 0; i--) {
             const region = tile.regions[i];
 
+            // Clip-children aren't independently selectable from the canvas —
+            // they're part of their parent's composite. Skip them in hit-tests.
+            if (region.clipParentId) continue;
+
             if (region.type === 'manual' || region.type === 'linear-gradient' || region.type === 'radial-gradient') continue;
 
             if (region.type === 'person') {
@@ -674,7 +691,9 @@ export function SmartMaskLayer({
                 const hit = hitTestPerson(x, y, region, imageTransform, erodeCache.current);
                 if (!hit) continue;
 
-                const pg = tile.regions.find(r => r.type === 'people-group');
+                // Must be the REAL people-group, not a clip-child clone that was
+                // typed 'people-group' when it got combined into another mask.
+                const pg = tile.regions.find(r => r.type === 'people-group' && !r.clipParentId);
 
                 if (hit === 'inner') return region;
                 return pg ?? region;
@@ -687,7 +706,7 @@ export function SmartMaskLayer({
                 const hit = hitTestPerson(x, y, region, imageTransform, erodeCache.current);
                 if (!hit) continue;
                 if (hit === 'inner') return region;
-                const bg = tile.regions.find(r => r.type === 'background');
+                const bg = tile.regions.find(r => r.type === 'background' && !r.clipParentId);
                 return bg ?? region;
             }
 
@@ -701,7 +720,7 @@ export function SmartMaskLayer({
 
         // Background fallback — only if no landscape inner hit claimed the click
         if (backgroundEnabled) {
-            const bg = tile.regions.find(r => r.type === 'background');
+            const bg = tile.regions.find(r => r.type === 'background' && !r.clipParentId);
             if (bg) {
                 const scaleX = bg.maskWidth / imageTransform.width;
                 const scaleY = bg.maskHeight / imageTransform.height;
@@ -799,8 +818,48 @@ export function SmartMaskLayer({
     const handleCanvasClick = (e: React.MouseEvent) => {
         if (hasDragged(e)) return;
         if (!canvasInteractionsEnabled) return;
+
         const isMultiToggle = e.ctrlKey || e.metaKey;
         const isAdditive = e.shiftKey || isMultiToggle;
+
+        // Shift-click combine: if Shift is held and there's an existing primary
+        // (a different non-clip-child selected mask), route the click to the
+        // combine handler. Workspace decides add vs subtract from geometry.
+        // Cmd/Ctrl multi-toggle remains plain multi-select.
+        //
+        // Geometry can only infer intent for AI↔AI combines (overlap = subtract,
+        // disjoint = add). When the primary is a manual/gradient mask, a drawn
+        // shape's overlap says nothing about intent, so we DON'T auto-combine —
+        // we fall through to additive multi-select and let the Add/Subtract pill
+        // (rendered by Workspace) capture the user's choice. resolveHit only ever
+        // returns AI masks, so the picked side is always AI here.
+        if (e.shiftKey && !isMultiToggle && onCombineWithPrimary) {
+            const currentRegions = tileRef.current.regions;
+            const isManualLike = (r: Region) =>
+                r.type === 'manual' || r.type === 'linear-gradient' || r.type === 'radial-gradient';
+
+            const selectedStandalone = currentRegions.filter(r => r.selected && !r.clipParentId);
+            const primary = selectedStandalone[0];
+
+            // Auto-geometry add/subtract is ONLY valid for pure AI↔AI combines.
+            // The moment any manual/gradient mask is part of the selection, intent
+            // can't be inferred from overlap — we must NOT call the geometry path.
+            // Fall through to additive multi-select so the Add/Subtract pill
+            // (rendered by Workspace) handles it instead.
+            const anyManualLikeSelected = selectedStandalone.some(isManualLike);
+
+            if (primary && !anyManualLikeSelected) {
+                const coords = toImageCoords(e);
+                if (!coords) return;
+                const hit = resolveHit(coords.x, coords.y);
+                // resolveHit only returns AI masks, but guard anyway: if the hit is
+                // manual-like somehow, defer to the pill.
+                if (!hit || hit.id === primary.id || hit.clipParentId || isManualLike(hit)) return;
+                e.stopPropagation();
+                onCombineWithPrimary(hit.id);
+                return;
+            }
+        }
 
         if (tile.regions.some(r => r.selected) && !isAdditive) {
             // Single click while a mask is selected = deselect all
