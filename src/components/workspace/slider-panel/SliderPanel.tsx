@@ -22,6 +22,7 @@ interface SliderPanelProps {
   onToggleBatchVisibility: (ids: string[], visible: boolean) => void;
   onDeleteRegion: (id: string) => void;
   onCreateManualMask: () => void;
+  onCreateObjectMask?: () => void;
   onCreateLinearGradient?: () => void;
   onCreateRadialGradient?: () => void;
   onInvertMask?: (id?: string) => void;
@@ -55,6 +56,7 @@ export function SliderPanel({
   onDeleteRegion,
   showMaskImage,
   onCreateManualMask,
+  onCreateObjectMask,
   onCreateLinearGradient,
   onCreateRadialGradient,
   onInvertMask,
@@ -276,9 +278,12 @@ export function SliderPanel({
                 </span>
               </button>
 
-              {/* Object 
+              {/* Object Tool (SAM-assisted box selection) */}
               <button
-                onClick={() => setShowAddMaskMenu(false)}
+                onClick={() => {
+                  onCreateObjectMask?.();
+                  setShowAddMaskMenu(false);
+                }}
                 className="flex w-full items-center gap-[6px] px-2 py-2 text-left hover:bg-white/10 rounded"
               >
                 <svg width="12" height="12" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-white">
@@ -287,8 +292,8 @@ export function SliderPanel({
                   <rect x="0.5" y="9.5" width="6" height="6" rx="0.5" stroke="currentColor" />
                   <rect x="9.5" y="9.5" width="6" height="6" rx="0.5" stroke="currentColor" />
                 </svg>
-                <span className="text-[12px] font-normal leading-[1.33] text-[#ABABAB]">Object</span>
-              </button>*/}
+                <span className="text-[12px] font-normal leading-[1.33] text-[#ABABAB]">Object Tool</span>
+              </button>
 
               {/* Linear Gradient */}
               <button
