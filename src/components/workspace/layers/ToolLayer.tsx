@@ -21,6 +21,9 @@ interface ToolLayerProps {
     } | null;
     regions: Region[];
     excludedRegionId?: string | null;
+    /** Region whose move/brush HANDLE should be hidden even though its fill still
+     *  renders (used by the object tool: fill visible, handle suppressed during edit). */
+    hideHandlesForRegionId?: string | null;
     editingRegionId?: string | null;
     activeRegionId?: string | null;
     onUpdateTile?: (updates: Partial<ImageTileData>) => void;
@@ -38,6 +41,7 @@ export function ToolLayer({
     imageTransform,
     regions,
     excludedRegionId,
+    hideHandlesForRegionId,
     editingRegionId,
     activeRegionId,
     onUpdateTile,
@@ -303,7 +307,7 @@ export function ToolLayer({
 
     // Filter valid manual regions for interaction (Brush Icons)
     const interactiveRegions = regions
-        .filter(r => r.type === 'manual' && r.visible && r.maskData && r.id !== excludedRegionId)
+        .filter(r => r.type === 'manual' && r.visible && r.maskData && r.id !== excludedRegionId && r.id !== hideHandlesForRegionId)
         .map(r => ({
             ...r,
             center: getMaskCenter(r.maskData, r.maskWidth, r.maskHeight)
@@ -566,7 +570,7 @@ export function ToolLayer({
 
             {/* Interactive Brush Icons */}
             {canvasInteractionsEnabled && effectiveRegions // Use Effective Regions for rendering positions
-                .filter(r => r.type === 'manual' && r.visible && r.maskData && r.id !== excludedRegionId)
+                .filter(r => r.type === 'manual' && r.visible && r.maskData && r.id !== excludedRegionId && r.id !== hideHandlesForRegionId)
                 .map(r => ({
                     ...r,
                     center: getMaskCenter(r.maskData, r.maskWidth, r.maskHeight)
