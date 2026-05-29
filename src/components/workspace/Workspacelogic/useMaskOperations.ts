@@ -444,7 +444,19 @@ export function useMaskOperations({
         );
         if (secondaries.length === 0) return;
 
-        const newChildren: Region[] = secondaries.map(src => {
+        const isManualLike = (r: Region) =>
+            r.type === 'manual' || r.type === 'linear-gradient' || r.type === 'radial-gradient';
+
+        // AI secondaries (person/background/people-group) are persistent base masks
+        // we CLONE into a clip-child and keep (but hide) the original so the base
+        // mask still exists for further work. Manual/gradient secondaries are
+        // one-off tools — there's no reason to keep a separate standalone copy, so
+        // we REPARENT the original in place. This prevents a duplicate tool from
+        // rendering on the canvas and being selected as a "fresh" mask.
+        const aiSecondaries = secondaries.filter(s => !isManualLike(s));
+        const manualSecondaryIds = new Set(secondaries.filter(isManualLike).map(s => s.id));
+
+        const newChildren: Region[] = aiSecondaries.map(src => {
             const clonedMask = new Uint8Array(src.maskData);
             return {
                 id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2),
@@ -464,14 +476,33 @@ export function useMaskOperations({
                 previewUrl: generateMaskPreview(clonedMask, src.maskWidth, src.maskHeight, primary.color),
                 clipParentId: primary.id,
                 clipMode: mode,
+                sourceRegionId: src.id,
             };
         });
+
+        const aiSecondaryIds = new Set(aiSecondaries.map(s => s.id));
 
         setImage(prev => {
             if (!prev) return prev;
             const primaryIdx = prev.regions.findIndex(r => r.id === primary.id);
             const newRegions = prev.regions.map(r => {
                 if (r.id === primary.id) return { ...r, selected: true, hasEdits: true };
+                // Manual/gradient secondary: reparent the ORIGINAL into a clip-child
+                // (no clone). The combined manual/gradient is now the only instance.
+                if (manualSecondaryIds.has(r.id)) {
+                    return {
+                        ...r,
+                        selected: false,
+                        clipParentId: primary.id,
+                        clipMode: mode,
+                        sourceRegionId: r.id,
+                        color: primary.color,
+                        label: `${mode === 'add' ? 'Add' : 'Subtract'}: ${r.label}`,
+                    };
+                }
+                // AI secondary: keep the base mask but drop it from the side panel
+                // (consumed-into-primary means the standalone listing is noise).
+                if (aiSecondaryIds.has(r.id)) return { ...r, selected: false, hasEdits: false };
                 if (r.selected) return { ...r, selected: false };
                 return r;
             });
