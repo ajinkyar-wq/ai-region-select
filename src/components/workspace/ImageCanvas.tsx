@@ -38,6 +38,11 @@ interface ImageCanvasProps {
   drawingTool?: 'linear-gradient' | 'radial-gradient' | null;
   onDrawComplete?: (start: { x: number, y: number }, end: { x: number, y: number }) => void;
 
+  // Object Tool (SAM box selector). When active, the toolbar converts and a
+  // box-drag on the canvas runs SAM, stamping the result into the active manual
+  // mask via the existing brush update path (handleMaskUpdate).
+  objectToolActive?: boolean;
+
   // Edit Mode Notification (Local AI Mask Editing)
   onEditingModeChange?: (isEditing: boolean) => void;
   exitEditTrigger?: number;
@@ -75,6 +80,7 @@ export function ImageCanvas({
   onActivateRegion,
   drawingTool,
   onDrawComplete,
+  objectToolActive = false,
   peopleEnabled = true,
   backgroundEnabled = true,
   onEditingModeChange,
@@ -117,6 +123,14 @@ export function ImageCanvas({
     height: number;
   } | null>(null);
   const [naturalSize, setNaturalSize] = useState<{ width: number; height: number } | null>(null);
+
+  // Object Tool (SAM) state — loaded image element for SAM encoding, the active
+  // box-drag, and a busy flag while SAM is running.
+  const loadedImageRef = useRef<HTMLImageElement | null>(null);
+  const samEncodedForUrlRef = useRef<string | null>(null);
+  const objectBoxRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  const [objectBox, setObjectBox] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  const [objectBusy, setObjectBusy] = useState(false);
   const [viewDimensions, setViewDimensions] = useState<{ width: number; height: number } | null>(null);
 
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -305,6 +319,10 @@ activeMask.type.startsWith('background-')
     img.onload = async () => {
       setNaturalSize({ width: img.width, height: img.height });
 
+      // Keep the decoded image for SAM; invalidate any cached SAM encoding.
+      loadedImageRef.current = img;
+      samEncodedForUrlRef.current = null;
+
       // Update tile with image dimensions if missing
       if (!tile.width || !tile.height) {
         onUpdateTile({ width: img.width, height: img.height });
@@ -405,6 +423,101 @@ activeMask.type.startsWith('background-')
       onDrawComplete(start, end);
     }
     setDrawState(null);
+  };
+
+  // --- Object Tool (SAM box selector) handlers ---
+  // Map a screen point to ORIGINAL-image pixel coordinates (clamped).
+  const screenToOriginalPx = (clientX: number, clientY: number) => {
+    if (!imageTransform || !naturalSize) return null;
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return null;
+    const lx = clientX - rect.left - imageTransform.x;
+    const ly = clientY - rect.top - imageTransform.y;
+    const nx = (lx / imageTransform.width) * naturalSize.width;
+    const ny = (ly / imageTransform.height) * naturalSize.height;
+    return {
+      x: Math.max(0, Math.min(naturalSize.width, nx)),
+      y: Math.max(0, Math.min(naturalSize.height, ny)),
+    };
+  };
+
+  const handleObjectPointerDown = (e: React.PointerEvent) => {
+    if (!objectToolActive || objectBusy) return;
+    const p = screenToOriginalPx(e.clientX, e.clientY);
+    if (!p) return;
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const box = { x1: p.x, y1: p.y, x2: p.x, y2: p.y };
+    objectBoxRef.current = box;
+    setObjectBox(box);
+  };
+
+  const handleObjectPointerMove = (e: React.PointerEvent) => {
+    if (!objectToolActive || !objectBoxRef.current) return;
+    const p = screenToOriginalPx(e.clientX, e.clientY);
+    if (!p) return;
+    const box = { ...objectBoxRef.current, x2: p.x, y2: p.y };
+    objectBoxRef.current = box;
+    setObjectBox(box);
+  };
+
+  const handleObjectPointerUp = async (e: React.PointerEvent) => {
+    if (!objectToolActive || !objectBoxRef.current) return;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* noop */ }
+    const raw = objectBoxRef.current;
+    objectBoxRef.current = null;
+    setObjectBox(null);
+
+    const x1 = Math.min(raw.x1, raw.x2);
+    const y1 = Math.min(raw.y1, raw.y2);
+    const x2 = Math.max(raw.x1, raw.x2);
+    const y2 = Math.max(raw.y1, raw.y2);
+    if (x2 - x1 < 6 || y2 - y1 < 6) return; // ignore accidental clicks
+
+    const img = loadedImageRef.current;
+    // Edit the ACTIVE manual mask — same target the brush writes to. Resolve
+    // fresh from tile.regions by id so we composite against current maskData.
+    const targetId = (activeMask?.type === 'manual' ? activeMask.id : null)
+      ?? tile.regions.find(r => r.selected && r.type === 'manual')?.id;
+    const target = targetId ? tile.regions.find(r => r.id === targetId) : undefined;
+    if (!img || !target) return;
+
+    const tw = target.maskWidth;
+    const th = target.maskHeight;
+
+    setObjectBusy(true);
+    try {
+      const { encodeImageForSam, segmentWithSam } = await import('@/lib/sam-segmentation');
+      if (samEncodedForUrlRef.current !== tile.imageUrl) {
+        await encodeImageForSam(img);
+        samEncodedForUrlRef.current = tile.imageUrl;
+      }
+      // Box + center positive point: stronger prompt than box alone, far more
+      // reliable on regions SAM finds ambiguous.
+      const cx = (x1 + x2) / 2;
+      const cy = (y1 + y2) / 2;
+      const res = await segmentWithSam(
+        [{ x: cx, y: cy, positive: true }],
+        { x1, y1, x2, y2 },
+        { width: tw, height: th },
+      );
+      if (res && res.width === tw && res.height === th) {
+        const erase = brushMode === 'erase';
+        const next = new Uint8Array(target.maskData);
+        if (erase) {
+          // Erase only pixels already in the mask, never re-add. SAM tells us
+          // which pixels are the object; we only zero those.
+          for (let i = 0; i < next.length; i++) if (res.mask[i] > 0) next[i] = 0;
+        } else {
+          for (let i = 0; i < next.length; i++) if (res.mask[i] > 0) next[i] = 255;
+        }
+        handleMaskUpdate(next, target.id);
+      }
+    } catch (err) {
+      console.error('[SAM] object tool failed', err);
+    } finally {
+      setObjectBusy(false);
+    }
   };
 
   // --- Edit Routing Logic (THE DISPATCHER) ---
@@ -512,7 +625,7 @@ activeMask.type.startsWith('background-')
         className="absolute inset-0"
         style={{
           transform: `translate(${offset.x}px, ${offset.y}px)`,
-          pointerEvents: drawingTool ? 'auto' : 'none'
+          pointerEvents: (drawingTool || objectToolActive) ? 'auto' : 'none'
         }}
       >
         {/* LAYER 1: Base Image */}
@@ -608,9 +721,9 @@ r.type === 'background' || r.type === 'subject' ||
 r.type.startsWith('background-')
 ))}
             // All person regions — needed to redirect people-group edits to individual persons
-            allPersonRegions={tile.regions.filter(r => r.type === 'person')}
+            allPersonRegions={tile.regions.filter(r => r.type === 'person' && !r.clipParentId)}
             // Background region — always a neighbor so it retreats/advances with person edits
-            backgroundRegion={tile.regions.find(r => r.type === 'background') ?? null}
+            backgroundRegion={tile.regions.find(r => r.type === 'background' && !r.clipParentId) ?? null}
 
             imageTransform={imageTransform}
             canvasWidth={mainCanvasRef.current.width}
@@ -725,6 +838,35 @@ r.type.startsWith('background-')
                     )}
                   </svg>
                 </div>
+              );
+            })()}
+          </div>
+        )}
+
+        {/* OBJECT TOOL OVERLAY (SAM box selector) */}
+        {objectToolActive && (
+          <div
+            className={`absolute inset-0 z-50 ${objectBusy ? 'cursor-wait' : 'cursor-crosshair'}`}
+            onPointerDown={handleObjectPointerDown}
+            onPointerMove={handleObjectPointerMove}
+            onPointerUp={handleObjectPointerUp}
+            onPointerLeave={handleObjectPointerUp}
+          >
+            {objectBox && imageTransform && naturalSize && (() => {
+              // Box is in original-image px; convert to display px for preview.
+              const sx = (Math.min(objectBox.x1, objectBox.x2) / naturalSize.width) * imageTransform.width + imageTransform.x;
+              const sy = (Math.min(objectBox.y1, objectBox.y2) / naturalSize.height) * imageTransform.height + imageTransform.y;
+              const w = (Math.abs(objectBox.x2 - objectBox.x1) / naturalSize.width) * imageTransform.width;
+              const h = (Math.abs(objectBox.y2 - objectBox.y1) / naturalSize.height) * imageTransform.height;
+              return (
+                <div
+                  className="absolute pointer-events-none border-2 border-dashed"
+                  style={{
+                    left: sx, top: sy, width: w, height: h,
+                    borderColor: 'rgba(80,255,80,0.9)',
+                    background: 'rgba(80,255,80,0.12)',
+                  }}
+                />
               );
             })()}
           </div>
