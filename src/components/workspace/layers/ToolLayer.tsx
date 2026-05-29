@@ -214,6 +214,15 @@ export function ToolLayer({
                 } as Region);
             }
 
+            // Composite order matters: a subtract removes pixels, a later add must
+            // be able to bring some back. If an add ran before a broad subtract
+            // (e.g. "subtract all-people" then "add 2 people"), the subtract would
+            // wipe out the add. Always apply subtract/intersect kids first, adds last.
+            clipKids.sort((a, b) => {
+                const rank = (m?: string) => (m === 'add' ? 1 : 0);
+                return rank(a.clipMode) - rank(b.clipMode);
+            });
+
             const hasClipKids = clipKids.length > 0;
             const hasAddKids = clipKids.some(k => k.clipMode === 'add');
             const rw = region.maskWidth; // capture for loop

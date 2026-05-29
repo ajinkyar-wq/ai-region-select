@@ -558,6 +558,13 @@ export function SmartMaskLayer({
 
             let finalMask = new Uint8Array(mask);
 
+            // Composite order matters: a subtract removes pixels, a later add must
+            // be able to bring some back. Apply subtract/intersect first, adds last.
+            directClipKids.sort((a, b) => {
+                const rank = (m?: string) => (m === 'add' ? 1 : 0);
+                return rank(a.clipMode) - rank(b.clipMode);
+            });
+
             if (directClipKids.length > 0 || groupUnion) {
                 // Apply each direct kid's clipMode individually
 
