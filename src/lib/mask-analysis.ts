@@ -291,3 +291,54 @@ export function subtractMasks(
     }
     return result;
 }
+
+/**
+ * SUBTRACT_OVERLAP_RATIO — when a candidate mask overlaps the primary mask by at
+ * least this fraction of the candidate's own area, an AI↔AI combine is treated as
+ * "subtract" rather than "add." Tuned so a fully-inside candidate (e.g. a person
+ * inside a people-group) reads as ~100%, while a giant landscape that grazes the
+ * primary reads as low overlap and falls through to add.
+ */
+const SUBTRACT_OVERLAP_RATIO = 0.25;
+
+/**
+ * Does `candidate` meaningfully overlap `primary`? Used to infer add vs subtract
+ * intent in the AI↔AI shift-click combine flow.
+ */
+export function masksOverlap(
+    primary: { maskData: Uint8Array; maskWidth: number; maskHeight: number },
+    candidate: { maskData: Uint8Array; maskWidth: number; maskHeight: number },
+    minRatio: number = SUBTRACT_OVERLAP_RATIO,
+): boolean {
+    if (!primary.maskData || !candidate.maskData) return false;
+    if (primary.maskData.length === 0 || candidate.maskData.length === 0) return false;
+
+    let candidatePixels = 0;
+    let intersectPixels = 0;
+
+    // Same-dimension fast path
+    if (primary.maskWidth === candidate.maskWidth && primary.maskHeight === candidate.maskHeight) {
+        for (let i = 0; i < candidate.maskData.length; i++) {
+            if (candidate.maskData[i] > 30) {
+                candidatePixels++;
+                if (primary.maskData[i] > 30) intersectPixels++;
+            }
+        }
+    } else {
+        const sx = primary.maskWidth / candidate.maskWidth;
+        const sy = primary.maskHeight / candidate.maskHeight;
+        for (let y = 0; y < candidate.maskHeight; y++) {
+            for (let x = 0; x < candidate.maskWidth; x++) {
+                if (candidate.maskData[y * candidate.maskWidth + x] <= 30) continue;
+                candidatePixels++;
+                const px = Math.min(Math.floor(x * sx), primary.maskWidth - 1);
+                const py = Math.min(Math.floor(y * sy), primary.maskHeight - 1);
+                if (primary.maskData[py * primary.maskWidth + px] > 30) intersectPixels++;
+            }
+        }
+    }
+
+    if (candidatePixels === 0) return false;
+    return intersectPixels / candidatePixels >= minRatio;
+}
+

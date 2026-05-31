@@ -13,13 +13,14 @@ import type { WheelTool } from './tools/ToolWheel';
 import { CombineMasksControl } from './tools/CombineMasksControl';
 import type { ImageTileData, Region } from '@/types/workspace';
 import { REGION_COLORS } from '@/types/workspace';
-import { Columns2, Paintbrush, Eraser } from 'lucide-react';
+import { Columns2, Paintbrush, Eraser, SquareDashedMousePointer } from 'lucide-react';
 import { useKeyboardShortcuts } from './Workspacelogic/useKeyboardShortcuts';
 import { useRegionManager } from './Workspacelogic/useRegionManager';
 import { useMaskOperations } from './Workspacelogic/useMaskOperations';
 import { useGradientOperations } from './Workspacelogic/useGradientOperations';
 import { useWalkthrough } from './Workspacelogic/useWalkthrough';
 import { generateMaskPreview } from '@/lib/mask-preview';
+import { masksOverlap } from '@/lib/mask-analysis';
 
 export function Workspace() {
   const [image, setImage] = useState<ImageTileData | null>(null);
@@ -46,6 +47,11 @@ export function Workspace() {
 
   // New Drawing Mode State
   const [drawingTool, setDrawingTool] = useState<'linear-gradient' | 'radial-gradient' | null>(null);
+
+  // Object Tool (SAM box selector). When active, the toolbar converts and the
+  // canvas captures box-drags that feed SAM, stamping results into the active
+  // manual mask using the current brush mode (add fills, erase removes).
+  const [objectToolActive, setObjectToolActive] = useState(false);
 
   // Canvas Interactions Toggle — when false, new canvas drawing (gradient drag) is disabled
   const [canvasInteractionsEnabled, setCanvasInteractionsEnabled] = useState(true);
@@ -107,6 +113,103 @@ export function Workspace() {
     setDrawingTool,
     setBrushMode
   });
+
+  // ── Object Tool (SAM) ───────────────────────────────────────────────────────
+  // The object tool IS the manual brush session. handleCreateManualMask creates
+  // and activates a manual mask AND sets brushActive=true — so the entire brush
+  // flow (handle suppression, isManualToolActive, overlay, commit) applies
+  // unchanged. objectToolActive is ONLY the input-surface switch: box prompt
+  // instead of cursor strokes.
+  const handleCreateObjectMask = useCallback(() => {
+    handleCreateManualMask();
+    setObjectToolActive(true);
+  }, [handleCreateManualMask]);
+
+  // Brush and Object tool share one session. Leaving the brush ends object mode.
+  useEffect(() => {
+    if (!brushActive) setObjectToolActive(false);
+  }, [brushActive]);
+
+  // ── AI↔AI shift-click combine (geometry-based add/subtract) ───────────────
+  // Fired when the user shift-clicks an AI mask while a different primary is
+  // selected. Geometry decides: meaningful overlap = subtract, otherwise = add.
+  // Toggles off if the same combine already exists; flips if the opposite mode
+  // does. Manual/gradient masks DO NOT use this path — the SmartMaskLayer gate
+  // ensures it only fires for pure AI↔AI selections; manual involvement falls
+  // through to additive multi-select so the Add/Subtract pill handles it.
+  const handleCombineWithPrimary = useCallback((pickedId: string) => {
+    if (!image) return;
+    const primaryId = primaryMaskId
+      ?? image.regions.find(r => r.selected && !r.clipParentId)?.id;
+    if (!primaryId || primaryId === pickedId) return;
+
+    const primary = image.regions.find(r => r.id === primaryId);
+    const picked = image.regions.find(r => r.id === pickedId);
+    if (!primary || !picked || picked.clipParentId) return;
+
+    const mode: 'add' | 'subtract' = masksOverlap(primary, picked) ? 'subtract' : 'add';
+
+    // Already attached in this mode? Toggle off.
+    const existingChild = image.regions.find(r =>
+      r.clipParentId === primary.id &&
+      r.clipMode === mode &&
+      r.sourceRegionId === picked.id
+    );
+    if (existingChild) {
+      setImage(prev => prev ? {
+        ...prev,
+        regions: prev.regions.filter(r => r.id !== existingChild.id)
+      } : prev);
+      return;
+    }
+
+    // If an OPPOSITE-mode clip-child for this source exists, flip it (remove the
+    // opposite first so the new mode takes effect cleanly).
+    const oppositeChild = image.regions.find(r =>
+      r.clipParentId === primary.id &&
+      r.clipMode === (mode === 'add' ? 'subtract' : 'add') &&
+      r.sourceRegionId === picked.id
+    );
+
+    const clonedMask = new Uint8Array(picked.maskData);
+    const newChild: Region = {
+      id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2),
+      type: picked.type,
+      label: `${mode === 'add' ? 'Add' : 'Subtract'}: ${picked.label}`,
+      maskData: clonedMask,
+      maskWidth: picked.maskWidth,
+      maskHeight: picked.maskHeight,
+      offset: picked.offset,
+      gradient: picked.gradient,
+      radialGradient: picked.radialGradient,
+      color: primary.color,
+      visible: true,
+      selected: false,
+      hovered: false,
+      hasEdits: true,
+      previewUrl: generateMaskPreview(clonedMask, picked.maskWidth, picked.maskHeight, primary.color),
+      clipParentId: primary.id,
+      clipMode: mode,
+      sourceRegionId: picked.id,
+    };
+
+    setImage(prev => {
+      if (!prev) return prev;
+      const primaryIdx = prev.regions.findIndex(r => r.id === primary.id);
+      let newRegions = prev.regions.map(r => {
+        if (r.id === primary.id) return { ...r, selected: true, hasEdits: true };
+        if (r.selected) return { ...r, selected: false };
+        return r;
+      });
+      if (oppositeChild) {
+        newRegions = newRegions.filter(r => r.id !== oppositeChild.id);
+      }
+      const insertAt = primaryIdx >= 0 ? primaryIdx + 1 : newRegions.length;
+      newRegions.splice(insertAt, 0, newChild);
+      return { ...prev, regions: newRegions };
+    });
+    setActiveMask({ ...primary, selected: true });
+  }, [image, primaryMaskId, setImage, setActiveMask]);
 
   const {
     handleCreateLinearGradient,
@@ -518,9 +621,55 @@ export function Workspace() {
                 </button>
               </div>
 
-              {/* DraggableToolbar: Only shows when explicitly ACTIVATED (Double Click / Edit Mode) 
+              {/* DraggableToolbar — Object Tool variant: a single Object tool with
+                  add/subtract via brushMode (add fills the SAM region, subtract
+                  removes it). Shares the brush session (brushActive=true) but
+                  replaces the freehand brush UI on this slot. */}
+              {image && objectToolActive && (
+                <DraggableToolbar
+                  disabled={false}
+                  containerRef={containerRef}
+                  imageId={image.id}
+                  activeId={brushMode === 'erase' ? 'object-subtract' : 'object-add'}
+                  onActiveChange={(id) => {
+                    if (!id) {
+                      // Exit the whole session — same as deselecting the brush.
+                      setBrushActive(false);
+                      setObjectToolActive(false);
+                      setExitEditTrigger(v => v + 1);
+                    } else if (id === 'object-add') {
+                      setBrushMode('add');
+                    } else if (id === 'object-subtract') {
+                      setBrushMode('erase');
+                    }
+                  }}
+                  brushSize={brushSize}
+                  onBrushSizeChange={setBrushSize}
+                  brushSoftness={brushSoftness}
+                  onBrushSoftnessChange={setBrushSoftness}
+                  brushOpacity={brushOpacity}
+                  onBrushOpacityChange={setBrushOpacity}
+                  onResetMask={handleResetMasks}
+                  items={[
+                    {
+                      id: 'object-add',
+                      icon: <SquareDashedMousePointer className="h-[20px] w-[20px]" />,
+                      label: 'Add',
+                      onClick: () => setBrushMode('add'),
+                    },
+                    {
+                      id: 'object-subtract',
+                      icon: <SquareDashedMousePointer className="h-[20px] w-[20px]" />,
+                      label: 'Subtract',
+                      onClick: () => setBrushMode('erase'),
+                    },
+                  ]}
+                />
+              )}
+
+              {/* DraggableToolbar: Only shows when explicitly ACTIVATED (Double Click / Edit Mode)
                   AND it's a Brush-based tool (Manual or AI Mask). Gradients use on-canvas handles. */}
-              {image && !image.regions.some(r => r.selected && (r.type === 'linear-gradient' || r.type === 'radial-gradient')) && (
+              {image && !objectToolActive && !image.regions.some(r => r.selected && (r.type === 'linear-gradient' || r.type === 'radial-gradient')) && (
                 <DraggableToolbar
                   disabled={!image.regions.some(r => r.selected && r.type !== 'linear-gradient' && r.type !== 'radial-gradient')}
                   containerRef={containerRef}
@@ -572,7 +721,10 @@ export function Workspace() {
                 />
               )}
 
-              {/* Combine Masks control — appears when primary + ≥1 secondary are selected */}
+              {/* Combine Masks pill — only appears when a manual or gradient mask
+                  is involved in the selection (intent can't be inferred from
+                  geometry in that case). Pure AI↔AI shift-click combines go
+                  through handleCombineWithPrimary instead and don't surface here. */}
               {(() => {
                 if (!image || !primaryMaskId) return null;
                 if (brushActive || isLocalEditing || drawingTool || wheelVisible) return null;
@@ -582,6 +734,10 @@ export function Workspace() {
                   r.selected && r.id !== primaryMaskId && !r.clipParentId
                 );
                 if (secondaries.length === 0) return null;
+                const isManualLike = (r: Region) =>
+                  r.type === 'manual' || r.type === 'linear-gradient' || r.type === 'radial-gradient';
+                const manualInvolved = isManualLike(primary) || secondaries.some(isManualLike);
+                if (!manualInvolved) return null;
                 return (
                   <CombineMasksControl
                     primaryLabel={primary.label || 'Primary'}
@@ -699,6 +855,8 @@ export function Workspace() {
                   onEditingModeChange={handleLocalEditChange}
                   exitEditTrigger={exitEditTrigger}
                   canvasInteractionsEnabled={canvasInteractionsEnabled && !wheelVisible}
+                  objectToolActive={objectToolActive}
+                  onCombineWithPrimary={handleCombineWithPrimary}
                   onGradientDraggingChange={setIsGradientDragging}
                   sliderHoveredRegionIds={isSliderHovered ? (image?.regions.filter(r => r.selected).map(r => r.id) ?? []) : []}
                   isWalkthroughActive={isWalkthroughActive}
@@ -928,6 +1086,7 @@ region.type.startsWith('background-')) {
               }}
               showMaskImage={showMaskImage}
               onCreateManualMask={handleCreateManualMask}
+              onCreateObjectMask={handleCreateObjectMask}
               onCreateLinearGradient={() => addGradientPlaceholder('linear-gradient')}
               onCreateRadialGradient={() => addGradientPlaceholder('radial-gradient')}
               onApplyEdits={handleApplyEdits}

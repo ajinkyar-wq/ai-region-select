@@ -43,6 +43,11 @@ interface ImageCanvasProps {
   // mask via the existing brush update path (handleMaskUpdate).
   objectToolActive?: boolean;
 
+  // AI↔AI shift-click combine — fired when the user shift-clicks an AI mask
+  // while a different primary is selected. Workspace infers add vs subtract
+  // from geometry (mask overlap) and creates/toggles the clip-child.
+  onCombineWithPrimary?: (pickedId: string) => void;
+
   // Edit Mode Notification (Local AI Mask Editing)
   onEditingModeChange?: (isEditing: boolean) => void;
   exitEditTrigger?: number;
@@ -81,6 +86,7 @@ export function ImageCanvas({
   drawingTool,
   onDrawComplete,
   objectToolActive = false,
+  onCombineWithPrimary,
   peopleEnabled = true,
   backgroundEnabled = true,
   onEditingModeChange,
@@ -671,6 +677,7 @@ activeMask.type.startsWith('background-')
             }
             liveGradient={liveGradient}
             sliderHoveredRegionIds={sliderHoveredRegionIds}
+            onCombineWithPrimary={onCombineWithPrimary}
           />
         )}
 
@@ -682,7 +689,13 @@ activeMask.type.startsWith('background-')
             height={naturalSize.height}
             imageTransform={imageTransform}
             regions={tile.regions}
-            excludedRegionId={brushActive && activeMask ? activeMask.id : undefined}
+            // Exclude the active mask from ToolLayer rendering ONLY when the
+            // freehand brush is the input surface (it draws the fill itself via
+            // BrushTool). In object-tool mode, BrushTool is hidden but the fill
+            // must still be visible — so the active mask renders here, and the
+            // handle is suppressed separately via hideHandlesForRegionId.
+            excludedRegionId={brushActive && !objectToolActive && activeMask ? activeMask.id : undefined}
+            hideHandlesForRegionId={objectToolActive && activeMask ? activeMask.id : undefined}
             editingRegionId={editingRegion?.id}
             activeRegionId={activeMask?.id}
             onUpdateTile={onUpdateTile}
