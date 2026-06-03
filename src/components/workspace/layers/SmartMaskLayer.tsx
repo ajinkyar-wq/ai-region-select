@@ -903,29 +903,23 @@ export function SmartMaskLayer({
 
         const performSelectionUpdate = () => {
             const currentRegions = tileRef.current.regions;
-            let updatedRegions = currentRegions.map(r => {
+            // Multi-select (shift/ctrl/cmd) is a transient state that drives the
+            // Add/Subtract pill. Adding a mask via shift-click must NOT promote
+            // it to hasEdits — that would create a phantom side-panel listing
+            // for what is only an add/subtract candidate. Promote hasEdits only
+            // for single-select clicks (or masks that are already committed).
+            const updatedRegions = currentRegions.map(r => {
                 if (isAdditive) {
                     const isBecomingSelected = r.id === clickedRegion.id ? !r.selected : r.selected;
-                    return { ...r, selected: isBecomingSelected, hasEdits: isBecomingSelected ? true : r.hasEdits };
+                    const keepHasEdits = isBecomingSelected ? r.hasEdits : r.hasEdits;
+                    return { ...r, selected: isBecomingSelected, hasEdits: keepHasEdits };
                 }
                 const isBecomingSelected = r.id === clickedRegion.id;
                 return { ...r, selected: isBecomingSelected, hasEdits: isBecomingSelected ? true : r.hasEdits };
             });
 
-            const selectedStandalone = updatedRegions.filter(r => r.selected && !r.clipParentId);
-            if (selectedStandalone.length > 1) {
-                const firstGroup = selectedStandalone[0].groupId;
-                const allSameGroup = firstGroup && selectedStandalone.every(r => r.groupId === firstGroup);
-                if (!allSameGroup) {
-                    const targetGroupId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
-                    updatedRegions = updatedRegions.map(r => {
-                        if (r.selected && !r.clipParentId) {
-                            return { ...r, groupId: targetGroupId };
-                        }
-                        return r;
-                    });
-                }
-            }
+            // No auto-grouping. Multi-select is transient — it surfaces the
+            // Add/Subtract pill; it should not mutate group membership.
 
             onUpdateTile({ regions: updatedRegions });
         };

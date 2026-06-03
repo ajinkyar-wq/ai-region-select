@@ -436,7 +436,17 @@ export function RadialGradientTool({
                 className="absolute inset-0 z-40 pointer-events-none"
                 style={{ width: imageTransform.width, height: imageTransform.height }}
             >
-                {/* Canvas removed: ToolLayer renders the static overlay */}
+                {/* Overlay canvas — drawn when selected (e.g. while being a
+                    combine candidate in a multi-selection). The draw effect
+                    handles paint vs clear; we just need the canvas mounted. */}
+                {isSelected && (
+                    <canvas
+                        ref={canvasRef}
+                        width={imageTransform.width}
+                        height={imageTransform.height}
+                        className="absolute inset-0 pointer-events-none"
+                    />
+                )}
                 {/* Center Handle for selection */}
                 {isSelected ? (
                     <div

@@ -437,7 +437,18 @@ export function LinearGradientTool({
                     height: imageTransform.height,
                 }}
             >
-                {/* Canvas removed: ToolLayer renders the static overlay */}
+                {/* Overlay canvas — drawn when selected (e.g. while being a
+                    combine candidate in a multi-selection). The draw effect
+                    above already handles when to paint vs clear; we just need
+                    the canvas mounted so the paint is visible. */}
+                {isSelected && (
+                    <canvas
+                        ref={canvasRef}
+                        width={imageTransform.width}
+                        height={imageTransform.height}
+                        className="absolute inset-0 pointer-events-none"
+                    />
+                )}
 
                 {isSelected ? (
                     <div

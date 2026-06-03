@@ -164,11 +164,16 @@ export async function segmentWithSam(
   await initSam();
 
   const { embeddings, origWidth, origHeight, scale } = currentEncoding;
-  // Decode at the encoded image's native dimensions; orig_im_size is what the
-  // ONNX decoder treats as the photo's spatial domain (it handles pad cropping
-  // internally). Resampling to caller-requested dims happens below.
-  const outW = origWidth;
-  const outH = origHeight;
+  // The decoder upscales its 256×256 low-res mask to whatever we pass as
+  // orig_im_size, internally allocating a tensor at that resolution. For huge
+  // photos (e.g. 6000×3376) that's ~240MB. Cap the decode resolution at
+  // SAM_INPUT_SIZE on the longest side — that matches the resolution the
+  // encoder actually saw — and resample to the caller's requested dims at the
+  // end. The mask is binary, so resampling loses nothing. Aspect ratio is
+  // preserved, which the decoder's (patched) dynamic un-pad crop relies on.
+  const decodeScale = Math.min(1, SAM_INPUT_SIZE / Math.max(origWidth, origHeight));
+  const outW = Math.max(1, Math.round(origWidth * decodeScale));
+  const outH = Math.max(1, Math.round(origHeight * decodeScale));
   const requestedW = outSize?.width ?? origWidth;
   const requestedH = outSize?.height ?? origHeight;
 

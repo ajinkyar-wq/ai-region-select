@@ -408,28 +408,22 @@ export function Workspace() {
       }
     }
 
+    // Multi-select must NOT promote a transient secondary into a permanent
+    // listing — hasEdits is what makes a mask show up in the side panel, so
+    // only set it when selecting (non-multi) or when the mask is already
+    // committed (hasEdits already true). Otherwise a shift-click would create
+    // a phantom listing for what is just an add/subtract candidate.
     let newRegions = image.regions.map(r => {
-      // If ID is in list, select it and mark as edited so it shows in panel.
-      if (ids.includes(r.id)) return { ...r, selected: true, hasEdits: true };
+      if (ids.includes(r.id)) {
+        const promoteHasEdits = !multi || r.hasEdits;
+        return { ...r, selected: true, hasEdits: promoteHasEdits ? true : r.hasEdits };
+      }
       return multi ? r : { ...r, selected: false };
     });
 
-    // Auto-group if multiple are selected
-    const selectedStandalone = newRegions.filter(r => r.selected && !r.clipParentId);
-    if (selectedStandalone.length > 1) {
-      const firstGroup = selectedStandalone[0].groupId;
-      const allSameGroup = firstGroup && selectedStandalone.every(r => r.groupId === firstGroup);
-
-      if (!allSameGroup) {
-        const targetGroupId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
-        newRegions = newRegions.map(r => {
-          if (r.selected && !r.clipParentId) {
-            return { ...r, groupId: targetGroupId };
-          }
-          return r;
-        });
-      }
-    }
+    // No auto-grouping: multi-selection is transient (it drives the
+    // Add/Subtract pill). Forming a group on every shift-click both pollutes
+    // the side panel and changes downstream rendering — neither is wanted.
 
     newRegions = autoDissolveGroups(newRegions);
 
@@ -928,26 +922,19 @@ export function Workspace() {
               regions={image?.regions || []}
               onSelectRegion={(id, multi) => {
                 if (!image) return;
+                // Multi-select is transient (drives the Add/Subtract pill).
+                // Don't promote hasEdits when adding via multi-select — that
+                // would create a phantom listing for a mere combine candidate.
                 let newRegions = image.regions.map(r => {
-                  if (r.id === id) return { ...r, selected: true, hasEdits: true };
+                  if (r.id === id) {
+                    const promoteHasEdits = !multi || r.hasEdits;
+                    return { ...r, selected: true, hasEdits: promoteHasEdits ? true : r.hasEdits };
+                  }
                   return multi ? r : { ...r, selected: false };
                 });
 
-                const selectedStandalone = newRegions.filter(r => r.selected && !r.clipParentId);
-                if (selectedStandalone.length > 1) {
-                  const firstGroup = selectedStandalone[0].groupId;
-                  const allSameGroup = firstGroup && selectedStandalone.every(r => r.groupId === firstGroup);
-
-                  if (!allSameGroup) {
-                    const targetGroupId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
-                    newRegions = newRegions.map(r => {
-                      if (r.selected && !r.clipParentId) {
-                        return { ...r, groupId: targetGroupId };
-                      }
-                      return r;
-                    });
-                  }
-                }
+                // No auto-grouping on multi-select — the selection is just a
+                // combine candidate set, not a persistent group.
 
                 newRegions = autoDissolveGroups(newRegions);
 

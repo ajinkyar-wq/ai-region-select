@@ -181,21 +181,46 @@ export function ImageCanvas({
   }, [tile.regions, editingRegion, onEditingModeChange]);
 
   // Auto-Enter Edit Mode when activeMask changes (Activation)
+  // CRITICAL: this effect must run ONLY when the active mask IDENTITY changes,
+  // never on every drag/region update. Earlier bugs:
+  //   - depending on tile.regions: gradient handle drags re-fired the effect,
+  //     and the multi-select check kicked the gradient out of edit mode.
+  //   - depending on `activeMask` (object) and `editingRegion`: the sync
+  //     effect below re-creates editingRegion on every region update, which
+  //     re-fires this effect, same kick-out problem.
+  // Solution: gate on activeMask?.id only, and read everything else via refs.
+  const tileRegionsRef = useRef(tile.regions);
+  useEffect(() => { tileRegionsRef.current = tile.regions; }, [tile.regions]);
+  const editingRegionRef = useRef(editingRegion);
+  useEffect(() => { editingRegionRef.current = editingRegion; }, [editingRegion]);
+
   useEffect(() => {
     if (activeMask) {
       // For gradients, auto-enter edit mode (since they are always "live")
       const isGradient = activeMask.type === 'linear-gradient' || activeMask.type === 'radial-gradient';
       if (isGradient) {
-        setEditingRegion(activeMask);
+        // When another standalone region is also selected at activation time,
+        // the gradient is a combine candidate (Add/Subtract pill), not the
+        // focus of editing — skip auto-edit so the pill stays up and the
+        // gradient's lines/handles don't appear. The overlay itself is drawn
+        // by LinearGradient/RadialGradientTool whenever isSelected.
+        const otherSelected = tileRegionsRef.current.some(
+          r => r.id !== activeMask.id && r.selected && !r.clipParentId
+        );
+        if (otherSelected) {
+          setEditingRegion(null);
+        } else {
+          setEditingRegion(activeMask);
+        }
       } else {
         // For Person/Background (AI Masks):
         // Active = Selected. Do NOT auto-enter refining mode.
         // User must explicitly double-click to refine mask.
 
         // Default behavior: Selecting an AI mask normally does NOT enter edit mode.
-        // HOWEVER: If we Just Double-Clicked (setEditingRegion(activeMask)), 
+        // HOWEVER: If we Just Double-Clicked (setEditingRegion(activeMask)),
         // we must NOT clear it here.
-        if (editingRegion?.id === activeMask.id) {
+        if (editingRegionRef.current?.id === activeMask.id) {
           return;
         }
 
@@ -204,7 +229,8 @@ export function ImageCanvas({
     } else {
       setEditingRegion(null);
     }
-  }, [activeMask, editingRegion]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeMask?.id]);
 
 
 
